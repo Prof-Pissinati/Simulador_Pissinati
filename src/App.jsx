@@ -310,6 +310,8 @@ function App() {
                 hoveredNodeId={hoveredNodeId} setHoveredNodeId={setHoveredNodeId} maintenanceMode={maintenanceMode}
                 isMobile={isMobile}
                 activePositions={activePositions}
+                lineCurrents={lineCurrents}
+                nodeData={nodeData}
             />
 
             {isMobile && (
