@@ -40,3 +40,44 @@
 .read-the-docs {
   color: #888;
 }
+
+/* ESTILOS MODERNOS PARA OS BOTÕES DA SIDEBAR */
+.sidebar-action-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 8px 12px;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    background-color: transparent;
+    transition: all 0.2s ease-in-out;
+    width: 100%;
+}
+
+/* Cores Semânticas */
+.btn-undo {
+    border: 1px solid #6c757d; /* Cinza */
+    color: #6c757d;
+}
+.btn-undo:hover { background-color: #6c757d; color: #fff; }
+
+.btn-reset {
+    border: 1px solid #dc3545; /* Vermelho */
+    color: #dc3545;
+}
+.btn-reset:hover { background-color: #dc3545; color: #fff; }
+
+.btn-import {
+    border: 1px solid #198754; /* Verde */
+    color: #198754;
+}
+.btn-import:hover { background-color: #198754; color: #fff; }
+
+.btn-export {
+    border: 1px solid #0d6efd; /* Azul */
+    color: #0d6efd;
+}
+.btn-export:hover { background-color: #0d6efd; color: #fff; }

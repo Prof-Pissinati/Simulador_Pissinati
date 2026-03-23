@@ -14,6 +14,7 @@ export default function Sidebar({
     sources,
     loads,
     faultNodes,
+    disconnectedStats,
     branches,
     toggleSwitch,
     setSelectedElement,
@@ -22,10 +23,8 @@ export default function Sidebar({
     onUploadSwitches = () => {}, 
     calcMethod = 'NR',
     setCalcMethod = () => console.warn("Função setCalcMethod não conectada!"),
-    // --- NOVA PROP ---
-    onExportSVG = () => console.warn("Função onExportSVG não conectada!") 
+    onExportPDF = () => console.warn("Função onExportPDF não conectada!") 
 }) {
-    const btnColor = calcMethod === 'NR' ? '#ff6d00' : '#2979ff';
     const fileInputRef = useRef(null);
 
     const handleImportClick = () => {
@@ -43,98 +42,57 @@ export default function Sidebar({
     return (
         <div className={`sidebar ${sidebarMode}`}>
             <div className="sidebar-header">
-                <h1>⚡ IEEE 54</h1>
-                <div className="control-group">
-                    <button 
-                        className={`btn-ui`} 
-                        style={{ background: darkMode ? '#fff' : '#333', color: darkMode ? '#333' : '#fff', borderColor: darkMode ? '#fff' : '#333' }}
-                        onClick={() => setDarkMode(!darkMode)} title="Alternar Tema"
-                    >
-                        <span className="btn-icon">🌗</span>
-                        <span className="btn-text">Tema</span>
-                    </button>
+                <h1 style={{ marginTop: '-10px',marginBottom: '10px' } }>⚡IEEE 53 Barras</h1>
+                
+                {/* Input invisível para a importação de ficheiros */}
+                <input 
+                    type="file" 
+                    ref={fileInputRef} 
+                    style={{display: 'none'}} 
+                    accept=".txt,.dat,.log" 
+                    onChange={handleFileChange} 
+                />
 
-                    <input 
-                        type="file" 
-                        ref={fileInputRef} 
-                        style={{display: 'none'}} 
-                        accept=".txt,.dat,.log" 
-                        onChange={handleFileChange} 
-                    />
-                    <button 
-                        className="btn-ui" 
-                        onClick={handleImportClick} 
-                        title="Importar (AMPLE/TXT)" 
-                        style={{ borderColor: '#00bcd4', color: '#00bcd4', fontWeight: 'bold' }}
-                    > 
-                        <span className="btn-icon">📂</span> 
-                        <span className="btn-text">Abrir</span> 
-                    </button>
-
-                    {/* --- BOTÃO DE EXPORTAÇÃO SVG --- */}
-                    <button 
-                        className="btn-ui" 
-                        onClick={onExportSVG} 
-                        title="Exportar para Imagem Vetorizada (.svg)" 
-                        style={{ borderColor: '#FFC107', color: '#FFC107', fontWeight: 'bold' }}
-                    > 
-                        <span className="btn-icon">🖼️</span> 
-                        <span className="btn-text">Vetor</span> 
-                    </button>
-                    {/* ------------------------------- */}
-
-                    <button className="btn-ui btn-reset" onClick={resetSystem} title="Reiniciar Sistema">
-                        <span className="btn-icon">🔄</span>
-                        <span className="btn-text">Reset</span>
-                    </button>
-
-                    <button 
-                        className="btn-ui" 
-                        onClick={() => {
-                            const novo = calcMethod === 'NR' ? 'GS' : 'NR';
-                            setCalcMethod(novo);
-                        }}
-                        title={`Clique para trocar. Atual: ${calcMethod}`}
-                        style={{ 
-                            backgroundColor: btnColor, 
-                            borderColor: btnColor,
-                            color: 'white',
-                            transition: 'all 0.3s ease',
-                            fontWeight: 'bold',
-                            minWidth: '70px'
-                        }}
-                    >
-                        <span className="btn-icon">{calcMethod === 'NR' ? '⚡' : '🌊'}</span>
-                        <span className="btn-text">{calcMethod}</span>
-                    </button>
-
-                    <button className={`btn-ui ${showLabels ? 'active-label' : ''}`} onClick={() => setShowLabels(!showLabels)} title="Mostrar/Esconder Labels">
-                        <span className="btn-icon">🏷️</span>
-                        <span className="btn-text">Labels</span>
+                {/* PAINEL DE BOTÕES MODERNOS (GHOST BUTTONS) */}
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1px', marginBottom: '1px' }}>
+                    
+                    <button className="sidebar-action-btn" style={{ '--btn-color': darkMode ? '#aaaaaa' : '#555555' }} onClick={() => setDarkMode(!darkMode)} title="Alternar Tema">
+                        🌗 Tema
                     </button>
                     
-                    <button 
-                        className="btn-ui" 
-                        onClick={onDownloadReport} 
-                        title="Baixar Relatório TXT" 
-                        style={{
-                            background: '#7b1fa2',
-                            color: 'white',
-                            borderColor: '#7b1fa2'
-                        }}
-                    >
-                        <span className="btn-icon">📄</span>
-                        <span className="btn-text">Relat.</span>
+                    <button className="sidebar-action-btn" style={{ '--btn-color': '#FFC107' }} onClick={onExportPDF} title="Exportar para PDF">
+                        🖼️ PDF
+                    </button>
+
+                    <button className="sidebar-action-btn" style={{ '--btn-color': '#00bcd4' }} onClick={handleImportClick} title="Importar (AMPLE/TXT)">
+                        📂 Abrir
+                    </button>
+                    
+                    <button className="sidebar-action-btn" style={{ '--btn-color': '#4caf50' }} onClick={resetSystem} title="Reiniciar Sistema">
+                        🔄 Reset
+                    </button>
+
+                    <button className="sidebar-action-btn" style={{ '--btn-color': calcMethod === 'NR' ? '#ff6d00' : '#2979ff' }} onClick={() => setCalcMethod(calcMethod === 'NR' ? 'GS' : 'NR')} title={`Clique para trocar. Atual: ${calcMethod}`}>
+                        {calcMethod === 'NR' ? '⚡' : '🌊'} {calcMethod}
+                    </button>
+
+                    <button className="sidebar-action-btn" style={{ '--btn-color': '#9e9e9e' }} onClick={() => setShowLabels(!showLabels)} title="Mostrar/Esconder Labels">
+                        🏷️ Labels
                     </button>
                 </div>
+
+                {/* BOTÃO RELATÓRIO OCUPANDO A LARGURA TOTAL */}
+                <button className="sidebar-action-btn" style={{ '--btn-color': '#9c27b0', width: '100%', marginBottom: '-10px' }} onClick={onDownloadReport} title="Baixar Relatório TXT">
+                    📄 Relatório
+                </button>
             </div>
 
             {/* LOAD DISPLAY */}
-            <div className="load-display">
+            <div className="load-display" style={{ marginTop: '0px'}}> 
                 {sources.map(subId => {
                     const load = loads[subId];
                     // Proteção se Vbase não estiver definida
-                    const vbase = SYSTEM_DATA.Vbase || 13.8; 
+                    const vbase = SYSTEM_DATA?.Vbase || 13.8; 
                     const S = Math.sqrt((load?.p || 0)**2 + (load?.q || 0)**2);
                     const I = S / (Math.sqrt(3) * vbase);
                     const inFault = faultNodes.has(subId);
@@ -148,6 +106,20 @@ export default function Sidebar({
                         </div>
                     );
                 })}
+
+                {/* --- SUBESTAÇÃO 200 (Cargas Desconectadas / Apagão) --- */}
+                {disconnectedStats && (
+                    <div key="200" className="load-card" style={{ 
+                        borderTop: '4px solid #757575', 
+                        opacity: disconnectedStats.count > 0 ? 1 : 0.4,
+                        transition: 'opacity 0.3s ease'
+                    }}>
+                        <div className="load-card-title" style={{ color: '#757575' }}>SUB (Off)</div>
+                        <span className="load-card-value">{disconnectedStats.current.toFixed(0)} A</span>
+                        <div className="load-card-subtitle">{disconnectedStats.p.toFixed(0)} kW</div>
+                        <div className="load-card-subtitle">{disconnectedStats.count} barras</div>
+                    </div>
+                )}
             </div>
 
             {/* STATS */}

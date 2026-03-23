@@ -43,13 +43,6 @@ export default function FaultPanel({
         /* REMOVI O FRAGMENTO <> PARA RETORNAR UM ELEMENTO SÓ */
         <div className={`right-sidebar ${isFaultSidebarOpen ? 'open' : ''}`}>
              
-             {/* --- BOTÃO DE TOGGLE (AGORA MORA AQUI DENTRO) --- */}
-             {/* Ele fica posicionado absolutamente à esquerda da barra */}
-             <button className="right-sidebar-toggle" 
-                    onClick={() => setFaultSidebarOpen(!isFaultSidebarOpen)}>
-                ⚡
-            </button>
-
              {/* ================= INSPETOR ================= */}
              <div className="inspector" style={{ 
                  height: '340px', 

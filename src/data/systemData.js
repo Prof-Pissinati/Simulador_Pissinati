@@ -45,6 +45,11 @@ export const SYSTEM_DATA = {
         '101': { x: 449, y: 79 }, '102': { x: 441, y: 599 }, '104': { x: 191, y: 239 }
     },
 
+    // --- JOELHOS DAS LINHAS (Caminhos) ---
+    waypointsProject: {
+        // As rotas salvas ficarão aqui depois que você exportar!
+    },
+
     loads: {
         '1': {p:2910.6,q:1409.6}, '2': {p:1039.5,q:503.4}, '3': {p:485.1,q:234.9}, '4': {p:762.3,q:369.2},
         '5': {p:1801.8,q:872.6}, '6': {p:485.1,q:234.9}, '7': {p:693.0,q:335.6}, '8': {p:1316.7,q:637.7},

@@ -11,15 +11,15 @@
   --btn-label-active: #0d47a1;
 
   /* --- DIMENSÕES RESPONSIVAS --- */
-  --sidebar-width: clamp(170px, 20vw, 310px);
+  --sidebar-width: clamp(100px, 20vw, 230px);
   --right-sidebar-width: clamp(100px, 16vw, 230px);
 }
 
 /* Modo Retrato (Monitor Vertical) */
 @media (orientation: portrait) {
   :root {
-    --sidebar-width: clamp(170px, 25vw, 300px); 
-    --right-sidebar-width: clamp(220px, 25vw, 300px);
+    --sidebar-width: clamp(170px, 25vw, 230px); 
+    --right-sidebar-width: clamp(220px, 25vw, 230px);
   }
 }
 
@@ -218,7 +218,44 @@ body.dark-mode .alert-banner { background: #3d3000; color: #ffeb3b; border-color
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--border-color); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--eng-gray); }
-/* ... (Mantenha todo o CSS anterior) ... */
+
+/* --- BOTÕES FLUTUANTES LATERAIS --- */
+.floating-toggles {
+    position: absolute;
+    left: var(--sidebar-width);
+    top: 20px;
+    z-index: 25;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    transition: left 0.3s ease;
+}
+.sidebar.mini ~ .floating-toggles { left: 100px; }
+.sidebar.hidden ~ .floating-toggles { left: 0; }
+
+.sidebar-toggle-btn {
+    background: #333; color: white;
+    border: 2px solid #333; border-left: none;
+    padding: 12px 8px; cursor: pointer; 
+    border-radius: 0 8px 8px 0;
+    display: flex; align-items: center; justify-content: center;
+    box-shadow: 2px 2px 5px rgba(0,0,0,0.2);
+    transition: all 0.2s;
+}
+.sidebar-toggle-btn:hover { background: #444; }
+
+.edit-toggle-btn {
+    background: #ff9800; color: #000;
+    border: 2px solid #ff9800; border-left: none;
+    padding: 10px 8px; cursor: pointer; 
+    border-radius: 0 8px 8px 0;
+    font-size: 14px;
+    box-shadow: 2px 2px 5px rgba(0,0,0,0.2);
+    transition: all 0.2s;
+}
+.edit-toggle-btn:hover { background: #ffb74d; }
+
+.edit-sidebar { background: var(--sidebar-bg); border-right: 2px solid #ff9800; }
 
 /* ================== MOBILE UI ================== */
 .mobile-header {
@@ -268,3 +305,83 @@ body.dark-mode .alert-banner { background: #3d3000; color: #ffeb3b; border-color
 }
 
 .mobile-bottom-sheet::-webkit-scrollbar { display: none; }
+
+/* --- CONFIGURAÇÃO PERFEITA PARA EXPORTAÇÃO DE PDF --- */
+@media print {
+    @page {
+        size: landscape; /* Força a folha na horizontal */
+        margin: 0mm; /* Tira as margens brancas do papel */
+    }
+
+    body, html {
+        margin: 0 !important;
+        padding: 0 !important;
+        -webkit-print-color-adjust: exact !important;
+        print-color-adjust: exact !important;
+    }
+
+    /* Esconde os painéis e botões que não devem ir pro PDF */
+    .sidebar, .edit-sidebar, .fault-panel, .floating-toggles, .mobile-header, .toast {
+        display: none !important;
+    }
+
+    /* Estica o contêiner do simulador para preencher a folha */
+    .app-container {
+        display: block !important;
+    }
+
+    .graph-container {
+        position: absolute !important;
+        top: 0 !important;
+        left: 0 !important;
+        width: 100vw !important;
+        height: 100vh !important;
+    }
+
+    /* Garante que a legenda original HTML fique visível e posicionada no PDF */
+    .legend {
+        display: block !important;
+        position: fixed !important;
+        bottom: 20px !important;
+        right: 20px !important;
+        z-index: 9999 !important;
+        page-break-inside: avoid;
+    }
+    .hide-on-print {
+        display: none !important;
+    }
+}
+
+/* --- BOTÕES MODERNOS DO SIDEBAR (GHOST BUTTONS) --- */
+.sidebar-action-btn {
+    background-color: transparent;
+    border: 1.5px solid var(--btn-color);
+    color: var(--btn-color);
+    border-radius: 8px;
+    font-weight: bold;
+    font-size: 13px;
+    padding: 8px 4px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    transition: all 0.2s ease-in-out;
+    background-color: rgba(255, 255, 255, 0.03);
+}
+
+.sidebar-action-btn:hover {
+    background-color: var(--btn-color);
+    color: #ffffff !important;
+    transform: translateY(-2px);
+    box-shadow: 0 4px 10px rgba(0, 0, 0, 0.2);
+}
+
+.sidebar-action-btn:active {
+    transform: translateY(1px);
+    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
+}
+
+body.dark-mode .sidebar-action-btn {
+    background-color: rgba(0, 0, 0, 0.15);
+}
