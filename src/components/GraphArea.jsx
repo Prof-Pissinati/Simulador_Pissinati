@@ -48,7 +48,7 @@ export default function GraphArea({
     branches = [], allNodes = [], sources = [], showLabels, getEdgeColor, getNodeColor, toggleSwitch, toggleFault, setSelectedElement,
     selectedElement, hoveredLineId, setHoveredLineId, hoveredNodeId, setHoveredNodeId, maintenanceMode, isMobile,
     activePositions = {}, activeWaypoints = {}, lineCurrents = {}, nodeData = {}, isEditMode, setIsEditMode, darkMode,
-    printFrameMode, isFaultSidebarOpen, onSaveLayoutToHistory, children 
+    printFrameMode, isFaultSidebarOpen, onSaveLayoutToHistory, children, onExportRequest 
 }) {
     const svgRef = useRef(null);
     const measureRef = useRef(null); 
@@ -125,32 +125,39 @@ export default function GraphArea({
 
     useEffect(() => {
         const handleApplyLayout = (e) => {
-            setIsRestoringLayout(true); // LIGA A ANIMAÇÃO
-            setManualPositions(e.detail.positions || {}); 
-            setManualWaypoints(e.detail.waypoints || {});
+            setIsRestoringLayout(true);
+            // Lê do novo formato de projeto (data.layout) ou do antigo (data)
+            const layoutData = e.detail.layout || e.detail;
+            setManualPositions(layoutData.positions || {}); 
+            setManualWaypoints(layoutData.waypoints || {});
             
-            // DESLIGA A ANIMAÇÃO EM 400ms
             if (restoreTimeout.current) clearTimeout(restoreTimeout.current);
             restoreTimeout.current = setTimeout(() => setIsRestoringLayout(false), 400);
         };
         
         const handleResetLayout = () => {
-            setIsRestoringLayout(true); // LIGA A ANIMAÇÃO
-            setManualPositions({}); 
-            setManualWaypoints({});
-            
-            // DESLIGA A ANIMAÇÃO EM 400ms
+            setIsRestoringLayout(true);
+            setManualPositions({}); setManualWaypoints({});
             if (restoreTimeout.current) clearTimeout(restoreTimeout.current);
             restoreTimeout.current = setTimeout(() => setIsRestoringLayout(false), 400);
+        };
+
+        // NOVO: Quando pedem para exportar, empacota o layout e envia pro App.jsx!
+        const handleTriggerExport = () => {
+            const fullLayout = getCurrentFullLayout();
+            if (onExportRequest) onExportRequest(fullLayout.positions, fullLayout.waypoints);
         };
         
         window.addEventListener('applyGraphLayout', handleApplyLayout);
         window.addEventListener('resetGraphLayout', handleResetLayout);
+        window.addEventListener('requestLayoutExport', handleTriggerExport);
+        
         return () => { 
             window.removeEventListener('applyGraphLayout', handleApplyLayout); 
             window.removeEventListener('resetGraphLayout', handleResetLayout); 
+            window.removeEventListener('requestLayoutExport', handleTriggerExport);
         };
-    }, []);
+    }, [getCurrentFullLayout, onExportRequest]);
 
     const isPanning = useRef(false);
     const hasMoved = useRef(false);
@@ -186,6 +193,8 @@ export default function GraphArea({
         let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
         nodeIds.forEach(id => {
             const p = positions[id];
+            if (!p) return; // <--- ADICIONE ESTA TRAVA DE SEGURANÇA AQUI
+            
             if (p.x < minX) minX = p.x;
             if (p.x > maxX) maxX = p.x;
             if (p.y < minY) minY = p.y;
@@ -194,6 +203,8 @@ export default function GraphArea({
 
         Object.values(waypoints).forEach(branchWps => {
             branchWps.forEach(wp => {
+                if (!wp) return; // <--- ADICIONE ESTA TRAVA DE SEGURANÇA AQUI
+                
                 if (wp.x < minX) minX = wp.x;
                 if (wp.x > maxX) maxX = wp.x;
                 if (wp.y < minY) minY = wp.y;
@@ -209,7 +220,7 @@ export default function GraphArea({
 
         const scaleX = (vbW - padding * 2) / (width || 1);
         const scaleY = (vbH - padding * 2) / (height || 1);
-        const newScale = Math.max(0.3, Math.min(scaleX, scaleY, 2.5));
+        const newScale = Math.max(0.02, Math.min(scaleX, scaleY, 2.5));
 
         const centerX = minX + width / 2;
         const centerY = minY + height / 2;
@@ -238,9 +249,10 @@ export default function GraphArea({
         return () => window.removeEventListener('triggerZoomExtents', handleZoom);
     }, [handleZoomExtents]);
 
-    const handleWheel = (e) => {
+    // 1. Envolvemos no useCallback
+    const handleWheel = useCallback((e) => {
         stopAnimation(); 
-        e.preventDefault();
+        e.preventDefault(); // Agora o navegador vai aceitar isso sem reclamar!
         const scaleMultiplier = e.deltaY > 0 ? 0.9 : 1.1;
         setTransform(prev => {
             const newScale = Math.max(0.1, Math.min(4, prev.scale * scaleMultiplier));
@@ -251,7 +263,16 @@ export default function GraphArea({
             const newY = rawPt.y - (groupY * newScale);
             return { x: newX, y: newY, scale: newScale };
         });
-    };
+    }, [stopAnimation, getRawSVGPoint]);
+
+    // 2. Adicionamos o EventListener com { passive: false }
+    useEffect(() => {
+        const svg = svgRef.current;
+        if (svg) {
+            svg.addEventListener('wheel', handleWheel, { passive: false });
+            return () => svg.removeEventListener('wheel', handleWheel);
+        }
+    }, [handleWheel]);
 
     const handleMouseDown = (e) => {
         stopAnimation(); 
@@ -355,7 +376,8 @@ export default function GraphArea({
             const maxY = Math.max(selectionBox.y1, selectionBox.y2);
             const newSelection = new Set(); const newWpSelection = new Set(); 
             allNodes.forEach(id => {
-                const pos = manualPositions[id] || animPositions[id];
+                const pos = manualPositions[id] || activePositions[id] || animPositions[id];
+                if (!pos) return;
                 if (pos && pos.x >= minX && pos.x <= maxX && pos.y >= minY && pos.y <= maxY) newSelection.add(id);
             });
             Object.keys(manualWaypoints).forEach(branchId => {
@@ -428,7 +450,7 @@ export default function GraphArea({
                     preserveAspectRatio="xMidYMid meet" 
                     ref={svgRef}
                     style={{ width: '100%', height: '100%', display: 'block', cursor: svgCursor }}
-                    onWheel={handleWheel} onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onMouseUp={handleMouseUp} 
+                    onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onMouseUp={handleMouseUp} 
                     onMouseEnter={() => setIsHoveringSVG(true)}
                     onMouseLeave={() => { setIsHoveringSVG(false); isPanning.current = false; isSelecting.current = false; setHoveredLineId(null); setHoveredNodeId(null); setLocalHoveredNode(null); setLocalHoveredLine(null); if(dragInfo) setDragInfo(null); }}
                 >
@@ -611,12 +633,18 @@ export default function GraphArea({
                                     const p1 = manualPositions[hoveredBranch.from] || animPositions[hoveredBranch.from];
                                     const p2 = manualPositions[hoveredBranch.to] || animPositions[hoveredBranch.to];
                                     if (!p1 || !p2) return null;
-                                    const midX = (p1.x + p2.x) / 2; const midY = (p1.y + p2.y) / 2;
-                                    const pMW = hoveredLineData.pFlow / 1000; const qMVAr = hoveredLineData.qFlow / 1000;
-                                    const isReverseFlow = pMW < 0; const flowFrom = isReverseFlow ? hoveredBranch.to : hoveredBranch.from;
+                                    const midX = (p1.x + p2.x) / 2; 
+                                    const midY = (p1.y + p2.y) / 2;
+                                    const pMW = hoveredLineData.pFlow / 1000; 
+                                    const qMVAr = hoveredLineData.qFlow / 1000;
+                                    const isReverseFlow = pMW < 0; 
+                                    const flowFrom = isReverseFlow ? hoveredBranch.to : hoveredBranch.from;
                                     const flowTo = isReverseFlow ? hoveredBranch.from : hoveredBranch.to;
-                                    const displayP = Math.abs(pMW); const displayQ = isReverseFlow ? -qMVAr : qMVAr;
-                                    const barWidth = 130; const fillWidth = barWidth * Math.min(hoveredLineData.percentage, 100) / 100;
+                                    const displayP = Math.abs(pMW); 
+                                    const displayQ = isReverseFlow ? -qMVAr : qMVAr;
+                                    const barWidth = 130; 
+                                    const safePercentage = isNaN(hoveredLineData.percentage) ? 0 : Math.max(0, hoveredLineData.percentage);
+                                    const fillWidth = barWidth * Math.min(safePercentage, 100) / 100;
                                     const fillColor = hoveredLineData.percentage >= 100 ? '#d32f2f' : (hoveredLineData.percentage > 80 ? '#fbc02d' : '#4caf50');
                                     return (
                                         <g transform={`translate(${midX + 15}, ${midY + 15})`} pointerEvents="none" className="svg-tooltip">
@@ -640,7 +668,7 @@ export default function GraphArea({
                                     if (!pos) return null;
                                     
                                     const isSource = sources.includes(localHoveredNode);
-                                    const hoveredLoad = SYSTEM_DATA.loads[localHoveredNode];
+                                    const hoveredLoad = SYSTEM_DATA.loads ? SYSTEM_DATA.loads[localHoveredNode] : null;
                                     const h = isSource ? 75 : 115;
 
                                     let content = null;
@@ -663,18 +691,18 @@ export default function GraphArea({
                                         content = (
                                             <>
                                                 <text x="12" y="44" fill="#aaa" fontSize="11" fontFamily="monospace">Total P:</text>
-                                                <text x="148" y="44" fill="#fff" fontSize="11" fontWeight="bold" fontFamily="monospace" textAnchor="end">{Math.abs(totalP).toFixed(1)} kW</text>
+                                                <text x="148" y="78" fill="#fff" fontSize="11" fontWeight="bold" fontFamily="monospace" textAnchor="end">{hoveredLoad?.p ? hoveredLoad.p.toFixed(0) : 0} kW</text>
                                                 <text x="12" y="58" fill="#aaa" fontSize="11" fontFamily="monospace">Total Q:</text>
-                                                <text x="148" y="58" fill="#fff" fontSize="11" fontWeight="bold" fontFamily="monospace" textAnchor="end">{Math.abs(totalQ).toFixed(1)} kVAr</text>
+                                                <text x="148" y="98" fill="#fff" fontSize="11" fontWeight="bold" fontFamily="monospace" textAnchor="end">{hoveredLoad?.q ? hoveredLoad.q.toFixed(0) : 0} kVAr</text>
                                             </>
                                         );
                                     } else {
                                         content = (
                                             <>
                                                 <text x="12" y="44" fill="#aaa" fontSize="11" fontFamily="monospace">Tensão:</text>
-                                                <text x="148" y="44" fill={hoveredNodeInfo.v < 0.93 ? '#ff5252' : (hoveredNodeInfo.v < 0.95 ? '#fbc02d' : '#fff')} fontSize="11" fontWeight="bold" fontFamily="monospace" textAnchor="end">{hoveredNodeInfo.v.toFixed(3)} pu</text>
+                                                <text x="148" y="44" fill={hoveredNodeInfo.v < 0.93 ? '#ff5252' : (hoveredNodeInfo.v < 0.95 ? '#fbc02d' : '#fff')} fontSize="11" fontWeight="bold" fontFamily="monospace" textAnchor="end">{(hoveredNodeInfo.v || 0).toFixed(3)} pu</text>
                                                 <text x="12" y="58" fill="#aaa" fontSize="11" fontFamily="monospace">Ângulo:</text>
-                                                <text x="148" y="58" fill="#fff" fontSize="11" fontWeight="bold" fontFamily="monospace" textAnchor="end">{hoveredNodeInfo.angle.toFixed(2)}°</text>
+                                                <text x="148" y="58" fill="#fff" fontSize="11" fontWeight="bold" fontFamily="monospace" textAnchor="end">{(hoveredNodeInfo.angle || 0).toFixed(2)}°</text>
                                                 {hoveredLoad && (
                                                     <>
                                                         <line x1="10" y1="68" x2="150" y2="68" stroke="#555" strokeWidth="1" strokeDasharray="3,3" />

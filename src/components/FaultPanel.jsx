@@ -115,7 +115,7 @@ export default function FaultPanel({
                                     
                                     <div className="inspector-row"><span>Resistência (R):</span><b>{liveBranch.r} Ω</b></div>
                                     <div className="inspector-row"><span>Reatância (X):</span><b>{liveBranch.x} Ω</b></div>
-                                    <div className="inspector-row"><span>Limite (Imax):</span><b>{liveBranch.imax} A</b></div>
+                                    <div className="inspector-row"><span>Limite (Imax):</span><b>{liveBranch.Imax} A</b></div>
                                     
                                     {liveBranch.state === 1 && (
                                         <>

@@ -23,7 +23,8 @@ export default function Sidebar({
     onUploadSwitches = () => {}, 
     calcMethod = 'NR',
     setCalcMethod = () => console.warn("Função setCalcMethod não conectada!"),
-    onExportPDF = () => console.warn("Função onExportPDF não conectada!") 
+    onExportPDF = () => console.warn("Função onExportPDF não conectada!"),
+    getNodeColor
 }) {
     const fileInputRef = useRef(null);
 
@@ -97,16 +98,20 @@ export default function Sidebar({
                     const I = S / (Math.sqrt(3) * vbase);
                     const inFault = faultNodes.has(subId);
                     
+                    // 1. CHAMA A FUNÇÃO DE COR AQUI:
+                    const cardColor = getNodeColor ? getNodeColor(subId) : 'var(--eng-orange)';
+                    
                     return (
-                        <div key={subId} className={`load-card lc-${subId}`}>
-                            <div className="load-card-title">SUB {subId}</div>
+                        // 2. APLICA A COR NA BORDA SUPERIOR E NO TÍTULO DO CARD:
+                        <div key={subId} className={`load-card lc-${subId}`} style={{ borderTop: `4px solid ${cardColor}` }}>
+                            <div className="load-card-title" style={{ color: cardColor }}>SUB {subId}</div>
                             <span className="load-card-value">{inFault ? '—' : I.toFixed(0)} A</span>
                             <div className="load-card-subtitle">{inFault ? '—' : (load?.p || 0).toFixed(0)} kW</div>
                             <div className="load-card-subtitle">{inFault ? '—' : (load?.nodes || 0)} barras</div>
                         </div>
                     );
                 })}
-
+                
                 {/* --- SUBESTAÇÃO 200 (Cargas Desconectadas / Apagão) --- */}
                 {disconnectedStats && (
                     <div key="200" className="load-card" style={{ 

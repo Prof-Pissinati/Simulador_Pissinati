@@ -1,22 +1,33 @@
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { SYSTEM_DATA } from './data/systemData';
 import { propagateFeeds, calculateLoads, runPowerFlow, CacheManager } from './utils/powerCalculations';
 import { THEME } from './utils/theme';
 import Sidebar from './components/Sidebar';
 import FaultPanel from './components/FaultPanel';
 import GraphArea from './components/GraphArea';
-import EditSidebar from './components/editSidebar'; 
+import EditSidebar from './components/EditSidebar'; 
 import { exportSVG } from './utils/exportUtils';
 import './index.css';
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { parseAMPLDat } from './utils/amplParser';
+import { calculateForceLayout } from './utils/autoLayout';
 
 const SOURCE_COLORS = { 101: '#2e7d32', 102: '#e65100', 104: '#7b1fa2', 1: '#2962ff' };
 
 const hexToRgb = (hex) => {
-    const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+        const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
     return result ? { r: parseInt(result[1], 16), g: parseInt(result[2], 16), b: parseInt(result[3], 16) } : { r: 128, g: 128, b: 128 };
 };
 
+// Adicione esta função logo abaixo da const hexToRgb
+const getSafeHue = (id) => {
+    let h = (id * 137) % 360;
+    // Se a cor cair no vermelho/laranja escuro (0-25 ou 335-360), joga para o Azul/Verde
+    if (h < 25 || h > 335) h = (h + 45) % 360; 
+    return h;
+};
+
 function App() {
+    const [activeSources, setActiveSources] = useState([101, 102, 104]);
     const [darkMode, setDarkMode] = useState(false); 
     const [branches, setBranches] = useState(() => SYSTEM_DATA.branches.map((b, idx) => ({ 
         ...b, id: idx, state: (b.initialState !== undefined ? b.initialState : (b.state !== undefined ? b.state : 1)) 
@@ -33,13 +44,19 @@ function App() {
     const [layoutHistory, setLayoutHistory] = useState([]); 
     const [initialLayout, setInitialLayout] = useState({ positions: SYSTEM_DATA.positionsProject || {}, waypoints: SYSTEM_DATA.waypointsProject || {} });
     const [layoutMode, setLayoutMode] = useState('project'); 
+    const [organicPositions, setOrganicPositions] = useState(null);
+
+    // 1. NOVAS MEMÓRIAS DE PROJETO
+    const [projectPositions, setProjectPositions] = useState(SYSTEM_DATA.positionsProject || {});
+    const [projectWaypoints, setProjectWaypoints] = useState(SYSTEM_DATA.waypointsProject || {});
+
+    // 2. SUBSTITUA AS DUAS LINHAS de activePositions E activeWaypoints POR ESTAS:
+    const activePositions = useMemo(() => layoutMode === 'project' ? projectPositions : (organicPositions || projectPositions), [layoutMode, projectPositions, organicPositions]);
+    const activeWaypoints = useMemo(() => layoutMode === 'project' ? projectWaypoints : {}, [layoutMode, projectWaypoints]);
     
     // CORREÇÃO: Voltamos com o 'none' para representar o MODO TELA CHEIA INFINITA
     const [printFrameMode, setPrintFrameMode] = useState('none'); 
     const [showShortcuts, setShowShortcuts] = useState(false);
-
-    const activePositions = useMemo(() => layoutMode === 'project' ? (SYSTEM_DATA.positionsProject || {}) : (SYSTEM_DATA.positionsOrganic || SYSTEM_DATA.positionsProject || {}), [layoutMode]);
-    const activeWaypoints = useMemo(() => layoutMode === 'project' ? (SYSTEM_DATA.waypointsProject || {}) : {}, [layoutMode]);
 
     const [sidebarMode, setSidebarMode] = useState('full');
     const [isFaultSidebarOpen, setFaultSidebarOpen] = useState(true);
@@ -47,6 +64,28 @@ function App() {
     const [hoveredNodeId, setHoveredNodeId] = useState(null);
     const [maintenanceMode, setMaintenanceMode] = useState(false);
     const [isMobile, setIsMobile] = useState(window.innerWidth <= 768);
+
+    // --- ESTADOS DA TELA INICIAL ---
+    const [isProjectLoaded, setIsProjectLoaded] = useState(false);
+    const welcomeFileInputRef = useRef(null);
+    const datFileInputRef = useRef(null);
+    const allNodes = Array.from(new Set(branches.flatMap(b => [b.from, b.to]))).sort((a, b) => a - b);
+    const sources = activeSources;
+    const loadNodes = allNodes.filter(n => !sources.includes(n));
+
+    useEffect(() => {
+        if (layoutMode === 'organic' && !organicPositions && allNodes.length > 0) {
+            // Roda o motor físico atualizado com os parâmetros padrão
+            const newLayout = calculateForceLayout(allNodes, branches, sources, { distance: 80, charge: -400 });
+            setOrganicPositions(newLayout);
+        }
+    }, [layoutMode, organicPositions, allNodes, branches, sources]);
+
+    // Limpa o layout orgânico salvo sempre que importar um arquivo NOVO
+    useEffect(() => {
+        setOrganicPositions(null);
+        setLayoutMode('project');
+    }, [allNodes.length]);
 
     useEffect(() => {
         const handleResize = () => setIsMobile(window.innerWidth <= 768);
@@ -99,12 +138,19 @@ function App() {
         }
     }, [initialLayout]);
 
-    const nodeFeeds = useMemo(() => propagateFeeds(branches, faultNodes), [branches, faultNodes]);
-    const loads = useMemo(() => calculateLoads(nodeFeeds, faultNodes), [nodeFeeds, faultNodes]);
+    // 1. CRIA O PACOTE DE DADOS AQUI
+    const sysData = useMemo(() => ({
+        sources: activeSources, 
+        loads: SYSTEM_DATA.loads, 
+        Vbase: SYSTEM_DATA.Vbase || 13.8,
+        Sbase: SYSTEM_DATA.Sbase || 1000
+    }), [activeSources, branches]);
+
+    // 2. PASSA O sysData PARA AS FUNÇÕES DE PROPAGAÇÃO
+    const nodeFeeds = useMemo(() => propagateFeeds(branches, faultNodes, sysData), [branches, faultNodes, sysData]);
+    const loads = useMemo(() => calculateLoads(nodeFeeds, faultNodes, sysData), [nodeFeeds, faultNodes, sysData]);
     
-    const sources = (SYSTEM_DATA.sources && SYSTEM_DATA.sources.length > 0) ? SYSTEM_DATA.sources : [101, 102, 104];
-    const allNodes = Array.from(new Set(branches.flatMap(b => [b.from, b.to]))).sort((a, b) => a - b);
-    const loadNodes = allNodes.filter(n => !sources.includes(n));
+
 
     // --- NOVA LÓGICA: CÁLCULO DA SUBESTAÇÃO 200 (Apagão / Desconectados) ---
     const disconnectedStats = useMemo(() => {
@@ -141,10 +187,10 @@ function App() {
     const powerFlowResults = useMemo(() => {
         const cached = CacheManager.get(branches, faultNodes, calcMethod);
         if (cached) return cached;
-        const result = runPowerFlow(branches, faultNodes, calcMethod);
+        const result = runPowerFlow(branches, faultNodes, calcMethod, sysData); // <-- sysData injetado aqui!
         CacheManager.set(branches, faultNodes, calcMethod, result);
         return result;
-    }, [branches, faultNodes, calcMethod]);
+    }, [branches, faultNodes, calcMethod, sysData]); // <-- sysData adicionado nas dependências
 
     const lineCurrents = powerFlowResults.lines;
     const nodeData = powerFlowResults.nodes;
@@ -254,6 +300,163 @@ function App() {
         showToast('Sistema resetado', 'success');
     };
 
+    // --- FUNÇÕES DA TELA DE BOAS-VINDAS ---
+    const handleLoadExample = () => {
+        // Carrega o IEEE 54 padrão
+        setBranches(SYSTEM_DATA.branches.map((b, idx) => ({ ...b, id: idx, state: (b.initialState !== undefined ? b.initialState : (b.state !== undefined ? b.state : 1)) })));
+        setFaultNodes(new Set());
+        window.dispatchEvent(new CustomEvent('resetGraphLayout'));
+        setIsProjectLoaded(true);
+    };
+
+    const handleWelcomeFileUpload = (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = (event) => {
+            try {
+                const data = JSON.parse(event.target.result);
+                if (data.layout || data.positions) {
+                    if (data.branches) setBranches(data.branches);
+                    if (data.faults) setFaultNodes(new Set(data.faults));
+
+                    
+                    // Dá um tempinho mínimo para o React renderizar o SVG e depois aplica as posições
+                    setTimeout(() => {
+                        window.dispatchEvent(new CustomEvent('applyGraphLayout', { detail: data }));
+                    }, 100);
+
+                    setActiveSources(data.sources || [101, 102, 104]);
+                    
+                    setIsProjectLoaded(true);
+                    showToast("Projeto carregado com sucesso!", "success");
+                } else {
+                    alert("❌ Arquivo inválido. O arquivo não contém o formato esperado.");
+                }
+            } catch (err) {
+                alert("❌ Erro ao ler o arquivo. Certifique-se de que é um JSON válido.");
+            }
+        };
+        reader.readAsText(file);
+        e.target.value = ''; 
+    };
+
+    const handleDatFileUpload = (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = (event) => {
+            try {
+                const text = event.target.result;
+                
+                // 1. O Parser faz a tradução
+                const parsedData = parseAMPLDat(text);
+                setProjectPositions(parsedData.positions || {});
+                setProjectWaypoints(parsedData.waypoints || {});
+                /*
+                // =========================================================
+                // 2. O NOSSO TESTE: TRANSFORMAR EM JSON E BAIXAR
+                // =========================================================
+                const jsonString = JSON.stringify(parsedData, null, 2);
+                const blob = new Blob([jsonString], { type: 'application/json' });
+                const url = URL.createObjectURL(blob);
+                
+                const link = document.createElement('a');
+                link.href = url;
+                link.download = `Convertido_${file.name.replace(/\.[^/.]+$/, "")}.json`;
+                document.body.appendChild(link);
+                link.click(); // Força o download do JSON
+                document.body.removeChild(link);
+                URL.revokeObjectURL(url);
+                // =========================================================
+                */
+
+                // 3. Atualiza as variáveis vitais de sistema (código original)
+                SYSTEM_DATA.loads = parsedData.loads;
+                SYSTEM_DATA.Vbase = parsedData.baseKV;
+                SYSTEM_DATA.Sbase = parsedData.sBase;
+                SYSTEM_DATA.sources = parsedData.sources;
+
+                setActiveSources(parsedData.sources);
+                setBranches(parsedData.branches);
+                setFaultNodes(new Set());
+                
+                setTimeout(() => {
+                    window.dispatchEvent(new CustomEvent('applyGraphLayout', { detail: parsedData }));
+                }, 100);
+                
+                setIsProjectLoaded(true);
+                showToast("Sistema AMPL importado e JSON gerado!", "success");
+            } catch (err) {
+                alert("❌ Erro ao processar o ficheiro .dat.");
+                console.error(err);
+            }
+        };
+        reader.readAsText(file);
+        e.target.value = ''; 
+    };
+
+    // --- LÓGICA DE EXPORTAÇÃO DO PROJETO (NOVO FORMATO) ---
+    const handleExportFullState = useCallback((positions, waypoints) => {
+        const exportData = {
+            version: "1.0",
+            systemName: "IEEE 54 (Projeto Salvo)",
+            baseKV: SYSTEM_DATA.Vbase || 13.8,
+            sources: sources,
+            loads: SYSTEM_DATA.loads, 
+            branches: branches, // Salva todas as linhas e o estado atual das chaves!
+            faults: Array.from(faultNodes), // Salva as faltas ativas!
+            layout: {
+                positions: positions,
+                waypoints: waypoints
+            }
+        };
+
+        const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(exportData, null, 2));
+        const downloadAnchorNode = document.createElement('a');
+        downloadAnchorNode.setAttribute("href", dataStr);
+        downloadAnchorNode.setAttribute("download", "meu_sistema_salvo.json");
+        document.body.appendChild(downloadAnchorNode);
+        downloadAnchorNode.click();
+        downloadAnchorNode.remove();
+        
+        showToast("Projeto exportado com sucesso!", "success");
+    }, [branches, faultNodes, sources]);
+
+    // --- LÓGICA DE IMPORTAÇÃO DE ESTADOS (CHAVES E FALTAS) ---
+    useEffect(() => {
+        const handleApplyFullState = (e) => {
+            const data = e.detail;
+            
+            // Restaura chaves e faltas
+            if (data.branches) setBranches(data.branches);
+            if (data.faults) setFaultNodes(new Set(data.faults));
+            
+            // 👇 A MÁGICA DA MEMÓRIA ENTRA AQUI 👇
+            // Captura as posições do arquivo e salva na memória permanente do Projeto
+            const layoutData = data.layout || data;
+            if (layoutData.positions) setProjectPositions(layoutData.positions);
+            if (layoutData.waypoints) setProjectWaypoints(layoutData.waypoints);
+        };
+        
+        window.addEventListener('applyGraphLayout', handleApplyFullState);
+        return () => window.removeEventListener('applyGraphLayout', handleApplyFullState);
+    }, []);
+
+    // --- LÓGICA DE CAPTURA DO GERADOR GEOMÉTRICO (ORGÂNICO) ---
+    useEffect(() => {
+        const handleApplyOrganic = (e) => {
+            // 1. Salva o layout gerado apenas na memória temporária (mesa de trabalho)
+            setOrganicPositions(e.detail.positions);
+            
+            // 2. Muda a aba da Legenda para 'Orgânico' automaticamente
+            setLayoutMode('organic'); 
+        };
+        
+        window.addEventListener('applyOrganicLayout', handleApplyOrganic);
+        return () => window.removeEventListener('applyOrganicLayout', handleApplyOrganic);
+    }, []);
+
     const handleDownloadReport = () => {
         let report = "⚡ RELATÓRIO DO SISTEMA ELÉTRICO - IEEE 54\n";
         report += "========================================\n\n";
@@ -292,6 +495,7 @@ function App() {
         setTimeout(() => window.print(), 100); 
     };
 
+    /*
     // --- RESTAURAÇÃO DA INVERSÃO DE INTENSIDADE DE CORES ---
     const getNodeColor = (nodeId) => {
         const colors = darkMode ? THEME.dark : THEME.light;
@@ -338,13 +542,19 @@ function App() {
         if (!sourceId) return colors.de;
         
         // Mágica da Transparência: Quanto menor a carga, mais transparente (desbota no fundo)
-        const p = Math.min(current.percentage / 100, 1.0);
+        const p = Math.min((current.percentage || 0) / 100, 1.0);
         const curve = Math.pow(p, 1.5); 
         const minAlpha = 0.25; // Garante que a linha nunca fique 100% invisível
         const alpha = minAlpha + (1 - minAlpha) * curve;
         
         if (SOURCE_COLORS[sourceId]) {
             const rgb = hexToRgb(SOURCE_COLORS[sourceId]);
+            const getSafeHue = (id) => {
+                let h = (id * 137) % 360;
+                // Se a cor cair no vermelho/laranja escuro (0-25 ou 335-360), joga para o Azul/Verde
+                if (h < 25 || h > 335) h = (h + 45) % 360; 
+                return h;
+            };
             return `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${alpha.toFixed(3)})`; 
         } else {
             const hue = (sourceId * 137) % 360;
@@ -352,6 +562,126 @@ function App() {
             return `hsla(${hue}, 70%, ${l}%, ${alpha.toFixed(3)})`; 
         }
     };
+
+    */
+
+    const getNodeColor = (nodeId) => {
+        const colors = darkMode ? THEME.dark : THEME.light;
+        
+        // 1. Falta
+        if (faultNodes.has(nodeId)) return colors.fault;
+        
+        let sourceToUse = null;
+        
+        // 2. É uma subestação? Força a cor dela!
+        if (sources.includes(nodeId)) {
+            sourceToUse = nodeId;
+        } else {
+            const feeds = nodeFeeds[nodeId];
+            if (!feeds || feeds.size === 0) return colors.de;
+            if (feeds.size > 1) return colors.loop;
+            sourceToUse = Array.from(feeds)[0];
+        }
+        
+        if (SOURCE_COLORS[sourceToUse]) return SOURCE_COLORS[sourceToUse];
+        
+        // Aplica nossa função anti-vermelho
+        const h = getSafeHue(sourceToUse);
+        const l = darkMode ? 65 : 45; 
+        return `hsl(${h}, 70%, ${l}%)`;
+    };
+
+    const getEdgeColor = (branch) => {
+        const colors = darkMode ? THEME.dark : THEME.light;
+        if (branch.state === 0) return colors.de;
+        
+        const current = lineCurrents[branch.id];
+        // Se a corrente for quase zero absoluto, apaga a linha
+        if (!current || current.current < 0.01) return colors.de;
+        if (current.percentage >= 100) return '#d50000'; // Sobrecarga em vermelho fixo
+        
+        const feedsFrom = nodeFeeds[branch.from] || new Set();
+        if (feedsFrom.size === 0) return colors.de;
+        // CORREÇÃO DOS LOOPS: Se for anel, brilha em amarelo!
+        if (feedsFrom.size > 1) return colors.loop; 
+        
+        const sourceId = Array.from(feedsFrom)[0];
+        
+        // CORREÇÃO DE OPACIDADE: O mínimo agora é 45% (nunca mais ficará cinza morta)
+        const p = Math.min((current.percentage || 0) / 100, 1.0);
+        const alpha = 0.45 + (0.55 * Math.sqrt(p)); 
+        
+        if (SOURCE_COLORS[sourceId]) {
+            const rgb = hexToRgb(SOURCE_COLORS[sourceId]);
+            return `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${alpha.toFixed(3)})`; 
+        } else {
+            const hue = getSafeHue(sourceId);
+            const l = darkMode ? 65 : 45; 
+            return `hsla(${hue}, 70%, ${l}%, ${alpha.toFixed(3)})`; 
+        }
+    };
+
+    // --- TELA DE BOAS VINDAS (BLANK SLATE) ---
+    if (!isProjectLoaded) {
+        return (
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', width: '100vw', height: '100vh', backgroundColor: darkMode ? '#121212' : '#f0f2f5', color: darkMode ? '#ffffff' : '#333333', fontFamily: 'sans-serif', transition: 'background-color 0.3s' }}>
+                
+                {/* Botão de Tema na Tela Inicial */}
+                <button onClick={() => setDarkMode(!darkMode)} style={{ position: 'absolute', top: '20px', right: '20px', background: 'transparent', border: 'none', fontSize: '24px', cursor: 'pointer' }}>
+                    {darkMode ? '☀️' : '🌙'}
+                </button>
+
+                <div style={{ background: darkMode ? 'rgba(30, 30, 30, 0.8)' : 'rgba(255, 255, 255, 0.9)', padding: '50px 40px', borderRadius: '16px', boxShadow: darkMode ? '0 10px 40px rgba(0,0,0,0.5)' : '0 10px 40px rgba(0,0,0,0.1)', backdropFilter: 'blur(10px)', textAlign: 'center', maxWidth: '450px', width: '90%', border: darkMode ? '1px solid #333' : '1px solid #fff' }}>
+                    
+                    <div style={{ fontSize: '48px', marginBottom: '10px' }}>⚡</div>
+                    <h1 style={{ margin: '0 0 10px 0', fontSize: '22px', color: darkMode ? '#eee' : '#222' }}>Simulador de Sistemas de Potência</h1>
+                    <p style={{ margin: '0 0 30px 0', fontSize: '14px', color: darkMode ? '#aaa' : '#666', lineHeight: '1.5' }}>Motor genérico para simulação e visualização de fluxo de carga e atuação de proteção.</p>
+
+                    <input type="file" ref={welcomeFileInputRef} accept=".json" style={{ display: 'none' }} onChange={handleWelcomeFileUpload} />
+
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                        <button 
+                            onClick={() => welcomeFileInputRef.current.click()}
+                            style={{ width: '100%', padding: '14px', border: 'none', borderRadius: '8px', fontSize: '14px', fontWeight: 'bold', cursor: 'pointer', background: '#00bcd4', color: '#000', transition: 'transform 0.2s', boxShadow: '0 4px 10px rgba(0, 188, 212, 0.3)' }}
+                            onMouseOver={e => e.target.style.transform = 'translateY(-2px)'}
+                            onMouseOut={e => e.target.style.transform = 'translateY(0)'}
+                        >
+                            📂 Carregar Projeto Salvo (.json)
+                        </button>
+
+                        <button 
+                            onClick={handleLoadExample}
+                            style={{ width: '100%', padding: '14px', border: `1px solid ${darkMode ? '#444' : '#ccc'}`, borderRadius: '8px', fontSize: '14px', fontWeight: 'bold', cursor: 'pointer', background: 'transparent', color: darkMode ? '#fff' : '#333', transition: 'background 0.2s' }}
+                            onMouseOver={e => e.target.style.background = darkMode ? '#333' : '#e0e0e0'}
+                            onMouseOut={e => e.target.style.background = 'transparent'}
+                        >
+                            🚀 Iniciar Sistema Exemplo (IEEE 53)
+                        </button>
+
+                        <div style={{ margin: '15px 0', display: 'flex', alignItems: 'center', color: darkMode ? '#555' : '#aaa' }}>
+                            <div style={{ flex: 1, height: '1px', background: darkMode ? '#444' : '#ddd' }}></div>
+                            <span style={{ padding: '0 10px', fontSize: '12px' }}>Missão 3</span>
+                            <div style={{ flex: 1, height: '1px', background: darkMode ? '#444' : '#ddd' }}></div>
+                        </div>
+
+                        {/* INPUT INVISÍVEL PARA LER O .DAT */}
+                        <input type="file" ref={datFileInputRef} accept=".dat,.txt" style={{ display: 'none' }} onChange={handleDatFileUpload} />
+
+                        {/* O NOVO BOTÃO ATIVADO */}
+                        <button 
+                            onClick={() => datFileInputRef.current.click()}
+                            style={{ width: '100%', padding: '14px', border: 'none', borderRadius: '8px', fontSize: '14px', fontWeight: 'bold', cursor: 'pointer', background: darkMode ? '#ff9800' : '#ff9800', color: '#000', transition: 'transform 0.2s', boxShadow: '0 4px 10px rgba(255, 152, 0, 0.3)' }}
+                            onMouseOver={e => e.target.style.transform = 'translateY(-2px)'}
+                            onMouseOut={e => e.target.style.transform = 'translateY(0)'}
+                        >
+                            📥 Importar Novo Sistema (.dat AMPL)
+                        </button>
+                    </div>
+                </div>
+            </div>
+        );
+    }
+
 
     return (
         <div className="app-container">
@@ -394,13 +724,13 @@ function App() {
                             toggleSwitch={toggleSwitch} setSelectedElement={setSelectedElement} setHoveredLineId={setHoveredLineId}
                             onDownloadReport={handleDownloadReport} onUploadSwitches={handleUploadSwitches}
                             calcMethod={calcMethod} setCalcMethod={setCalcMethod} onExportSVG={handleExportSVG}
-                            onExportPDF={handleExportPDF}
+                            onExportPDF={handleExportPDF} getNodeColor={getNodeColor} getEdgeColor={getEdgeColor}
 
                             // ENVIANDO OS DADOS DA SUB 200 PARA O MENU!
                             disconnectedStats={disconnectedStats}
                         />
                     ) : (
-                        <EditSidebar isEditMode={isEditMode} setIsEditMode={setIsEditMode} darkMode={darkMode} onUndo={handleUndoLayout} canUndo={layoutHistory.length > 0} onReset={handleResetToOriginalLayout} />
+                        <EditSidebar isEditMode={isEditMode} setIsEditMode={setIsEditMode} darkMode={darkMode} onUndo={handleUndoLayout} canUndo={layoutHistory.length > 0} onReset={handleResetToOriginalLayout} branches={branches} allNodes={allNodes} sources={sources} />
                     )}
                 </div>
             )}
@@ -440,7 +770,7 @@ function App() {
                     setHoveredNodeId={setHoveredNodeId} maintenanceMode={maintenanceMode} isMobile={isMobile} 
                     activePositions={activePositions} lineCurrents={lineCurrents} nodeData={nodeData} 
                     isEditMode={isEditMode} setIsEditMode={setIsEditMode} activeWaypoints={activeWaypoints} 
-                    darkMode={darkMode} onSaveLayoutToHistory={saveLayoutToHistory} loads={loads}
+                    darkMode={darkMode} onSaveLayoutToHistory={saveLayoutToHistory} loads={loads} onExportRequest={handleExportFullState}
                 >
                     {showLegend && !isMobile && (
                         <div className="legend" style={{ position: 'absolute', bottom: '20px', right: '20px', zIndex: 1000, pointerEvents: 'all', background: darkMode ? '#121212' : '#ffffff', border: '1px solid #444', borderRadius: '8px', boxShadow: '0 6px 20px rgba(0,0,0,0.2)' }} onMouseDown={e=>e.stopPropagation()} onMouseUp={e=>e.stopPropagation()} onClick={e=>e.stopPropagation()} onWheel={e=>e.stopPropagation()} onDoubleClick={e=>e.stopPropagation()} >

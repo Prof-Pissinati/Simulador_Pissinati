@@ -26,6 +26,9 @@ export function solveLinearSystem(A, b) {
 
         // 2. Eliminação (Zerar elementos abaixo do pivô)
         for (let k = i + 1; k < n; k++) {
+            // TRAVA ANTI-NAN 2: Se o pivô for zero, pula para não explodir a matemática
+            if (Math.abs(M[i][i]) < 1e-12) continue; 
+            
             const factor = M[k][i] / M[i][i];
             x[k] -= factor * x[i];
             for (let j = i; j < n; j++) {
@@ -41,7 +44,8 @@ export function solveLinearSystem(A, b) {
         for (let j = i + 1; j < n; j++) {
             sum += M[i][j] * result[j];
         }
-        result[i] = (x[i] - sum) / M[i][i];
+        // TRAVA ANTI-NAN 3: Previne NaN no resultado final
+        result[i] = Math.abs(M[i][i]) < 1e-12 ? 0 : (x[i] - sum) / M[i][i]; 
     }
 
     return result;
