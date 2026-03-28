@@ -112,8 +112,8 @@ export function parseAMPLDat(text) {
                     };
 
                     // Busca os valores independente de onde eles estiverem na tabela!
-                    const r = getVal('R', 0.001);
-                    const x = getVal('X', 0.001);
+                    let r = getVal('R', 0.001);
+                    let x = getVal('X', 0.001);
                     // TRAVA ANTI-NAN 1: Linhas ideais (R=0, X=0) ganham impedância ínfima
                     if (r === 0 && x === 0) {
                         r = 0.0001;

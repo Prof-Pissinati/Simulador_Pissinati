@@ -396,6 +396,56 @@ function App() {
         e.target.value = ''; 
     };
 
+    // --- LÓGICA DE DOWNLOAD DO TEMPLATE ---
+    const handleDownloadTemplate = () => {
+        const templateContent = `# =========================================================
+# TEMPLATE DE SISTEMA ELÉTRICO PARA O SIMULADOR
+# =========================================================
+
+# --- PARÂMETROS GERAIS ---
+param Vbase := 13.8;
+param Sbase := 1000;
+param SEF := 200; // subestação para estimar cargas desconectadas (apagão)
+
+# --- DECLARAÇÃO DE SUBESTAÇÕES (Opcional) ---
+set SR := 0;
+
+# =========================================================
+# TABELA DE BARRAS (NÓS)
+# O primeiro valor é sempre o ID da Barra.
+# Colunas lidas: Pd (kW), Qd (kVAr), Type (1=Sub, 0=Carga)
+# =========================================================
+param: N:   Pd      Qd      Type :=
+  0         0.0     0.0     1
+  1         50.0    20.0    0
+  2         120.0   60.0    0
+  3         45.5    15.2    0
+;
+
+# =========================================================
+# TABELA DE LINHAS (RAMOS)
+# Os dois primeiros valores são sempre Origem e Destino.
+# Colunas lidas: R, X, Imax, State (1=ON, 0=OFF), sw (1=Tem Chave)
+# =========================================================
+param: L:   R       X       Imax    State   sw :=
+  0   1     0.33    0.76    400     1       1
+  1   2     0.22    0.51    400     1       0
+  2   3     0.15    0.35    250     0       1
+;`;
+        
+        const blob = new Blob([templateContent], { type: 'text/plain;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = 'Template_IEEE.dat';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+        
+        showToast("Template baixado com sucesso!", "success");
+    };
+
     // --- LÓGICA DE EXPORTAÇÃO DO PROJETO (NOVO FORMATO) ---
     const handleExportFullState = useCallback((positions, waypoints) => {
         const exportData = {
@@ -456,6 +506,24 @@ function App() {
         window.addEventListener('applyOrganicLayout', handleApplyOrganic);
         return () => window.removeEventListener('applyOrganicLayout', handleApplyOrganic);
     }, []);
+
+    // --- ESCUDO CONTRA FECHAMENTO ACIDENTAL DA ABA ---
+    useEffect(() => {
+        const handleBeforeUnload = (e) => {
+            // Só exibe o alerta se houver um projeto carregado na tela
+            if (isProjectLoaded) {
+                e.preventDefault();
+                // Esta linha é obrigatória para navegadores modernos exibirem o popup padrão
+                e.returnValue = ''; 
+            }
+        };
+
+        window.addEventListener('beforeunload', handleBeforeUnload);
+        
+        return () => {
+            window.removeEventListener('beforeunload', handleBeforeUnload);
+        };
+    }, [isProjectLoaded]);
 
     const handleDownloadReport = () => {
         let report = "⚡ RELATÓRIO DO SISTEMA ELÉTRICO - IEEE 54\n";
@@ -660,7 +728,7 @@ function App() {
 
                         <div style={{ margin: '15px 0', display: 'flex', alignItems: 'center', color: darkMode ? '#555' : '#aaa' }}>
                             <div style={{ flex: 1, height: '1px', background: darkMode ? '#444' : '#ddd' }}></div>
-                            <span style={{ padding: '0 10px', fontSize: '12px' }}>Missão 3</span>
+                            <span style={{ padding: '0 10px', fontSize: '12px' }}> OU </span>
                             <div style={{ flex: 1, height: '1px', background: darkMode ? '#444' : '#ddd' }}></div>
                         </div>
 
@@ -676,6 +744,17 @@ function App() {
                         >
                             📥 Importar Novo Sistema (.dat AMPL)
                         </button>
+
+                        {/* --- BOTÃO TEMPLATE.DAT --- */}
+                        <button 
+                            onClick={handleDownloadTemplate}
+                            style={{ width: '100%', padding: '8px', border: 'none', borderRadius: '8px', fontSize: '12px', cursor: 'pointer', background: 'transparent', color: darkMode ? '#00bcd4' : '#0097a7', textDecoration: 'underline', transition: 'opacity 0.2s' }}
+                            onMouseOver={e => e.target.style.opacity = '0.7'}
+                            onMouseOut={e => e.target.style.opacity = '1'}
+                        >
+                            Precisa de ajuda? Baixe o modelo (.dat)
+                        </button>
+                        {/* --------------------------------------- */}
                     </div>
                 </div>
             </div>
@@ -730,7 +809,7 @@ function App() {
                             disconnectedStats={disconnectedStats}
                         />
                     ) : (
-                        <EditSidebar isEditMode={isEditMode} setIsEditMode={setIsEditMode} darkMode={darkMode} onUndo={handleUndoLayout} canUndo={layoutHistory.length > 0} onReset={handleResetToOriginalLayout} branches={branches} allNodes={allNodes} sources={sources} />
+                        <EditSidebar isEditMode={isEditMode} setIsEditMode={setIsEditMode} darkMode={darkMode} onUndo={handleUndoLayout} canUndo={layoutHistory.length > 0} onReset={handleResetToOriginalLayout} branches={branches} allNodes={allNodes} sources={sources} currentPositions={activePositions}/>
                     )}
                 </div>
             )}
