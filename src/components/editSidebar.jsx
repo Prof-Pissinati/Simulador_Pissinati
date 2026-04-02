@@ -20,14 +20,15 @@ export default function EditSidebar({
     const [hierNodeSep, setHierNodeSep] = useState(60);
     const [radialStep, setRadialStep] = useState(150);
     const fileInputRef = useRef(null);
+    const [openWeight, setOpenWeight] = useState(10); // Começa com 10% de força (elástico bem frouxo)
 
     const handleApplyGenerator = () => {
         let newPos = {};
-        if (algoMode === 'force') newPos = calculateForceLayout(allNodes, branches, sources, { distance: forceDist, charge: -forceCharge });
+        if (algoMode === 'force') newPos = calculateForceLayout(allNodes, branches, sources, { distance: forceDist, charge: -forceCharge, openWeight: openWeight / 100 });
         if (algoMode === 'hier') newPos = calculateHierarchicalLayout(allNodes, branches, sources, { rankdir: hierDir, ranker: hierRanker, ranksep: hierRankSep, nodesep: hierNodeSep });
         if (algoMode === 'radial') newPos = calculateRadialLayout(allNodes, branches, sources, { radius: radialStep });
         if (algoMode === 'starburst') newPos = calculateStarburstLayout(allNodes, branches, sources, { ranksep: hierRankSep, nodesep: hierNodeSep });
-        if (algoMode === 'orthogonal') newPos = calculateOrthogonalLayout(allNodes, branches, sources, { gridSize: radialStep, charge: -forceCharge }); // Nota: reaproveitamos a variável `radialStep` do painel radial para controlar o tamanho do Grid!
+        if (algoMode === 'orthogonal') newPos = calculateOrthogonalLayout(allNodes, branches, sources, { gridSize: radialStep, charge: -forceCharge, openWeight: openWeight / 100 });
 
         // MUDANÇA AQUI: Agora ele dispara um evento exclusivo para a memória Orgânica!
         window.dispatchEvent(new CustomEvent('applyOrganicLayout', { detail: { positions: newPos } }));
@@ -203,10 +204,13 @@ export default function EditSidebar({
                     {algoMode === 'force' && (
                         <div style={{ fontSize: '12px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
                             <label>Distância das Linhas: {forceDist}px
-                                <input type="range" min="10" max="250" value={forceDist} onChange={e=>setForceDist(Number(e.target.value))} style={{width:'100%'}}/>
+                                <input type="range" min="1" max="250" value={forceDist} onChange={e=>setForceDist(Number(e.target.value))} style={{width:'100%'}}/>
                             </label>
                             <label>Repulsão (Ímã): {forceCharge}
                                 <input type="range" min="10" max="300" value={forceCharge} onChange={e=>setForceCharge(Number(e.target.value))} style={{width:'100%'}}/>
+                            </label>
+                            <label>Força das Chaves Abertas: {openWeight}%
+                                <input type="range" min="0" max="100" value={openWeight} onChange={e=>setOpenWeight(Number(e.target.value))} style={{width:'100%'}}/>
                             </label>
                         </div>
                     )}
@@ -249,6 +253,9 @@ export default function EditSidebar({
                         </label>
                         <label>Repulsão Prévia (Desembaraço): {forceCharge}
                             <input type="range" min="5" max="100" value={forceCharge} onChange={e=>setForceCharge(Number(e.target.value))} style={{width:'100%'}}/>
+                        </label>
+                        <label>Força das Chaves Abertas: {openWeight}%
+                                <input type="range" min="0" max="100" value={openWeight} onChange={e=>setOpenWeight(Number(e.target.value))} style={{width:'100%'}}/>
                         </label>
                     </div>
                     )}

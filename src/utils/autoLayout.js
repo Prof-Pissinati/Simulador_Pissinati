@@ -1,54 +1,169 @@
 import * as d3 from 'd3-force';
 import dagre from 'dagre';
 
+// // =========================================================
+// // 1. MOTOR D3 FORCE (FÍSICA ORGÂNICA COM "BREATHING" ANNEALING)
+// // =========================================================
+// export function calculateForceLayout(nodesArray, branchesArray, sourcesArray, config = {}) {
+//     const dist = config.distance || 80;
+//     const targetCharge = config.charge || -400; 
+//     const col = config.collide || 40;
+    
+//     // O peso varia de 0.0 (ignorada) a 1.0 (força total).
+//     const openWeight = config.openWeight !== undefined ? config.openWeight : 1.0; 
+
+//     const d3Nodes = nodesArray.map(id => ({ id: id.toString(), isSource: sourcesArray.includes(id) }));
+    
+//     // Devolvemos TODAS as linhas para a simulação, mas marcamos quais estão abertas
+//     const d3Links = branchesArray.map(b => ({ 
+//         source: b.from.toString(), 
+//         target: b.to.toString(),
+//         isOpen: b.state === 0 
+//     }));
+
+//     const chargeForce = d3.forceManyBody().strength(targetCharge);
+
+//     // A MÁGICA: Configuramos molas diferentes para linhas diferentes!
+//     const linkForce = d3.forceLink(d3Links)
+//         .id(d => d.id)
+//         .distance(d => d.isOpen ? dist * 1.5 : dist) // A mola aberta cede um pouco mais de distância (1.5x)
+//         .strength(d => d.isOpen ? openWeight : 1);   // A mola aberta usa o peso reduzido
+
+//     const simulation = d3.forceSimulation(d3Nodes)
+//         .force("link", linkForce)
+//         .force("charge", chargeForce)
+//         .force("center", d3.forceCenter(0, 0)) 
+//         .force("collide", d3.forceCollide().radius(col))
+//         .stop();
+
+//     // A mágica que você descobriu: Expandir para ~10x o tamanho e depois encolher
+//     const maxCharge = targetCharge * 1000; // Aumenta a força para desembaraçar as barras e depois contrai até o ponto desejado
+    
+//     // Aumentamos os "ticks" (quadros de física) para dar tempo da expansão ser suave
+//     const totalTicks = 900; 
+//     const phaseTicks = totalTicks / 3;
+
+//     for (let i = 0; i < totalTicks; ++i) {
+//         let currentCharge;
+//         let currentAlpha = 1; // "Alpha" é a temperatura do D3. 1 = Quente/Agitado, 0 = Frio/Parado
+
+//         if (i < phaseTicks) {
+//             // FASE 1: AQUECIMENTO E EXPANSÃO (Como você fez aumentando de 50 em 50)
+//             const progress = i / phaseTicks;
+//             currentCharge = targetCharge + (maxCharge - targetCharge) * progress;
+//         } else if (i < phaseTicks * 2) {
+//             // FASE 2: MANUTENÇÃO (Segura a repulsão no máximo para garantir o desembaraço)
+//             currentCharge = maxCharge;
+//         } else {
+//             // FASE 3: RESFRIAMENTO E CONTRAÇÃO (Como você fez voltando pro valor original)
+//             const progress = (i - phaseTicks * 2) / phaseTicks;
+//             currentCharge = maxCharge + (targetCharge - maxCharge) * progress;
+//             // Aqui nós deixamos a física "esfriar" junto para as barras não ficarem tremendo
+//             currentAlpha = 1 - progress; 
+//         }
+
+//         chargeForce.strength(currentCharge);
+//         // O Math.max evita que a temperatura zere antes de acabar, garantindo movimento até o fim
+//         simulation.alpha(Math.max(0.01, currentAlpha)).tick(); 
+//     }
+
+//     const positions = {};
+//     d3Nodes.forEach(n => positions[Number(n.id)] = { x: n.x, y: n.y });
+//     return positions;
+// }
+
 // =========================================================
-// 1. MOTOR D3 FORCE (FÍSICA ORGÂNICA COM "BREATHING" ANNEALING)
+// 1. MOTOR D3 FORCE (FÍSICA ORGÂNICA COM "BREATHING" ANNEALING E FORÇAS POR GRAU)
 // =========================================================
 export function calculateForceLayout(nodesArray, branchesArray, sourcesArray, config = {}) {
     const dist = config.distance || 80;
-    const targetCharge = config.charge || -400; // Valor original da repulsão
+    const targetCharge = config.charge || -400; 
     const col = config.collide || 40;
+    const openWeight = config.openWeight !== undefined ? config.openWeight : 1.0; 
 
-    const d3Nodes = nodesArray.map(id => ({ id: id.toString(), isSource: sourcesArray.includes(id) }));
-    const d3Links = branchesArray.map(b => ({ source: b.from.toString(), target: b.to.toString() }));
+    // 1. MAPEAMENTO DE GRAU (Conta quantas conexões cada barra tem)
+    const nodeDegree = {};
+    nodesArray.forEach(id => nodeDegree[id] = 0);
+    branchesArray.forEach(b => {
+        nodeDegree[b.from] = (nodeDegree[b.from] || 0) + 1;
+        nodeDegree[b.to] = (nodeDegree[b.to] || 0) + 1;
+    });
 
-    const chargeForce = d3.forceManyBody().strength(targetCharge);
+    // Injeta o grau na "ficha" do nó para o D3 poder ler depois
+    const d3Nodes = nodesArray.map(id => ({ 
+        id: id.toString(), 
+        isSource: sourcesArray.includes(id),
+        degree: nodeDegree[id] || 0 
+    }));
+    
+    const d3Links = branchesArray.map(b => ({ 
+        source: b.from.toString(), 
+        target: b.to.toString(),
+        isOpen: b.state === 0 
+    }));
+
+    // 2. ÍMÃ INTELIGENTE E MÍOPE (O SEGREDO PARA SISTEMAS GIGANTES)
+    const chargeForce = d3.forceManyBody()
+        .strength(d => {
+            const multiplier = 1 + (d.degree * 5); 
+            return targetCharge * multiplier;
+        })
+        .distanceMax(dist * 6); // <-- A MÁGICA AQUI! O ímã para de funcionar depois de 6 "saltos" de distância.
+
+    // 3. MOLA INTELIGENTE: Aumenta a distância da linha se conectar barras muito cheias
+    const linkForce = d3.forceLink(d3Links)
+        .id(d => d.id)
+        .distance(d => {
+            // Lê quantas conexões tem na barra de origem e na de destino
+            const degSource = nodeDegree[d.source.id || d.source] || 0;
+            const degTarget = nodeDegree[d.target.id || d.target] || 0;
+            
+            // Cada conexão extra na dupla empurra a linha 8 pixels para mais longe
+            const degreeBonus = (degSource + degTarget) * 10; 
+            
+            const baseDist = d.isOpen ? dist * 1.5 : dist;
+            return baseDist + degreeBonus;
+        })
+        .strength(d => {
+            if (d.isOpen) return openWeight;
+            const degSource = nodeDegree[d.source.id || d.source] || 0;
+            const degTarget = nodeDegree[d.target.id || d.target] || 0;
+            // Se as pontas tiverem grau baixo, o cabo fica 50% mais rígido
+            return (degSource <= 2 || degTarget <= 2) ? 1.5 : 1; 
+        });
 
     const simulation = d3.forceSimulation(d3Nodes)
-        .force("link", d3.forceLink(d3Links).id(d => d.id).distance(dist))
+        .force("link", linkForce)
         .force("charge", chargeForce)
         .force("center", d3.forceCenter(0, 0)) 
         .force("collide", d3.forceCollide().radius(col))
-        .stop(); // Trava o D3 para controlarmos o tempo na mão
+        .stop();
 
-    // A mágica que você descobriu: Expandir para ~10x o tamanho e depois encolher
-    const maxCharge = targetCharge * 10; 
-    
-    // Aumentamos os "ticks" (quadros de física) para dar tempo da expansão ser suave
+    const maxChargeMulti = 5; 
     const totalTicks = 900; 
     const phaseTicks = totalTicks / 3;
 
     for (let i = 0; i < totalTicks; ++i) {
-        let currentCharge;
-        let currentAlpha = 1; // "Alpha" é a temperatura do D3. 1 = Quente/Agitado, 0 = Frio/Parado
+        let currentAlpha = 1; 
+        let phaseMultiplier;
 
+        // Calcula a força do "Breathing" baseada na fase
         if (i < phaseTicks) {
-            // FASE 1: AQUECIMENTO E EXPANSÃO (Como você fez aumentando de 50 em 50)
-            const progress = i / phaseTicks;
-            currentCharge = targetCharge + (maxCharge - targetCharge) * progress;
+            phaseMultiplier = 1 + (maxChargeMulti - 1) * (i / phaseTicks);
         } else if (i < phaseTicks * 2) {
-            // FASE 2: MANUTENÇÃO (Segura a repulsão no máximo para garantir o desembaraço)
-            currentCharge = maxCharge;
+            phaseMultiplier = maxChargeMulti;
         } else {
-            // FASE 3: RESFRIAMENTO E CONTRAÇÃO (Como você fez voltando pro valor original)
             const progress = (i - phaseTicks * 2) / phaseTicks;
-            currentCharge = maxCharge + (targetCharge - maxCharge) * progress;
-            // Aqui nós deixamos a física "esfriar" junto para as barras não ficarem tremendo
+            phaseMultiplier = maxChargeMulti - (maxChargeMulti - 1) * progress;
             currentAlpha = 1 - progress; 
         }
 
-        chargeForce.strength(currentCharge);
-        // O Math.max evita que a temperatura zere antes de acabar, garantindo movimento até o fim
+        // Aplica o fôlego dinâmico multiplicando pela força individual de cada nó
+        chargeForce.strength(d => {
+            const baseNodeCharge = targetCharge * (1 + (d.degree * 5));
+            return baseNodeCharge * phaseMultiplier;
+        });
+
         simulation.alpha(Math.max(0.01, currentAlpha)).tick(); 
     }
 
@@ -334,9 +449,10 @@ export function calculateOrthogonalLayout(nodesArray, branchesArray, sourcesArra
     const gridSize = config.gridSize || 120; 
     // AGORA ELE RECEBE A CARGA DA INTERFACE (Padrão -500)
     const targetCharge = config.charge || -500;
+    const openWeight = config.openWeight !== undefined ? config.openWeight : 1.0; // <-- CAPTURA A OPÇÃO
 
     // 1. Roda o motor de força com o resfriamento simulado (Simulated Annealing)
-    const basePos = calculateForceLayout(nodesArray, branchesArray, sourcesArray, { distance: gridSize, charge: targetCharge });
+    const basePos = calculateForceLayout(nodesArray, branchesArray, sourcesArray, { distance: 50, charge: targetCharge, openWeight: openWeight });
 
     const snappedPos = {};
     const occupied = new Set();
