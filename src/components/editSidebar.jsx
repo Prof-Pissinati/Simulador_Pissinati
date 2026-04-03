@@ -24,11 +24,11 @@ export default function EditSidebar({
 
     const handleApplyGenerator = () => {
         let newPos = {};
-        if (algoMode === 'force') newPos = calculateForceLayout(allNodes, branches, sources, { distance: forceDist, charge: -forceCharge, openWeight: openWeight / 100 });
+        if (algoMode === 'force') newPos = calculateForceLayout(allNodes, branches, sources, { distance: forceDist, charge: -forceCharge, openWeight: openWeight / 100, currentPos: currentPositions });
         if (algoMode === 'hier') newPos = calculateHierarchicalLayout(allNodes, branches, sources, { rankdir: hierDir, ranker: hierRanker, ranksep: hierRankSep, nodesep: hierNodeSep });
         if (algoMode === 'radial') newPos = calculateRadialLayout(allNodes, branches, sources, { radius: radialStep });
         if (algoMode === 'starburst') newPos = calculateStarburstLayout(allNodes, branches, sources, { ranksep: hierRankSep, nodesep: hierNodeSep });
-        if (algoMode === 'orthogonal') newPos = calculateOrthogonalLayout(allNodes, branches, sources, { gridSize: radialStep, charge: -forceCharge, openWeight: openWeight / 100 });
+        if (algoMode === 'orthogonal') newPos = calculateOrthogonalLayout(allNodes, branches, sources, { gridSize: radialStep, charge: -forceCharge, distance: forceDist, openWeight: openWeight / 100, currentPos: currentPositions });
 
         // MUDANÇA AQUI: Agora ele dispara um evento exclusivo para a memória Orgânica!
         window.dispatchEvent(new CustomEvent('applyOrganicLayout', { detail: { positions: newPos } }));
@@ -247,17 +247,23 @@ export default function EditSidebar({
                     )}
 
                     {algoMode === 'orthogonal' && (
-                    <div style={{ fontSize: '12px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                        <label>Tamanho da Malha (Grid): {radialStep}px
-                            <input type="range" min="10" max="100" step="10" value={radialStep} onChange={e=>setRadialStep(Number(e.target.value))} style={{width:'100%'}}/>
-                        </label>
-                        <label>Repulsão Prévia (Desembaraço): {forceCharge}
-                            <input type="range" min="5" max="100" value={forceCharge} onChange={e=>setForceCharge(Number(e.target.value))} style={{width:'100%'}}/>
-                        </label>
-                        <label>Força das Chaves Abertas: {openWeight}%
+                        <div style={{ fontSize: '12px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                            <label style={{ color: '#00bcd4', fontWeight: 'bold' }}>Tamanho da Malha (Grid): {radialStep}px
+                                <input type="range" min="10" max="100" step="10" value={radialStep} onChange={e=>setRadialStep(Number(e.target.value))} style={{width:'100%'}}/>
+                            </label>
+                            
+                            <hr style={{ border: 'none', borderTop: `1px solid ${darkMode ? '#444' : '#ccc'}`, margin: '4px 0' }} />
+                            
+                            <label>Distância das Linhas: {forceDist}px
+                                <input type="range" min="1" max="250" value={forceDist} onChange={e=>setForceDist(Number(e.target.value))} style={{width:'100%'}}/>
+                            </label>
+                            <label>Repulsão Prévia (Ímã): {forceCharge}
+                                <input type="range" min="5" max="300" value={forceCharge} onChange={e=>setForceCharge(Number(e.target.value))} style={{width:'100%'}}/>
+                            </label>
+                            <label>Força das Chaves Abertas: {openWeight}%
                                 <input type="range" min="0" max="100" value={openWeight} onChange={e=>setOpenWeight(Number(e.target.value))} style={{width:'100%'}}/>
-                        </label>
-                    </div>
+                            </label>
+                        </div>
                     )}
 
                     <button onClick={handleApplyGenerator} style={{ width: '100%', padding: '8px', marginTop: '12px', background: '#00bcd4', color: '#000', border: 'none', borderRadius: '4px', fontWeight: 'bold', cursor: 'pointer' }}>

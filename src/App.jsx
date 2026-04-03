@@ -874,7 +874,9 @@ param: L:   R       X       Imax    State   sw :=
                     <div onClick={() => setFaultSidebarOpen(!isFaultSidebarOpen)} title={isFaultSidebarOpen ? "Ocultar Painel" : "Painel de Faltas"} style={{
                         position: 'absolute', left: '-28px', top: 'calc(50% - 35px)',
                         width: '28px', height: '70px', background: darkMode ? '#1e1e1e' : '#fff',
-                        border: `1px solid ${darkMode ? '#333' : '#ccc'}`, borderRight: 'none',
+                        borderTop: `1px solid ${darkMode ? '#333' : '#ccc'}`,
+                        borderBottom: `1px solid ${darkMode ? '#333' : '#ccc'}`,
+                        borderLeft: `1px solid ${darkMode ? '#333' : '#ccc'}`,
                         borderRadius: '12px 0 0 12px', display: 'flex', alignItems: 'center', justifyContent: 'center',
                         cursor: 'pointer', boxShadow: '-4px 0 15px rgba(0,0,0,0.1)', color: '#ff9800',
                         zIndex: 101, transition: 'background-color 0.2s'

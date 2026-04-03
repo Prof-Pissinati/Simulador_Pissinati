@@ -81,6 +81,8 @@ export function calculateForceLayout(nodesArray, branchesArray, sourcesArray, co
     const col = config.collide || 40;
     const openWeight = config.openWeight !== undefined ? config.openWeight : 1.0; 
 
+    const currentPos = config.currentPos || null;
+
     // 1. MAPEAMENTO DE GRAU (Conta quantas conexões cada barra tem)
     const nodeDegree = {};
     nodesArray.forEach(id => nodeDegree[id] = 0);
@@ -89,12 +91,21 @@ export function calculateForceLayout(nodesArray, branchesArray, sourcesArray, co
         nodeDegree[b.to] = (nodeDegree[b.to] || 0) + 1;
     });
 
-    // Injeta o grau na "ficha" do nó para o D3 poder ler depois
-    const d3Nodes = nodesArray.map(id => ({ 
-        id: id.toString(), 
-        isSource: sourcesArray.includes(id),
-        degree: nodeDegree[id] || 0 
-    }));
+    const d3Nodes = nodesArray.map(id => {
+        const nodeObj = { 
+            id: id.toString(), 
+            isSource: sourcesArray.includes(id),
+            degree: nodeDegree[id] || 0 
+        };
+        
+        // Se a barra já tem uma posição no seu projeto, ela começa o D3 exatamente dali
+        if (currentPos && currentPos[id]) {
+            nodeObj.x = currentPos[id].x;
+            nodeObj.y = currentPos[id].y;
+        }
+        
+        return nodeObj;
+    });
     
     const d3Links = branchesArray.map(b => ({ 
         source: b.from.toString(), 
@@ -445,15 +456,22 @@ export function calculateStarburstLayout(nodesArray, branchesArray, sourcesArray
 // 5. MOTOR ORTOGONAL (GRID / MANHATTAN)
 // =========================================================
 export function calculateOrthogonalLayout(nodesArray, branchesArray, sourcesArray, config = {}) {
-    // Tamanho do "quadradinho" da malha (grid). 120px é ideal para não encavalar
     const gridSize = config.gridSize || 120; 
-    // AGORA ELE RECEBE A CARGA DA INTERFACE (Padrão -500)
-    const targetCharge = config.charge || -500;
-    const openWeight = config.openWeight !== undefined ? config.openWeight : 1.0; // <-- CAPTURA A OPÇÃO
+    const targetCharge = config.charge || -500; 
+    const openWeight = config.openWeight !== undefined ? config.openWeight : 1.0; 
+    const currentPos = config.currentPos || null;
+    
+    // ESTA É A LINHA QUE O JAVASCRIPT NÃO ESTAVA ACHANDO:
+    const dist = config.distance || 50; 
 
     // 1. Roda o motor de força com o resfriamento simulado (Simulated Annealing)
-    const basePos = calculateForceLayout(nodesArray, branchesArray, sourcesArray, { distance: 50, charge: targetCharge, openWeight: openWeight });
-
+    const basePos = calculateForceLayout(nodesArray, branchesArray, sourcesArray, { 
+        distance: dist, 
+        charge: targetCharge, 
+        openWeight: openWeight,
+        currentPos: currentPos 
+    });
+    
     const snappedPos = {};
     const occupied = new Set();
     const getGridKey = (x, y) => `${x},${y}`;
