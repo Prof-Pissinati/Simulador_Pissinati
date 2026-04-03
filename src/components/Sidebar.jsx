@@ -1,5 +1,6 @@
-import React, { useRef } from 'react';
+import React, { useRef, useState } from 'react';
 import { SYSTEM_DATA } from '../data/systemData';
+
 
 export default function Sidebar({
     sidebarMode,
@@ -24,9 +25,11 @@ export default function Sidebar({
     calcMethod = 'NR',
     setCalcMethod = () => console.warn("Função setCalcMethod não conectada!"),
     onExportPDF = () => console.warn("Função onExportPDF não conectada!"),
-    getNodeColor
+    getNodeColor,
+    systemSize
 }) {
     const fileInputRef = useRef(null);
+    const [unlockFixed, setUnlockFixed] = useState(false);
 
     const handleImportClick = () => {
         if (fileInputRef.current) fileInputRef.current.click();
@@ -43,7 +46,7 @@ export default function Sidebar({
     return (
         <div className={`sidebar ${sidebarMode}`}>
             <div className="sidebar-header">
-                <h1 style={{ marginTop: '-10px',marginBottom: '10px' } }>⚡IEEE 53 Barras</h1>
+                <h1 style={{ marginTop: '-10px',marginBottom: '10px' } }>⚡Sis. {systemSize} Barras</h1>
                 
                 {/* Input invisível para a importação de ficheiros */}
                 <input 
@@ -145,26 +148,79 @@ export default function Sidebar({
                 </div>
             </div>
 
-            {/* SWITCH LIST */}
+            {/* SWITCH LIST INTELIGENTE */}
             <div className="switch-list">
-                {branches
-                    .slice()
-                    .sort((a, b) => {
+                {(() => {
+                    const sorter = (a, b) => {
                         const minA = Math.min(a.from, a.to);
                         const minB = Math.min(b.from, b.to);
                         if (minA !== minB) return minA - minB;
                         return Math.max(a.from, a.to) - Math.max(b.from, b.to);
-                    })
-                    .map(branch => (
-                    <div key={branch.id} className="switch-item" 
-                         onMouseEnter={() => { setSelectedElement({ type: 'edge', data: branch }); setHoveredLineId(branch.id); }} 
-                         onMouseLeave={() => setHoveredLineId(null)}>
-                        <span style={{fontSize:'13px', fontWeight:'600'}}>{Math.min(branch.from, branch.to)}-{Math.max(branch.from, branch.to)}</span>
-                        {(branch.hasSwitch) ? (
-                            <button className={`switch-btn ${branch.state === 1 ? 'on' : 'off'}`} onClick={() => toggleSwitch(branch.id)}>{branch.state === 1 ? 'ON' : 'OFF'}</button>
-                        ) : <span style={{fontSize:'10px', color:'#999', fontWeight:'bold'}}>FIXO</span>}
-                    </div>
-                ))}
+                    };
+
+                    // Separa e ordena as duas listas
+                    const switchable = branches.filter(b => b.hasSwitch).sort(sorter);
+                    const fixed = branches.filter(b => !b.hasSwitch).sort(sorter);
+
+                    // Função padronizada para desenhar qualquer tipo de chave
+                    const renderItem = (branch, isFixedType) => {
+                        const nodeColor = getNodeColor ? getNodeColor(branch.from) : '#4caf50';
+                        const isOn = branch.state === 1;
+                        const canClick = !isFixedType || unlockFixed; // Só clica se for manobrável ou se o cadeado estiver aberto
+
+                        return (
+                            <div key={branch.id} className="switch-item" 
+                                 onMouseEnter={() => { setSelectedElement({ type: 'edge', data: branch }); setHoveredLineId(branch.id); }} 
+                                 onMouseLeave={() => setHoveredLineId(null)}>
+                                <span style={{fontSize:'13px', fontWeight:'600'}}>{Math.min(branch.from, branch.to)}-{Math.max(branch.from, branch.to)}</span>
+                                
+                                <button 
+                                    className={`switch-btn ${isOn ? 'on' : 'off'}`} 
+                                    onClick={() => { if (canClick) toggleSwitch(branch.id); }}
+                                    style={{
+                                        // Pinta com a cor da subestação se estiver ON e for clicável
+                                        backgroundColor: canClick ? (isOn ? nodeColor : '') : 'transparent',
+                                        color: canClick ? (isOn ? '#000' : '') : '#999',
+                                        border: canClick ? 'none' : '1px solid #555',
+                                        cursor: canClick ? 'pointer' : 'default',
+                                        opacity: canClick ? 1 : 0.6
+                                    }}
+                                >
+                                    {!canClick ? 'FIXO' : (isOn ? 'ON' : 'OFF')}
+                                </button>
+                            </div>
+                        );
+                    };
+
+                    return (
+                        <>
+                            {/* 1. Lista as Chaves Normais */}
+                            {switchable.map(b => renderItem(b, false))}
+                            
+                            {/* 2. O Botão de Desbloqueio (só aparece se existirem trechos fixos) */}
+                            {fixed.length > 0 && (
+                                <div className="switch-item" style={{ justifyContent: 'center', background: 'transparent', padding: '10px 0', borderBottom: 'none' }}>
+                                    <button 
+                                        onClick={() => setUnlockFixed(!unlockFixed)}
+                                        style={{
+                                            width: '100%', padding: '8px', 
+                                            background: unlockFixed ? '#d32f2f' : 'transparent',
+                                            color: unlockFixed ? '#fff' : '#888', 
+                                            border: '1px dashed #555',
+                                            borderRadius: '4px', fontWeight: 'bold', cursor: 'pointer',
+                                            transition: 'all 0.3s'
+                                        }}
+                                    >
+                                        {unlockFixed ? '🔒 Bloquear Barras Fixas' : '🔓 Habilitar Manobra (Fixas)'}
+                                    </button>
+                                </div>
+                            )}
+                            
+                            {/* 3. Lista as Chaves Fixas logo abaixo do botão */}
+                            {fixed.map(b => renderItem(b, true))}
+                        </>
+                    );
+                })()}
             </div>
         </div>
     );

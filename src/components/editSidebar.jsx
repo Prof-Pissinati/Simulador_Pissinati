@@ -204,7 +204,7 @@ export default function EditSidebar({
                     {algoMode === 'force' && (
                         <div style={{ fontSize: '12px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
                             <label>Distância das Linhas: {forceDist}px
-                                <input type="range" min="1" max="250" value={forceDist} onChange={e=>setForceDist(Number(e.target.value))} style={{width:'100%'}}/>
+                                <input type="range" min="1" max="50" value={forceDist} onChange={e=>setForceDist(Number(e.target.value))} style={{width:'100%'}}/>
                             </label>
                             <label>Repulsão (Ímã): {forceCharge}
                                 <input type="range" min="10" max="300" value={forceCharge} onChange={e=>setForceCharge(Number(e.target.value))} style={{width:'100%'}}/>

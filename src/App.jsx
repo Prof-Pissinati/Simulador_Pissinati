@@ -18,7 +18,6 @@ const hexToRgb = (hex) => {
     return result ? { r: parseInt(result[1], 16), g: parseInt(result[2], 16), b: parseInt(result[3], 16) } : { r: 128, g: 128, b: 128 };
 };
 
-// Adicione esta função logo abaixo da const hexToRgb
 const getSafeHue = (id) => {
     let h = (id * 137) % 360;
     // Se a cor cair no vermelho/laranja escuro (0-25 ou 335-360), joga para o Azul/Verde
@@ -32,6 +31,8 @@ function App() {
     const [branches, setBranches] = useState(() => SYSTEM_DATA.branches.map((b, idx) => ({ 
         ...b, id: idx, state: (b.initialState !== undefined ? b.initialState : (b.state !== undefined ? b.state : 1)) 
     })));
+
+    const initialBranchesRef = useRef([]);
     
     const [faultNodes, setFaultNodes] = useState(new Set());
     const [selectedElement, setSelectedElement] = useState(null);
@@ -266,8 +267,7 @@ function App() {
 
     const toggleFault = (nodeId) => {
         if (faultNodes.has(nodeId)) {
-            // 1. SE JÁ TEM FALTA: Apenas remove a falta da barra
-            // (Nota de eng: Não fechamos as linhas automaticamente por segurança, o operador deve religar)
+            // REMOVE A FALTA
             setFaultNodes(prev => {
                 const newSet = new Set(prev);
                 newSet.delete(nodeId);
@@ -275,31 +275,74 @@ function App() {
             });
             showToast(`Falta removida da barra ${nodeId}`, 'success');
         } else {
-            // 2. SE NÃO TEM FALTA: Aplica a falta e ATUA A PROTEÇÃO (Abre as linhas)
+            // APLICA A FALTA
             setFaultNodes(prev => {
                 const newSet = new Set(prev);
                 newSet.add(nodeId);
                 return newSet;
             });
             
-            // Varre todas as linhas e abre (state: 0) as que tocam na barra em curto
-            setBranches(prevBranches => 
-                prevBranches.map(b => 
-                    (b.from === nodeId || b.to === nodeId) ? { ...b, state: 0 } : b
-                )
-            );
-            
-            showToast(`Proteção atuou! Linhas da barra ${nodeId} abertas.`, 'warning');
+            // LÓGICA DE ZONA DE PROTEÇÃO: Viaja pelos trechos fixos e abre a primeira chave
+            setBranches(prevBranches => {
+                const branchesToOpen = new Set();
+                const visitedNodes = new Set([nodeId]);
+                const queue = [nodeId];
+
+                // Busca em Largura (BFS) para encontrar os disjuntores mais próximos
+                while (queue.length > 0) {
+                    const curr = queue.shift();
+                    
+                    // Encontra conexões FECHADAS ligadas ao nó atual
+                    const connected = prevBranches.filter(b => b.state === 1 && (b.from === curr || b.to === curr));
+                    
+                    connected.forEach(b => {
+                        const neighbor = b.from === curr ? b.to : b.from;
+                        
+                        if (!visitedNodes.has(neighbor)) {
+                            if (b.hasSwitch) {
+                                // Achou um disjuntor de verdade! Isola aqui e não avança mais nesta direção.
+                                branchesToOpen.add(b.id);
+                            } else {
+                                // É trecho fixo! A corrente de falta passa direto, adiciona à fila para continuar a busca.
+                                visitedNodes.add(neighbor);
+                                queue.push(neighbor);
+                            }
+                        }
+                    });
+                }
+
+                // Verifica se encontrou disjuntores para abrir e exibe os Toasts correspondentes
+                if (branchesToOpen.size > 0) {
+                    showToast(`Proteção atuou! ${branchesToOpen.size} disjuntor(es) aberto(s) para isolar a falta.`, 'warning');
+                    return prevBranches.map(b => branchesToOpen.has(b.id) ? { ...b, state: 0 } : b);
+                } else {
+                    showToast(`Atenção: Nenhum disjuntor encontrado para isolar a falta na barra ${nodeId}!`, 'error');
+                    return prevBranches;
+                }
+            });
         }
     };
 
     const resetSystem = () => {
-        setBranches(SYSTEM_DATA.branches.map((b, idx) => ({ ...b, id: idx, state: (b.initialState !== undefined ? b.initialState : (b.state !== undefined ? b.state : 1)) })));
-        setFaultNodes(new Set());
-        setSelectedElement(null);
-        showToast('Sistema resetado', 'success');
-    };
+        // Confirmação de segurança (opcional, mas muito recomendada)
+        if (window.confirm("Deseja remover as faltas e voltar as chaves para a posição inicial?")) {
+            
+            // 1. Limpa todas as faltas (curtos-circuitos)
+            setFaultNodes(new Set());
 
+            // 2. Restaura o estado original das chaves
+            if (initialBranchesRef.current && initialBranchesRef.current.length > 0) {
+                // Restaura pela fotografia do arquivo importado
+                setBranches(JSON.parse(JSON.stringify(initialBranchesRef.current)));
+            } else {
+                // Fallback: se não tiver foto (ex: sistema padrão), tenta apenas fechar todas as chaves
+                setBranches(prev => prev.map(b => ({ ...b, state: 1 })));
+            }
+            
+            // Se você tiver a função showToast implementada:
+             showToast("Sistema reiniciado com sucesso!", "success");
+        }
+    };
     // --- FUNÇÕES DA TELA DE BOAS-VINDAS ---
     const handleLoadExample = () => {
         // Carrega o IEEE 54 padrão
@@ -317,10 +360,21 @@ function App() {
             try {
                 const data = JSON.parse(event.target.result);
                 if (data.layout || data.positions) {
-                    if (data.branches) setBranches(data.branches);
+                    
+                    // 👇 A CORREÇÃO ENTRA AQUI: Restaurar a "Física" do sistema! 👇
+                    if (data.loads) SYSTEM_DATA.loads = data.loads;
+                    if (data.baseKV) SYSTEM_DATA.Vbase = data.baseKV;
+                    if (data.sBase) SYSTEM_DATA.Sbase = data.sBase;
+                    if (data.sources) SYSTEM_DATA.sources = data.sources;
+                    // 👆 ======================================================= 👆
+
+                    if (data.branches) {
+                        setBranches(data.branches);
+                        // Tira uma "fotografia" do estado original (quais eram abertas e fechadas de fábrica)
+                        initialBranchesRef.current = JSON.parse(JSON.stringify(data.branches));
+                    }
                     if (data.faults) setFaultNodes(new Set(data.faults));
 
-                    
                     // Dá um tempinho mínimo para o React renderizar o SVG e depois aplica as posições
                     setTimeout(() => {
                         window.dispatchEvent(new CustomEvent('applyGraphLayout', { detail: data }));
@@ -450,12 +504,13 @@ param: L:   R       X       Imax    State   sw :=
     const handleExportFullState = useCallback((positions, waypoints) => {
         const exportData = {
             version: "1.0",
-            systemName: "IEEE 54 (Projeto Salvo)",
+            systemName: "Sistema Salvo",
             baseKV: SYSTEM_DATA.Vbase || 13.8,
+            sBase: SYSTEM_DATA.Sbase || 1000, // <-- Adicionando o Sbase por segurança
             sources: sources,
             loads: SYSTEM_DATA.loads, 
-            branches: branches, // Salva todas as linhas e o estado atual das chaves!
-            faults: Array.from(faultNodes), // Salva as faltas ativas!
+            branches: branches, 
+            faults: Array.from(faultNodes), 
             layout: {
                 positions: positions,
                 waypoints: waypoints
@@ -804,6 +859,8 @@ param: L:   R       X       Imax    State   sw :=
                             onDownloadReport={handleDownloadReport} onUploadSwitches={handleUploadSwitches}
                             calcMethod={calcMethod} setCalcMethod={setCalcMethod} onExportSVG={handleExportSVG}
                             onExportPDF={handleExportPDF} getNodeColor={getNodeColor} getEdgeColor={getEdgeColor}
+
+                            systemSize={Math.max(0, allNodes.length)}
 
                             // ENVIANDO OS DADOS DA SUB 200 PARA O MENU!
                             disconnectedStats={disconnectedStats}
