@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react'; // <-- Apenas adicione o { useState } aqui!
+import React, { useState, useRef, useEffect } from 'react';
 import { calculateForceLayout, calculateHierarchicalLayout, calculateRadialLayout, calculateStarburstLayout, calculateOrthogonalLayout } from '../utils/autoLayout';
 
 export default function EditSidebar({
@@ -34,8 +34,18 @@ export default function EditSidebar({
         window.dispatchEvent(new CustomEvent('applyOrganicLayout', { detail: { positions: newPos } }));
         
         // Força a câmera a se ajustar ao novo desenho
-        setTimeout(() => window.dispatchEvent(new CustomEvent('triggerZoomExtents')), 100);
+        setTimeout(() => window.dispatchEvent(new CustomEvent('triggerZoomExtents')), 600);
     };
+
+    useEffect(() => {
+        const handleRotateShortcut = (e) => {
+            const angle = e.detail; // Recebe o -10 ou 10 que o App.jsx enviou
+            handleRotate(angle);
+        };
+
+        window.addEventListener('triggerRotate', handleRotateShortcut);
+        return () => window.removeEventListener('triggerRotate', handleRotateShortcut);
+    }, [currentPositions]); // A dependência garante que a rotação use as posições mais recentes!
 
     const handleFileUpload = (e) => {
         const file = e.target.files[0];
@@ -134,7 +144,7 @@ export default function EditSidebar({
         window.dispatchEvent(new CustomEvent('applyOrganicLayout', { detail: { positions: newPos } }));
         
         // 4. Centraliza a câmera no novo desenho rotacionado
-        setTimeout(() => window.dispatchEvent(new CustomEvent('triggerZoomExtents')), 100);
+        setTimeout(() => window.dispatchEvent(new CustomEvent('triggerZoomExtents')), 600);
     };
 
     if (!isEditMode) return null;

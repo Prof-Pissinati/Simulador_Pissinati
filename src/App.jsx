@@ -10,6 +10,7 @@ import { exportSVG } from './utils/exportUtils';
 import './index.css';
 import { parseAMPLDat } from './utils/amplParser';
 import { calculateForceLayout } from './utils/autoLayout';
+import { useShortcuts } from './hooks/useShortcuts';
 
 const SOURCE_COLORS = { 101: '#2e7d32', 102: '#e65100', 104: '#7b1fa2', 1: '#2962ff' };
 
@@ -27,12 +28,14 @@ const getSafeHue = (id) => {
 
 function App() {
     const [activeSources, setActiveSources] = useState([101, 102, 104]);
-    const [darkMode, setDarkMode] = useState(false); 
+    const [darkMode, setDarkMode] = useState(true); 
     const [branches, setBranches] = useState(() => SYSTEM_DATA.branches.map((b, idx) => ({ 
         ...b, id: idx, state: (b.initialState !== undefined ? b.initialState : (b.state !== undefined ? b.state : 1)) 
     })));
 
-    const initialBranchesRef = useRef([]);
+    const initialBranchesRef = useRef(SYSTEM_DATA.branches.map((b, idx) => ({ 
+        ...b, id: idx, state: (b.initialState !== undefined ? b.initialState : (b.state !== undefined ? b.state : 1)) 
+    })));
     
     const [faultNodes, setFaultNodes] = useState(new Set());
     const [selectedElement, setSelectedElement] = useState(null);
@@ -43,13 +46,13 @@ function App() {
     const [isEditMode, setIsEditMode] = useState(false);
 
     const [layoutHistory, setLayoutHistory] = useState([]); 
-    const [initialLayout, setInitialLayout] = useState({ positions: SYSTEM_DATA.positionsProject || {}, waypoints: SYSTEM_DATA.waypointsProject || {} });
     const [layoutMode, setLayoutMode] = useState('project'); 
     const [organicPositions, setOrganicPositions] = useState(null);
 
     // 1. NOVAS MEMÓRIAS DE PROJETO
     const [projectPositions, setProjectPositions] = useState(SYSTEM_DATA.positionsProject || {});
     const [projectWaypoints, setProjectWaypoints] = useState(SYSTEM_DATA.waypointsProject || {});
+    const [systemLoads, setSystemLoads] = useState(SYSTEM_DATA.loads);
 
     // 2. SUBSTITUA AS DUAS LINHAS de activePositions E activeWaypoints POR ESTAS:
     const activePositions = useMemo(() => layoutMode === 'project' ? projectPositions : (organicPositions || projectPositions), [layoutMode, projectPositions, organicPositions]);
@@ -64,7 +67,6 @@ function App() {
     const [hoveredLineId, setHoveredLineId] = useState(null);
     const [hoveredNodeId, setHoveredNodeId] = useState(null);
     const [maintenanceMode, setMaintenanceMode] = useState(false);
-    const [isMobile, setIsMobile] = useState(window.innerWidth <= 768);
 
     // --- ESTADOS DA TELA INICIAL ---
     const [isProjectLoaded, setIsProjectLoaded] = useState(false);
@@ -89,12 +91,6 @@ function App() {
     }, [allNodes.length]);
 
     useEffect(() => {
-        const handleResize = () => setIsMobile(window.innerWidth <= 768);
-        window.addEventListener('resize', handleResize);
-        return () => window.removeEventListener('resize', handleResize);
-    }, []);
-
-    useEffect(() => {
         if (darkMode) document.body.classList.add('dark-mode');
         else document.body.classList.remove('dark-mode');
     }, [darkMode]);
@@ -106,26 +102,6 @@ function App() {
         setLayoutHistory(prev => prev.slice(0, -1));
     }, [layoutHistory]);
 
-    useEffect(() => {
-        const handleKeyDown = (e) => {
-            if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
-            const key = e.key.toLowerCase();
-
-            // --- NOVA REGRA: FECHAR ATALHOS COM ESC ---
-            if (e.key === 'Escape') {setShowShortcuts(false); return;}
-            if (key === 'p' && !e.ctrlKey) setPrintFrameMode(prev => prev === 'none' ? 'landscape' : (prev === 'landscape' ? 'portrait' : 'none'));
-            if (key === 'd') setDarkMode(prev => !prev);
-            if (key === 'l') setShowLabels(prev => !prev);
-            if (key === 'm') setCalcMethod(prev => prev === 'NR' ? 'GS' : 'NR');
-            if (key === 'r') resetSystem();
-            if (key === 'e') setIsEditMode(prev => !prev);
-            if (key === 'z' && !e.ctrlKey) { e.preventDefault(); window.dispatchEvent(new CustomEvent('triggerZoomExtents')); }
-            if (key === 'z' && e.ctrlKey) { e.preventDefault(); handleUndoLayout(); }
-            if (key === 'h') setShowShortcuts(true);
-        };
-        window.addEventListener('keydown', handleKeyDown);
-        return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [handleUndoLayout]);
 
     const saveLayoutToHistory = useCallback((positions, waypoints) => {
         const currentState = JSON.parse(JSON.stringify({ positions: positions, waypoints: waypoints }));
@@ -137,12 +113,12 @@ function App() {
             window.dispatchEvent(new CustomEvent('resetGraphLayout'));
             setLayoutHistory([]); 
         }
-    }, [initialLayout]);
+    }, []);
 
     // 1. CRIA O PACOTE DE DADOS AQUI
     const sysData = useMemo(() => ({
         sources: activeSources, 
-        loads: SYSTEM_DATA.loads, 
+        loads: systemLoads, 
         Vbase: SYSTEM_DATA.Vbase || 13.8,
         Sbase: SYSTEM_DATA.Sbase || 1000
     }), [activeSources, branches]);
@@ -345,8 +321,18 @@ function App() {
     };
     // --- FUNÇÕES DA TELA DE BOAS-VINDAS ---
     const handleLoadExample = () => {
-        // Carrega o IEEE 54 padrão
-        setBranches(SYSTEM_DATA.branches.map((b, idx) => ({ ...b, id: idx, state: (b.initialState !== undefined ? b.initialState : (b.state !== undefined ? b.state : 1)) })));
+        // 1. Prepara as chaves do sistema original
+        const defaultBranches = SYSTEM_DATA.branches.map((b, idx) => ({ 
+            ...b, id: idx, state: (b.initialState !== undefined ? b.initialState : (b.state !== undefined ? b.state : 1)) 
+        }));
+        
+        // 2. Carrega na tela e tira a NOVA FOTO
+        setBranches(defaultBranches);
+        initialBranchesRef.current = JSON.parse(JSON.stringify(defaultBranches)); 
+        
+        // NOVO: Garante que as cargas voltem ao padrão de fábrica
+        setSystemLoads(SYSTEM_DATA.loads); 
+        
         setFaultNodes(new Set());
         window.dispatchEvent(new CustomEvent('resetGraphLayout'));
         setIsProjectLoaded(true);
@@ -362,7 +348,7 @@ function App() {
                 if (data.layout || data.positions) {
                     
                     // 👇 A CORREÇÃO ENTRA AQUI: Restaurar a "Física" do sistema! 👇
-                    if (data.loads) SYSTEM_DATA.loads = data.loads;
+                    if (data.loads) setSystemLoads(data.loads);
                     if (data.baseKV) SYSTEM_DATA.Vbase = data.baseKV;
                     if (data.sBase) SYSTEM_DATA.Sbase = data.sBase;
                     if (data.sources) SYSTEM_DATA.sources = data.sources;
@@ -407,32 +393,16 @@ function App() {
                 const parsedData = parseAMPLDat(text);
                 setProjectPositions(parsedData.positions || {});
                 setProjectWaypoints(parsedData.waypoints || {});
-                /*
-                // =========================================================
-                // 2. O NOSSO TESTE: TRANSFORMAR EM JSON E BAIXAR
-                // =========================================================
-                const jsonString = JSON.stringify(parsedData, null, 2);
-                const blob = new Blob([jsonString], { type: 'application/json' });
-                const url = URL.createObjectURL(blob);
-                
-                const link = document.createElement('a');
-                link.href = url;
-                link.download = `Convertido_${file.name.replace(/\.[^/.]+$/, "")}.json`;
-                document.body.appendChild(link);
-                link.click(); // Força o download do JSON
-                document.body.removeChild(link);
-                URL.revokeObjectURL(url);
-                // =========================================================
-                */
-
+ 
                 // 3. Atualiza as variáveis vitais de sistema (código original)
-                SYSTEM_DATA.loads = parsedData.loads;
+                setSystemLoads(parsedData.loads);
                 SYSTEM_DATA.Vbase = parsedData.baseKV;
                 SYSTEM_DATA.Sbase = parsedData.sBase;
                 SYSTEM_DATA.sources = parsedData.sources;
 
                 setActiveSources(parsedData.sources);
                 setBranches(parsedData.branches);
+                initialBranchesRef.current = JSON.parse(JSON.stringify(parsedData.branches));
                 setFaultNodes(new Set());
                 
                 setTimeout(() => {
@@ -618,76 +588,7 @@ param: L:   R       X       Imax    State   sw :=
         setTimeout(() => window.print(), 100); 
     };
 
-    /*
-    // --- RESTAURAÇÃO DA INVERSÃO DE INTENSIDADE DE CORES ---
-    const getNodeColor = (nodeId) => {
-        const colors = darkMode ? THEME.dark : THEME.light;
-        
-        // Prioridade 1: Falta/Curto (Vermelho Piscante)
-        if (faultNodes.has(nodeId)) return colors.fault;
-        
-        const feeds = nodeFeeds[nodeId];
-        
-        // Prioridade 2: Desenergizado (Cinza)
-        if (!feeds || feeds.size === 0) return colors.de;
-        
-        // Prioridade 3: Loop/Anel (Azul claro)
-        if (feeds.size > 1) return colors.loop;
-        
-        // Prioridade 4: Alimentação Normal (Cor da Fonte)
-        const source = Array.from(feeds)[0];
-        
-        // Se for uma das fontes principais (101, 102, 104)
-        if (SOURCE_COLORS[source]) return SOURCE_COLORS[source];
-        
-        // Para nós genéricos que herdam a cor da fonte via HSL:
-        // CÁLCULO MÁGICO DE INVERSÃO:
-        // Modo Claro: Luminosidade BAIXA (45%) -> Cor escura/saturada
-        // Modo Escuro: Luminosidade ALTA (65%) -> Cor clara/pastela ("brilha")
-        const h = (source * 137) % 360; // Matiz única baseada no ID
-        const s = 70; // Saturação fixa
-        const l = darkMode ? 65 : 45; // <-- A mágica acontece aqui
-        
-        return `hsl(${h}, ${s}%, ${l}%)`;
-    };
-
-    const getEdgeColor = (branch) => {
-        const colors = darkMode ? THEME.dark : THEME.light;
-        if (branch.state === 0) return colors.de;
-        
-        const current = lineCurrents[branch.id];
-        if (!current || current.current === 0) return colors.de;
-        if (current.percentage >= 100) return '#d50000';
-        
-        const feedsFrom = nodeFeeds[branch.from] || new Set();
-        let sourceId = null;
-        if (feedsFrom.size === 1) sourceId = Array.from(feedsFrom)[0];
-        if (!sourceId) return colors.de;
-        
-        // Mágica da Transparência: Quanto menor a carga, mais transparente (desbota no fundo)
-        const p = Math.min((current.percentage || 0) / 100, 1.0);
-        const curve = Math.pow(p, 1.5); 
-        const minAlpha = 0.25; // Garante que a linha nunca fique 100% invisível
-        const alpha = minAlpha + (1 - minAlpha) * curve;
-        
-        if (SOURCE_COLORS[sourceId]) {
-            const rgb = hexToRgb(SOURCE_COLORS[sourceId]);
-            const getSafeHue = (id) => {
-                let h = (id * 137) % 360;
-                // Se a cor cair no vermelho/laranja escuro (0-25 ou 335-360), joga para o Azul/Verde
-                if (h < 25 || h > 335) h = (h + 45) % 360; 
-                return h;
-            };
-            return `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${alpha.toFixed(3)})`; 
-        } else {
-            const hue = (sourceId * 137) % 360;
-            const l = darkMode ? 65 : 45; 
-            return `hsla(${hue}, 70%, ${l}%, ${alpha.toFixed(3)})`; 
-        }
-    };
-
-    */
-
+    
     const getNodeColor = (nodeId) => {
         const colors = darkMode ? THEME.dark : THEME.light;
         
@@ -744,6 +645,12 @@ param: L:   R       X       Imax    State   sw :=
         }
     };
 
+    // ✅ O NOVO CÉREBRO DE ATALHOS:
+    useShortcuts({ 
+        setShowShortcuts, setPrintFrameMode, setDarkMode, setShowLabels, 
+        setCalcMethod, resetSystem, setIsEditMode, handleUndoLayout,
+        handleDownloadReport, handleExportSVG 
+    });
     // --- TELA DE BOAS VINDAS (BLANK SLATE) ---
     if (!isProjectLoaded) {
         return (
@@ -846,30 +753,27 @@ param: L:   R       X       Imax    State   sw :=
                 `}
             </style>
 
-            {!isMobile && (
-                <div className="hide-on-print" style={{ borderRight: '1px solid #333', zIndex: 100 }}>
-                    {!isEditMode ? (
-                        <Sidebar 
-                            sidebarMode={sidebarMode} darkMode={darkMode} setDarkMode={setDarkMode}
-                            resetSystem={resetSystem} maintenanceMode={maintenanceMode} setMaintenanceMode={setMaintenanceMode}
-                            showLabels={showLabels} setShowLabels={setShowLabels} 
-                            selectedElement={displayElement}
-                            sources={sources} loads={loads} faultNodes={faultNodes} branches={branches} 
-                            toggleSwitch={toggleSwitch} setSelectedElement={setSelectedElement} setHoveredLineId={setHoveredLineId}
-                            onDownloadReport={handleDownloadReport} onUploadSwitches={handleUploadSwitches}
-                            calcMethod={calcMethod} setCalcMethod={setCalcMethod} onExportSVG={handleExportSVG}
-                            onExportPDF={handleExportPDF} getNodeColor={getNodeColor} getEdgeColor={getEdgeColor}
+            <div className="hide-on-print" style={{ borderRight: '1px solid #333', zIndex: 100 }}>
+                {!isEditMode ? (
+                    <Sidebar 
+                        sidebarMode={sidebarMode} darkMode={darkMode} setDarkMode={setDarkMode}
+                        resetSystem={resetSystem} maintenanceMode={maintenanceMode} setMaintenanceMode={setMaintenanceMode}
+                        showLabels={showLabels} setShowLabels={setShowLabels} 
+                        selectedElement={displayElement}
+                        sources={sources} loads={loads} faultNodes={faultNodes} branches={branches} 
+                        toggleSwitch={toggleSwitch} setSelectedElement={setSelectedElement} setHoveredLineId={setHoveredLineId}
+                        onDownloadReport={handleDownloadReport} onUploadSwitches={handleUploadSwitches}
+                        calcMethod={calcMethod} setCalcMethod={setCalcMethod} onExportSVG={handleExportSVG}
+                        onExportPDF={handleExportPDF} getNodeColor={getNodeColor} getEdgeColor={getEdgeColor}
 
-                            systemSize={Math.max(0, allNodes.length)}
-
-                            // ENVIANDO OS DADOS DA SUB 200 PARA O MENU!
-                            disconnectedStats={disconnectedStats}
-                        />
-                    ) : (
-                        <EditSidebar isEditMode={isEditMode} setIsEditMode={setIsEditMode} darkMode={darkMode} onUndo={handleUndoLayout} canUndo={layoutHistory.length > 0} onReset={handleResetToOriginalLayout} branches={branches} allNodes={allNodes} sources={sources} currentPositions={activePositions}/>
-                    )}
-                </div>
-            )}
+                        systemSize={Math.max(0, allNodes.length)}
+                        disconnectedStats={disconnectedStats}
+                        lineCurrents={lineCurrents}
+                    />
+                ) : (
+                    <EditSidebar isEditMode={isEditMode} setIsEditMode={setIsEditMode} darkMode={darkMode} onUndo={handleUndoLayout} canUndo={layoutHistory.length > 0} onReset={handleResetToOriginalLayout} branches={branches} allNodes={allNodes} sources={sources} currentPositions={activePositions}/>
+                )}
+            </div>
 
             <div className="graph-wrapper">
                 
@@ -891,7 +795,7 @@ param: L:   R       X       Imax    State   sw :=
                     <button className="tool-btn" style={{ background: 'transparent', border: 'none', cursor: 'pointer', fontSize: '18px', padding: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: '8px', color: darkMode ? '#fff' : '#333', transition: 'all 0.2s ease', minWidth: '40px', minHeight: '40px', opacity: showLegend ? 1 : 0.4 }} title="Mostrar/Ocultar Legenda" onClick={() => setShowLegend(!showLegend)}>👁️</button>
                 </div>
 
-                {printFrameMode !== 'none' && !isMobile && (
+                {printFrameMode !== 'none' && (
                     <div className="hide-on-print" style={{ position: 'absolute', top: '15px', left: '50%', transform: 'translateX(-50%)', zIndex: 9000, background: '#ff9800', color: '#000', padding: '6px 20px', borderRadius: '20px', fontWeight: 'bold', fontSize: '13px', boxShadow: '0 4px 15px rgba(0,0,0,0.3)' }}>
                         Visualização de Impressão: {printFrameMode === 'landscape' ? 'Paisagem' : 'Retrato'} (Ctrl+P para Imprimir)
                     </div>
@@ -903,12 +807,13 @@ param: L:   R       X       Imax    State   sw :=
                     getEdgeColor={getEdgeColor} getNodeColor={getNodeColor} toggleSwitch={toggleSwitch} 
                     toggleFault={toggleFault} setSelectedElement={setSelectedElement} selectedElement={selectedElement} 
                     hoveredLineId={hoveredLineId} setHoveredLineId={setHoveredLineId} hoveredNodeId={hoveredNodeId} 
-                    setHoveredNodeId={setHoveredNodeId} maintenanceMode={maintenanceMode} isMobile={isMobile} 
+                    setHoveredNodeId={setHoveredNodeId} maintenanceMode={maintenanceMode}
                     activePositions={activePositions} lineCurrents={lineCurrents} nodeData={nodeData} 
                     isEditMode={isEditMode} setIsEditMode={setIsEditMode} activeWaypoints={activeWaypoints} 
-                    darkMode={darkMode} onSaveLayoutToHistory={saveLayoutToHistory} loads={loads} onExportRequest={handleExportFullState}
+                    darkMode={darkMode} onSaveLayoutToHistory={saveLayoutToHistory} loads={loads} systemLoads={systemLoads} 
+                    onExportRequest={handleExportFullState}
                 >
-                    {showLegend && !isMobile && (
+                    {showLegend && (
                         <div className="legend" style={{ position: 'absolute', bottom: '20px', right: '20px', zIndex: 1000, pointerEvents: 'all', background: darkMode ? '#121212' : '#ffffff', border: '1px solid #444', borderRadius: '8px', boxShadow: '0 6px 20px rgba(0,0,0,0.2)' }} onMouseDown={e=>e.stopPropagation()} onMouseUp={e=>e.stopPropagation()} onClick={e=>e.stopPropagation()} onWheel={e=>e.stopPropagation()} onDoubleClick={e=>e.stopPropagation()} >
                             <div style={{marginBottom:'10px', paddingBottom:'8px', borderBottom:'1px solid #444'}}>
                                 <div style={{fontSize:'9px', color:'#888', fontWeight:'bold', marginBottom:'4px', letterSpacing:'1px'}}>LAYOUT</div>
@@ -926,32 +831,31 @@ param: L:   R       X       Imax    State   sw :=
                 </GraphArea>
             </div>
 
-            {!isMobile && (
-                <div className="hide-on-print right-panel-wrapper" style={{ zIndex: 100 }}>
-                    <div onClick={() => setFaultSidebarOpen(!isFaultSidebarOpen)} title={isFaultSidebarOpen ? "Ocultar Painel" : "Painel de Faltas"} style={{
-                        position: 'absolute', left: '-28px', top: 'calc(50% - 35px)',
-                        width: '28px', height: '70px', background: darkMode ? '#1e1e1e' : '#fff',
-                        borderTop: `1px solid ${darkMode ? '#333' : '#ccc'}`,
-                        borderBottom: `1px solid ${darkMode ? '#333' : '#ccc'}`,
-                        borderLeft: `1px solid ${darkMode ? '#333' : '#ccc'}`,
-                        borderRadius: '12px 0 0 12px', display: 'flex', alignItems: 'center', justifyContent: 'center',
-                        cursor: 'pointer', boxShadow: '-4px 0 15px rgba(0,0,0,0.1)', color: '#ff9800',
-                        zIndex: 101, transition: 'background-color 0.2s'
-                    }}>
-                        {isFaultSidebarOpen ? '▶' : '⚡'}
-                    </div>
-                    <div className="panel-content">
-                        <FaultPanel 
-                            isFaultSidebarOpen={isFaultSidebarOpen} setFaultSidebarOpen={setFaultSidebarOpen}
-                            sources={sources} loadNodes={loadNodes} faultNodes={faultNodes} nodeFeeds={nodeFeeds}
-                            toggleFault={toggleFault} setSelectedElement={setSelectedElement} 
-                            selectedElement={displayElement}
-                            setHoveredNodeId={setHoveredNodeId} getNodeColor={getNodeColor} darkMode={darkMode}
-                            THEME={THEME} nodeData={nodeData} lineCurrents={lineCurrents} loads={loads} branches={branches}
-                        />
-                    </div>
+        
+            <div className="hide-on-print right-panel-wrapper" style={{ zIndex: 100 }}>
+                <div onClick={() => setFaultSidebarOpen(!isFaultSidebarOpen)} title={isFaultSidebarOpen ? "Ocultar Painel" : "Painel de Faltas"} style={{
+                    position: 'absolute', left: '-28px', top: 'calc(50% - 35px)',
+                    width: '28px', height: '70px', background: darkMode ? '#1e1e1e' : '#fff',
+                    borderTop: `1px solid ${darkMode ? '#333' : '#ccc'}`,
+                    borderBottom: `1px solid ${darkMode ? '#333' : '#ccc'}`,
+                    borderLeft: `1px solid ${darkMode ? '#333' : '#ccc'}`,
+                    borderRadius: '12px 0 0 12px', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    cursor: 'pointer', boxShadow: '-4px 0 15px rgba(0,0,0,0.1)', color: '#ff9800',
+                    zIndex: 101, transition: 'background-color 0.2s'
+                }}>
+                    {isFaultSidebarOpen ? '▶' : '⚡'}
                 </div>
-            )}
+                <div className="panel-content">
+                    <FaultPanel 
+                        isFaultSidebarOpen={isFaultSidebarOpen} setFaultSidebarOpen={setFaultSidebarOpen}
+                        sources={sources} loadNodes={loadNodes} faultNodes={faultNodes} nodeFeeds={nodeFeeds}
+                        toggleFault={toggleFault} setSelectedElement={setSelectedElement} 
+                        selectedElement={displayElement}
+                        setHoveredNodeId={setHoveredNodeId} getNodeColor={getNodeColor} darkMode={darkMode}
+                        THEME={THEME} nodeData={nodeData} lineCurrents={lineCurrents} loads={loads} branches={branches}
+                    />
+                </div>
+            </div>
 
             {showShortcuts && (
                 <div className="hide-on-print" style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.7)', zIndex: 10000, display: 'flex', justifyContent: 'center', alignItems: 'center' }} onClick={() => setShowShortcuts(false)}>
@@ -967,6 +871,10 @@ param: L:   R       X       Imax    State   sw :=
                             <li><strong style={{ color: '#ff9800' }}>M</strong> - Método de Cálculo (NR/GS)</li>
                             <li><strong style={{ color: '#ff9800' }}>R</strong> - Reiniciar Sistema</li>
                             <li><strong style={{ color: '#ff9800' }}>Shift + Arrastar Fundo</strong> - Seleção Múltipla</li>
+                            <li><strong style={{ color: '#ff9800' }}>[ / ]</strong> - Rotacionar Layout</li>
+                            <li><strong style={{ color: '#ff9800' }}>O</strong> - Abrir/Importar Arquivo</li>
+                            <li><strong style={{ color: '#ff9800' }}>T</strong> - Baixar Relatório (TXT)</li>
+                            <li><strong style={{ color: '#ff9800' }}>S</strong> - Exportar Imagem (SVG)</li>
                         </ul>
                         <button onClick={() => setShowShortcuts(false)} style={{ marginTop: '20px', width: '100%', padding: '10px', background: '#00bcd4', border: 'none', borderRadius: '6px', color: '#000', fontWeight: 'bold', cursor: 'pointer' }}>Fechar</button>
                     </div>

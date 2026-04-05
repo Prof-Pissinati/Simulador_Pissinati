@@ -26,7 +26,8 @@ export default function Sidebar({
     setCalcMethod = () => console.warn("Função setCalcMethod não conectada!"),
     onExportPDF = () => console.warn("Função onExportPDF não conectada!"),
     getNodeColor,
-    systemSize
+    systemSize,
+    lineCurrents
 }) {
     const fileInputRef = useRef(null);
     const [unlockFixed, setUnlockFixed] = useState(false);
@@ -94,23 +95,39 @@ export default function Sidebar({
             {/* LOAD DISPLAY */}
             <div className="load-display" style={{ marginTop: '0px'}}> 
                 {sources.map(subId => {
-                    const load = loads[subId];
-                    // Proteção se Vbase não estiver definida
+                    // 👇 NOVA LÓGICA DE GERAÇÃO REAL 👇
+                    let totalP = 0;
+                    let totalQ = 0;
+                    
+                    if (lineCurrents) {
+                        branches.forEach(b => {
+                            if (b.state === 1 && lineCurrents[b.id]) {
+                                if (b.from === subId) {
+                                    totalP += lineCurrents[b.id].pFlow;
+                                    totalQ += lineCurrents[b.id].qFlow;
+                                } else if (b.to === subId) {
+                                    totalP -= lineCurrents[b.id].pFlow;
+                                    totalQ -= lineCurrents[b.id].qFlow;
+                                }
+                            }
+                        });
+                    }
+                    totalP = Math.abs(totalP);
+                    totalQ = Math.abs(totalQ);
+
                     const vbase = SYSTEM_DATA?.Vbase || 13.8; 
-                    const S = Math.sqrt((load?.p || 0)**2 + (load?.q || 0)**2);
+                    const S = Math.sqrt((totalP)**2 + (totalQ)**2);
                     const I = S / (Math.sqrt(3) * vbase);
                     const inFault = faultNodes.has(subId);
                     
-                    // 1. CHAMA A FUNÇÃO DE COR AQUI:
                     const cardColor = getNodeColor ? getNodeColor(subId) : 'var(--eng-orange)';
                     
                     return (
-                        // 2. APLICA A COR NA BORDA SUPERIOR E NO TÍTULO DO CARD:
                         <div key={subId} className={`load-card lc-${subId}`} style={{ borderTop: `4px solid ${cardColor}` }}>
                             <div className="load-card-title" style={{ color: cardColor }}>SUB {subId}</div>
                             <span className="load-card-value">{inFault ? '—' : I.toFixed(0)} A</span>
-                            <div className="load-card-subtitle">{inFault ? '—' : (load?.p || 0).toFixed(0)} kW</div>
-                            <div className="load-card-subtitle">{inFault ? '—' : (load?.nodes || 0)} barras</div>
+                            <div className="load-card-subtitle">{inFault ? '—' : totalP.toFixed(0)} kW</div>
+                            <div className="load-card-subtitle">{inFault ? '—' : (loads[subId]?.nodes || 0)} barras</div>
                         </div>
                     );
                 })}

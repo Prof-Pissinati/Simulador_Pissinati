@@ -62,6 +62,24 @@ export default function FaultPanel({
                             const vColor = v < 0.93 ? '#d50000' : (v < 0.95 ? '#ffd600' : '#2e7d32');
                             const isSource = sources.includes(selectedElement.id);
                             
+                            // 👇 NOVA LÓGICA DE GERAÇÃO REAL 👇
+                            let totalP = 0, totalQ = 0;
+                            if (isSource && lineCurrents) {
+                                branches.forEach(b => {
+                                    if (b.state === 1 && lineCurrents[b.id]) {
+                                        if (b.from === selectedElement.id) {
+                                            totalP += lineCurrents[b.id].pFlow;
+                                            totalQ += lineCurrents[b.id].qFlow;
+                                        } else if (b.to === selectedElement.id) {
+                                            totalP -= lineCurrents[b.id].pFlow;
+                                            totalQ -= lineCurrents[b.id].qFlow;
+                                        }
+                                    }
+                                });
+                                totalP = Math.abs(totalP);
+                                totalQ = Math.abs(totalQ);
+                            }
+                            
                             return (
                                 <>
                                     <div className="inspector-title">Barra {selectedElement.id}</div>
@@ -74,10 +92,11 @@ export default function FaultPanel({
                                         </>
                                     )}
 
-                                    {isSource && loads[selectedElement.id] && (
+                                    {/* MUDANÇA: Agora exibe a geração com as perdas! */}
+                                    {isSource && (
                                         <>
-                                            <div className="inspector-row"><span>Total P:</span><b>{loads[selectedElement.id].p.toFixed(1)} kW</b></div>
-                                            <div className="inspector-row"><span>Total Q:</span><b>{loads[selectedElement.id].q.toFixed(1)} kVAr</b></div>
+                                            <div className="inspector-row"><span>Total P:</span><b>{totalP.toFixed(1)} kW</b></div>
+                                            <div className="inspector-row"><span>Total Q:</span><b>{totalQ.toFixed(1)} kVAr</b></div>
                                         </>
                                     )}
 
