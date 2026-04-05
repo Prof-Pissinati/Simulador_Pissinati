@@ -1,33 +1,10 @@
 import React, { useRef, useState, useEffect, useCallback } from 'react';
 import { SYSTEM_DATA } from '../data/systemData';
 import SvgTooltips from './SvgTooltips';
+import GraphEdge from './GraphEdge';
 
 const FIXED_GRID_SIZE = 10;
 
-function useAnimatedLayout(targetPositions, duration = 800) {
-    const [positions, setPositions] = useState(targetPositions);
-    useEffect(() => {
-        let startTime = null; let animationFrameId;
-        const startPositions = { ...positions };
-        const animate = (timestamp) => {
-            if (!startTime) startTime = timestamp;
-            let progress = (timestamp - startTime) / duration;
-            if (progress > 1) progress = 1;
-            const ease = progress < 0.5 ? 4 * progress * progress * progress : 1 - Math.pow(-2 * progress + 2, 3) / 2;
-            const currentPositions = {};
-            for (let key in targetPositions) {
-                const startP = startPositions[key] || targetPositions[key];
-                const endP = targetPositions[key];
-                currentPositions[key] = { x: startP.x + (endP.x - startP.x) * ease, y: startP.y + (endP.y - startP.y) * ease };
-            }
-            setPositions(currentPositions);
-            if (progress < 1) animationFrameId = requestAnimationFrame(animate);
-        };
-        animationFrameId = requestAnimationFrame(animate);
-        return () => cancelAnimationFrame(animationFrameId);
-    }, [targetPositions]);
-    return positions;
-}
 
 function getClosestSegmentIndex(p1, p2, waypoints, clickPt) {
     if (!p1 || !p2 || !clickPt) return 0; 
@@ -49,17 +26,107 @@ export default function GraphArea({
     branches = [], allNodes = [], sources = [], showLabels, getEdgeColor, getNodeColor, toggleSwitch, toggleFault, setSelectedElement,
     selectedElement, hoveredLineId, setHoveredLineId, hoveredNodeId, setHoveredNodeId, maintenanceMode,
     activePositions = {}, activeWaypoints = {}, lineCurrents = {}, nodeData = {}, isEditMode, setIsEditMode, darkMode,
-    printFrameMode, isFaultSidebarOpen, onSaveLayoutToHistory, children, onExportRequest, loads, systemLoads
+    printFrameMode, isFaultSidebarOpen, onSaveLayoutToHistory, children, onExportRequest, loads,
+    systemLoads
 }) {
     const svgRef = useRef(null);
     const measureRef = useRef(null); 
     
     const [transform, setTransform] = useState({ x: -50, y: 0, scale: 1 });
     const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
-    const animPositions = useAnimatedLayout(activePositions, 800); 
+
+    // 👇 AS NOVAS MEMÓRIAS UNIFICADAS 👇
+    const [renderPositions, setRenderPositions] = useState(activePositions);
+    const [renderWaypoints, setRenderWaypoints] = useState(activeWaypoints); // <-- NOVO
 
     const [manualPositions, setManualPositions] = useState({});
     const [manualWaypoints, setManualWaypoints] = useState({}); 
+
+    const manualPosRef = useRef({});
+    const renderPosRef = useRef({});
+    const manualWpRef = useRef({}); // <-- NOVO
+    const renderWpRef = useRef({}); // <-- NOVO
+
+    // Mantém as referências sempre atualizadas para a animação ler instantaneamente
+    useEffect(() => {
+        manualPosRef.current = manualPositions;
+        renderPosRef.current = renderPositions;
+        manualWpRef.current = manualWaypoints; // <-- NOVO
+        renderWpRef.current = renderWaypoints; // <-- NOVO
+    });
+
+    // Mantém as referências sempre atualizadas para a animação ler instantaneamente
+    useEffect(() => {
+        manualPosRef.current = manualPositions;
+        renderPosRef.current = renderPositions;
+    });
+
+    // =======================================================================
+    // MOTOR DE ANIMAÇÃO UNIFICADO (Barras e Joelhos)
+    // =======================================================================
+    useEffect(() => {
+        let startTime = null; let animationFrameId;
+
+        // 1. Tira uma foto de onde as barras e joelhos estão EXATAMENTE AGORA na tela
+        const startPositions = {};
+        Object.keys(activePositions).forEach(id => {
+            startPositions[id] = manualPosRef.current[id] || renderPosRef.current[id] || activePositions[id];
+        });
+
+        const startWaypoints = {};
+        const safeActiveWps = activeWaypoints || {};
+        const allWpKeys = new Set([...Object.keys(manualWpRef.current), ...Object.keys(renderWpRef.current), ...Object.keys(safeActiveWps)]);
+        allWpKeys.forEach(k => {
+            startWaypoints[k] = manualWpRef.current[k] || renderWpRef.current[k] || safeActiveWps[k] || [];
+        });
+
+        // 2. Limpa o manual, entregando o controle ABSOLUTO para a animação
+        setManualPositions({});
+        setManualWaypoints({});
+
+        const duration = 600;
+
+        const animate = (timestamp) => {
+            if (!startTime) startTime = timestamp;
+            let progress = (timestamp - startTime) / duration;
+            if (progress > 1) progress = 1;
+
+            const ease = progress < 0.5 ? 4 * progress * progress * progress : 1 - Math.pow(-2 * progress + 2, 3) / 2;
+            
+            const currentPositions = {};
+            for (let key in activePositions) {
+                const startP = startPositions[key] || activePositions[key];
+                const endP = activePositions[key];
+                currentPositions[key] = { x: startP.x + (endP.x - startP.x) * ease, y: startP.y + (endP.y - startP.y) * ease };
+            }
+
+            const currentWaypoints = {};
+            for (let key in safeActiveWps) {
+                const endWpArray = safeActiveWps[key] || [];
+                const startWpArray = startWaypoints[key] || [];
+                
+                currentWaypoints[key] = endWpArray.map((endWp, idx) => {
+                    const startWp = startWpArray[idx];
+                    if (startWp) {
+                        return { x: startWp.x + (endWp.x - startWp.x) * ease, y: startWp.y + (endWp.y - startWp.y) * ease };
+                    }
+                    return { ...endWp }; 
+                });
+            }
+
+            setRenderPositions(currentPositions);
+            setRenderWaypoints(currentWaypoints);
+
+            if (progress < 1) animationFrameId = requestAnimationFrame(animate);
+        };
+
+        animationFrameId = requestAnimationFrame(animate);
+        return () => cancelAnimationFrame(animationFrameId);
+    // 👇 MUDANÇA CRÍTICA: Tiramos o allNodes da linha abaixo! 👇
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [activePositions, activeWaypoints]); 
+    // =======================================================================
+
     const [dragInfo, setDragInfo] = useState(null); 
     const wasDragged = useRef(false);
 
@@ -102,13 +169,6 @@ export default function GraphArea({
         return () => { window.removeEventListener('resize', updateSize); clearTimeout(timer); };
     }, [printFrameMode, isFaultSidebarOpen, isEditMode]);
 
-    useEffect(() => { 
-        setManualPositions({}); 
-        setManualWaypoints(activeWaypoints || {}); 
-        setSelectedEditNodes(new Set()); 
-        setSelectedEditWaypoints(new Set()); 
-    }, [activePositions, activeWaypoints]);
-
     useEffect(() => {
         if (!isEditMode) {
             setSelectedEditNodes(new Set());
@@ -119,46 +179,76 @@ export default function GraphArea({
 
     const getCurrentFullLayout = useCallback(() => {
         const fullPositions = {};
-        allNodes.forEach(id => { fullPositions[id] = manualPositions[id] || animPositions[id]; });
-        const fullWaypoints = JSON.parse(JSON.stringify(manualWaypoints)); 
-        return { positions: fullPositions, waypoints: fullWaypoints };
-    }, [allNodes, manualPositions, animPositions, manualWaypoints]);
+        allNodes.forEach(id => { fullPositions[id] = manualPositions[id] || renderPositions[id]; });
+        
+        const fullWaypoints = {};
+        const allWpKeys = new Set([...Object.keys(manualWaypoints), ...Object.keys(renderWaypoints)]);
+        allWpKeys.forEach(k => {
+            fullWaypoints[k] = manualWaypoints[k] || renderWaypoints[k];
+        });
+
+        return { positions: fullPositions, waypoints: JSON.parse(JSON.stringify(fullWaypoints)) };
+    }, [allNodes, manualPositions, renderPositions, manualWaypoints, renderWaypoints]);
 
     useEffect(() => {
         const handleApplyLayout = (e) => {
             setIsRestoringLayout(true);
-            // Lê do novo formato de projeto (data.layout) ou do antigo (data)
-            const layoutData = e.detail.layout || e.detail;
-            setManualPositions(layoutData.positions || {}); 
-            setManualWaypoints(layoutData.waypoints || {});
-            
+            // Deixamos a limpeza da memória APENAS para o Motor de Animação!
             if (restoreTimeout.current) clearTimeout(restoreTimeout.current);
             restoreTimeout.current = setTimeout(() => setIsRestoringLayout(false), 400);
         };
         
         const handleResetLayout = () => {
             setIsRestoringLayout(true);
-            setManualPositions({}); setManualWaypoints({});
             if (restoreTimeout.current) clearTimeout(restoreTimeout.current);
             restoreTimeout.current = setTimeout(() => setIsRestoringLayout(false), 400);
         };
 
-        // NOVO: Quando pedem para exportar, empacota o layout e envia pro App.jsx!
         const handleTriggerExport = () => {
             const fullLayout = getCurrentFullLayout();
             if (onExportRequest) onExportRequest(fullLayout.positions, fullLayout.waypoints);
         };
+
+
+        const handleSaveHistory = () => {
+            // Aciona o salvamento de histórico para o botão "Desfazer"
+            if (onSaveLayoutToHistory) onSaveLayoutToHistory(getCurrentFullLayout().positions, getCurrentFullLayout().waypoints);
+        };
+
+        const handleGetLatestLayout = (e) => {
+            if (e.detail && e.detail.callback) {
+                const fullPositions = {};
+                allNodes.forEach(id => {
+                    fullPositions[id] = manualPosRef.current[id] || renderPosRef.current[id] || activePositions[id];
+                });
+                
+                const fullWaypoints = {};
+                const allWpKeys = new Set([...Object.keys(manualWpRef.current), ...Object.keys(renderWpRef.current)]);
+                allWpKeys.forEach(k => {
+                    fullWaypoints[k] = manualWpRef.current[k] || renderWpRef.current[k] || (activeWaypoints ? activeWaypoints[k] : []);
+                });
+
+                e.detail.callback({ positions: fullPositions, waypoints: JSON.parse(JSON.stringify(fullWaypoints)) });
+            }
+        };
+
+        
         
         window.addEventListener('applyGraphLayout', handleApplyLayout);
         window.addEventListener('resetGraphLayout', handleResetLayout);
         window.addEventListener('requestLayoutExport', handleTriggerExport);
+        window.addEventListener('getLatestLayout', handleGetLatestLayout);
+        window.addEventListener('saveLayoutToHistory', handleSaveHistory);
         
         return () => { 
             window.removeEventListener('applyGraphLayout', handleApplyLayout); 
             window.removeEventListener('resetGraphLayout', handleResetLayout); 
             window.removeEventListener('requestLayoutExport', handleTriggerExport);
+            window.removeEventListener('getLatestLayout', handleGetLatestLayout);
+            window.removeEventListener('saveLayoutToHistory', handleSaveHistory);
         };
-    }, [getCurrentFullLayout, onExportRequest]);
+    // 👉 IMPORTANTE: Adicione o onSaveLayoutToHistory na lista verde aqui embaixo!
+    }, [getCurrentFullLayout, onExportRequest, onSaveLayoutToHistory]);
 
     const isPanning = useRef(false);
     const hasMoved = useRef(false);
@@ -377,7 +467,7 @@ export default function GraphArea({
             const maxY = Math.max(selectionBox.y1, selectionBox.y2);
             const newSelection = new Set(); const newWpSelection = new Set(); 
             allNodes.forEach(id => {
-                const pos = manualPositions[id] || activePositions[id] || animPositions[id];
+                const pos = manualPositions[id] || activePositions[id] || renderPositions[id];
                 if (!pos) return;
                 if (pos && pos.x >= minX && pos.x <= maxX && pos.y >= minY && pos.y <= maxY) newSelection.add(id);
             });
@@ -472,11 +562,12 @@ export default function GraphArea({
 
                         {/* --- DESENHO DAS LINHAS (CABOS) --- */}
                         {branches.map(b => {
-                            const p1 = manualPositions[b.from] || animPositions[b.from];
-                            const p2 = manualPositions[b.to] || animPositions[b.to];
+                            const p1 = manualPositions[b.from] || renderPositions[b.from];
+                            const p2 = manualPositions[b.to] || renderPositions[b.to];
                             if (!p1 || !p2) return null; 
                             
-                            const waypoints = Array.isArray(manualWaypoints[b.id]) ? manualWaypoints[b.id] : [];
+                            const wps = manualWaypoints[b.id] || renderWaypoints[b.id] || [];
+                            const waypoints = Array.isArray(wps) ? wps : [];
                             const pathString = getPathData(p1, p2, waypoints);
                             const color = getEdgeColor(b);
                             
@@ -484,91 +575,79 @@ export default function GraphArea({
                             const isSelected = selectedElement && selectedElement.type === 'edge' && selectedElement.data.id === b.id;
                             const isHighlighted = isHovered || isSelected;
 
-                            const strokeColor = color; 
-                            let strokeWidth = isHighlighted ? 6 : 2; 
-                            if (!isHighlighted && b.state === 1) strokeWidth = 3;
-
-                            // EFEITO NEON/GLOW ORIGINAL DO SEU GIT
-                            const shadowFilter = isHighlighted 
-                                ? `drop-shadow(0 0 5px ${color}) drop-shadow(0 0 15px ${color})` 
-                                : 'none';
-
                             return (
-                                <g key={b.id}>
-                                    {/* CAMADA INVISÍVEL PARA CLIQUE (Nova Mecânica) */}
-                                    <path d={pathString} stroke="transparent" strokeWidth="20" fill="none"
-                                        style={{ cursor: isEditMode ? 'move' : 'pointer', transition: isRestoringLayout ? 'd 0.4s cubic-bezier(0.25, 1, 0.5, 1)' : 'none' }} 
-                                        onMouseDown={(e) => {
-                                            if (!isEditMode) return;
-                                            e.stopPropagation(); wasDragged.current = false;
-                                            const svgPt = getTransformedPoint(e.clientX, e.clientY);
-                                            if (onSaveLayoutToHistory) onSaveLayoutToHistory(getCurrentFullLayout().positions, getCurrentFullLayout().waypoints);
-                                            const insertIdx = getClosestSegmentIndex(p1, p2, waypoints, svgPt);
-                                            setDragInfo({ type: 'line', branchId: b.id, insertIdx: insertIdx, startX: svgPt.x, startY: svgPt.y });
-                                        }}
-                                        onClick={(e) => { e.stopPropagation(); if (!isEditMode && (b.hasSwitch || maintenanceMode)) toggleSwitch(b.id); }}
-                                        onDoubleClick={(e) => {
-                                            if (!isEditMode) return;
-                                            if (onSaveLayoutToHistory) onSaveLayoutToHistory(getCurrentFullLayout().positions, getCurrentFullLayout().waypoints);
-                                            e.stopPropagation();
-                                            const svgPt = getTransformedPoint(e.clientX, e.clientY);
-                                            const insertIdx = getClosestSegmentIndex(p1, p2, waypoints, svgPt);
-                                            setManualWaypoints(prev => {
-                                                const currentWps = prev[b.id] && Array.isArray(prev[b.id]) ? [...prev[b.id]] : [];
-                                                currentWps.splice(insertIdx, 0, { x: svgPt.x, y: svgPt.y });
-                                                return { ...prev, [b.id]: currentWps };
-                                            });
-                                        }}
-                                        onMouseEnter={() => { setHoveredLineId(b.id); setLocalHoveredLine(b.id); }}
-                                        onMouseLeave={() => { setHoveredLineId(null); setLocalHoveredLine(null); }}
-                                    />
-
-                                    {/* LINHA VISÍVEL (Visual Clássico do Git) */}
-                                    <path d={pathString} stroke={strokeColor} strokeWidth={strokeWidth} fill="none"
-                                        strokeDasharray={b.state === 1 ? 'none' : '5,5'} pointerEvents="none" className="edge-line" strokeLinejoin="round"
-                                        style={{ transition: isRestoringLayout ? 'd 0.4s cubic-bezier(0.25, 1, 0.5, 1), stroke 0.3s ease' : 'stroke 0.3s ease', filter: shadowFilter, opacity: b.state === 1 ? 1 : 0.4 }} 
-                                    />
+                                <GraphEdge 
+                                    key={b.id}
+                                    branch={b}
+                                    pathString={pathString}
+                                    color={color}
+                                    isHighlighted={isHighlighted}
+                                    isEditMode={isEditMode}
+                                    isRestoringLayout={isRestoringLayout}
+                                    waypoints={waypoints}
+                                    selectedEditWaypoints={selectedEditWaypoints}
+                                    dragInfoType={dragInfo?.type}
                                     
-                                    {/* JOELHOS/WAYPOINTS DO MODO EDIÇÃO */}
-                                    {isEditMode && waypoints.map((wp, wpIndex) => {
-                                        const wpKey = `${b.id}-${wpIndex}`;
-                                        const isSelectedWp = selectedEditWaypoints.has(wpKey);
-                                        return (
-                                            <circle key={`wp-${wpKey}`} cx={wp.x} cy={wp.y} r={isSelectedWp ? "8" : "6"} fill={isSelectedWp ? "#2962ff" : "#ff9800"} stroke={isSelectedWp ? "#ffffff" : "#fff"} strokeWidth="2" style={{ cursor: dragInfo?.type === 'waypoint' ? 'grabbing' : 'grab', transition: isRestoringLayout ? 'cx 0.4s cubic-bezier(0.25, 1, 0.5, 1), cy 0.4s cubic-bezier(0.25, 1, 0.5, 1)' : 'none' }}
-                                                onMouseDown={(e) => {
-                                                    e.stopPropagation(); wasDragged.current = false;
-                                                    if (onSaveLayoutToHistory) onSaveLayoutToHistory(getCurrentFullLayout().positions, getCurrentFullLayout().waypoints);
-                                                    const svgPt = getTransformedPoint(e.clientX, e.clientY);
-                                                    let currentWps = new Set(selectedEditWaypoints);
-                                                    let currentSelection = new Set(selectedEditNodes);
-                                                    if (!currentWps.has(wpKey)) {
-                                                        if (!e.shiftKey) { currentWps.clear(); currentSelection.clear(); }
-                                                        currentWps.add(wpKey); setSelectedEditWaypoints(currentWps); setSelectedEditNodes(currentSelection);
-                                                    }
-                                                    const groupNodes = {}; currentSelection.forEach(id => { const p = manualPositions[id] || animPositions[id]; if (p) groupNodes[id] = { ...p }; });
-                                                    const groupWps = {}; currentWps.forEach(key => { const [bId, idxStr] = key.split('-'); const idx = parseInt(idxStr); if (manualWaypoints[bId] && manualWaypoints[bId][idx]) groupWps[key] = { ...manualWaypoints[bId][idx] }; });
-                                                    setDragInfo({ type: 'mixed', leaderType: 'waypoint', leaderId: wpKey, initialX: wp.x, initialY: wp.y, startX: svgPt.x, startY: svgPt.y, groupNodes, groupWps });
-                                                }}
-                                                onDoubleClick={(e) => {
-                                                    if (!isEditMode) return;
-                                                    if (onSaveLayoutToHistory) onSaveLayoutToHistory(getCurrentFullLayout().positions, getCurrentFullLayout().waypoints);
-                                                    e.stopPropagation();
-                                                    setManualWaypoints(prev => {
-                                                        const currentWps = prev[b.id] && Array.isArray(prev[b.id]) ? [...prev[b.id]] : [];
-                                                        currentWps.splice(wpIndex, 1);
-                                                        return { ...prev, [b.id]: currentWps };
-                                                    });
-                                                }}
-                                            />
-                                        );
-                                    })}
-                                </g>
+                                    /* EVENTOS DA LINHA */
+                                    onLineMouseDown={(e) => {
+                                        if (!isEditMode) return;
+                                        e.stopPropagation(); wasDragged.current = false;
+                                        const svgPt = getTransformedPoint(e.clientX, e.clientY);
+                                        if (onSaveLayoutToHistory) onSaveLayoutToHistory(getCurrentFullLayout().positions, getCurrentFullLayout().waypoints);
+                                        const insertIdx = getClosestSegmentIndex(p1, p2, waypoints, svgPt);
+                                        setDragInfo({ type: 'line', branchId: b.id, insertIdx: insertIdx, startX: svgPt.x, startY: svgPt.y });
+                                    }}
+                                    onLineClick={(e) => { 
+                                        e.stopPropagation(); 
+                                        if (!isEditMode && (b.hasSwitch || maintenanceMode)) toggleSwitch(b.id); 
+                                    }}
+                                    onLineDoubleClick={(e) => {
+                                        if (!isEditMode) return;
+                                        if (onSaveLayoutToHistory) onSaveLayoutToHistory(getCurrentFullLayout().positions, getCurrentFullLayout().waypoints);
+                                        e.stopPropagation();
+                                        const svgPt = getTransformedPoint(e.clientX, e.clientY);
+                                        const insertIdx = getClosestSegmentIndex(p1, p2, waypoints, svgPt);
+                                        setManualWaypoints(prev => {
+                                            const currentWps = prev[b.id] && Array.isArray(prev[b.id]) ? [...prev[b.id]] : [];
+                                            currentWps.splice(insertIdx, 0, { x: svgPt.x, y: svgPt.y });
+                                            return { ...prev, [b.id]: currentWps };
+                                        });
+                                    }}
+                                    onLineMouseEnter={() => { setHoveredLineId(b.id); setLocalHoveredLine(b.id); }}
+                                    onLineMouseLeave={() => { setHoveredLineId(null); setLocalHoveredLine(null); }}
+                                    
+                                    /* EVENTOS DOS WAYPOINTS (JOELHOS) */
+                                    onWaypointMouseDown={(e, wpIndex, wpKey, wp) => {
+                                        e.stopPropagation(); wasDragged.current = false;
+                                        if (onSaveLayoutToHistory) onSaveLayoutToHistory(getCurrentFullLayout().positions, getCurrentFullLayout().waypoints);
+                                        const svgPt = getTransformedPoint(e.clientX, e.clientY);
+                                        let currentWps = new Set(selectedEditWaypoints);
+                                        let currentSelection = new Set(selectedEditNodes);
+                                        if (!currentWps.has(wpKey)) {
+                                            if (!e.shiftKey) { currentWps.clear(); currentSelection.clear(); }
+                                            currentWps.add(wpKey); setSelectedEditWaypoints(currentWps); setSelectedEditNodes(currentSelection);
+                                        }
+                                        const groupNodes = {}; currentSelection.forEach(id => { const p = manualPositions[id] || renderPositions[id]; if (p) groupNodes[id] = { ...p }; });
+                                        const groupWps = {}; currentWps.forEach(key => { const [bId, idxStr] = key.split('-'); const idx = parseInt(idxStr); if (manualWaypoints[bId] && manualWaypoints[bId][idx]) groupWps[key] = { ...manualWaypoints[bId][idx] }; });
+                                        setDragInfo({ type: 'mixed', leaderType: 'waypoint', leaderId: wpKey, initialX: wp.x, initialY: wp.y, startX: svgPt.x, startY: svgPt.y, groupNodes, groupWps });
+                                    }}
+                                    onWaypointDoubleClick={(e, wpIndex) => {
+                                        if (!isEditMode) return;
+                                        if (onSaveLayoutToHistory) onSaveLayoutToHistory(getCurrentFullLayout().positions, getCurrentFullLayout().waypoints);
+                                        e.stopPropagation();
+                                        setManualWaypoints(prev => {
+                                            const currentWps = prev[b.id] && Array.isArray(prev[b.id]) ? [...prev[b.id]] : [];
+                                            currentWps.splice(wpIndex, 1);
+                                            return { ...prev, [b.id]: currentWps };
+                                        });
+                                    }}
+                                />
                             );
                         })}
 
                         {/* --- DESENHO DOS NÓS (BARRAS) --- */}
                         {allNodes.map(nodeId => {
-                            const pos = manualPositions[nodeId] || animPositions[nodeId];
+                            const pos = manualPositions[nodeId] || renderPositions[nodeId];
                             if (!pos) return null;
                             
                             const isSource = sources.includes(nodeId);
@@ -600,7 +679,7 @@ export default function GraphArea({
                                            currentSelection.add(nodeId);
                                            setSelectedEditNodes(currentSelection); setSelectedEditWaypoints(currentWps);
                                        }
-                                       const groupNodes = {}; currentSelection.forEach(id => { const p = manualPositions[id] || animPositions[id]; if (p) groupNodes[id] = { ...p }; });
+                                       const groupNodes = {}; currentSelection.forEach(id => { const p = manualPositions[id] || renderPositions[id]; if (p) groupNodes[id] = { ...p }; });
                                        const groupWps = {}; currentWps.forEach(key => { const [bId, idxStr] = key.split('-'); const idx = parseInt(idxStr); if (manualWaypoints[bId] && manualWaypoints[bId][idx]) groupWps[key] = { ...manualWaypoints[bId][idx] }; });
                                        setDragInfo({ type: 'mixed', leaderType: 'node', leaderId: nodeId, startX: svgPt.x, startY: svgPt.y, groupNodes, groupWps });
                                    }}
@@ -637,7 +716,7 @@ export default function GraphArea({
                                 localHoveredNode={localHoveredNode}
                                 hoveredNodeInfo={hoveredNodeInfo}
                                 manualPositions={manualPositions}
-                                animPositions={animPositions}
+                                animPositions={renderPositions}
                                 sources={sources}
                                 branches={branches}
                                 lineCurrents={lineCurrents}

@@ -12,28 +12,92 @@ export default function EditSidebar({
 }) {
 
     const [algoMode, setAlgoMode] = useState('force');
-    const [forceDist, setForceDist] = useState(80);
-    const [forceCharge, setForceCharge] = useState(400); // Mostraremos positivo na UI e passaremos negativo pro D3
+    const [forceDist, setForceDist] = useState(10);
+    const [forceCharge, setForceCharge] = useState(40); // Mostraremos positivo na UI e passaremos negativo pro D3
     const [hierDir, setHierDir] = useState('LR');
     const [hierRanker, setHierRanker] = useState('network-simplex');
-    const [hierRankSep, setHierRankSep] = useState(120);
+    const [hierRankSep, setHierRankSep] = useState(50);
     const [hierNodeSep, setHierNodeSep] = useState(60);
-    const [radialStep, setRadialStep] = useState(150);
+    const [radialStep, setRadialStep] = useState(50);
     const fileInputRef = useRef(null);
-    const [openWeight, setOpenWeight] = useState(10); // Começa com 10% de força (elástico bem frouxo)
+    const [openWeight, setOpenWeight] = useState(65); // Começa com 65% de força
+    const [usePhysics, setUsePhysics] = useState(false); // Checkbox para alinhar sem usar o D3
 
     const handleApplyGenerator = () => {
+        // 1. SINCRONIA: Extrai a posição real visual da tela
+        let actualLayout = { positions: currentPositions, waypoints: {} };
+        window.dispatchEvent(new CustomEvent('getLatestLayout', { 
+            detail: { callback: (layout) => { actualLayout = layout; } } 
+        }));
+
+        // 2. HISTÓRICO: Salva essa posição real no botão Voltar ANTES de bagunçar tudo
+        window.dispatchEvent(new CustomEvent('saveToHistory', { detail: actualLayout }));
+
+        let actualPositions = actualLayout.positions;
         let newPos = {};
-        if (algoMode === 'force') newPos = calculateForceLayout(allNodes, branches, sources, { distance: forceDist, charge: -forceCharge, openWeight: openWeight / 100, currentPos: currentPositions });
+
+        // 3. GERAÇÃO
+        if (algoMode === 'force') newPos = calculateForceLayout(allNodes, branches, sources, { distance: forceDist, charge: -forceCharge, openWeight: openWeight / 100, currentPos: actualPositions });
         if (algoMode === 'hier') newPos = calculateHierarchicalLayout(allNodes, branches, sources, { rankdir: hierDir, ranker: hierRanker, ranksep: hierRankSep, nodesep: hierNodeSep });
         if (algoMode === 'radial') newPos = calculateRadialLayout(allNodes, branches, sources, { radius: radialStep });
         if (algoMode === 'starburst') newPos = calculateStarburstLayout(allNodes, branches, sources, { ranksep: hierRankSep, nodesep: hierNodeSep });
-        if (algoMode === 'orthogonal') newPos = calculateOrthogonalLayout(allNodes, branches, sources, { gridSize: radialStep, charge: -forceCharge, distance: forceDist, openWeight: openWeight / 100, currentPos: currentPositions });
-
-        // MUDANÇA AQUI: Agora ele dispara um evento exclusivo para a memória Orgânica!
-        window.dispatchEvent(new CustomEvent('applyOrganicLayout', { detail: { positions: newPos } }));
         
-        // Força a câmera a se ajustar ao novo desenho
+        if (algoMode === 'orthogonal') {
+            if (!usePhysics && actualPositions) {
+                const occupied = new Set();
+                const nodeIds = Object.keys(actualPositions);
+                
+                // 1. Calcula o "Centro de Gravidade" (Centroide) de todas as barras
+                let cx = 0, cy = 0;
+                nodeIds.forEach(id => {
+                    cx += actualPositions[id].x;
+                    cy += actualPositions[id].y;
+                });
+                cx /= nodeIds.length || 1;
+                cy /= nodeIds.length || 1;
+
+                // 2. Ordena a fila: Quem está mais perto do centro escolhe a vaga primeiro!
+                const sortedIds = nodeIds.sort((a, b) => {
+                    const distA = Math.pow(actualPositions[a].x - cx, 2) + Math.pow(actualPositions[a].y - cy, 2);
+                    const distB = Math.pow(actualPositions[b].x - cx, 2) + Math.pow(actualPositions[b].y - cy, 2);
+                    return distA - distB; // Ordem crescente de distância
+                });
+
+                // 3. Aplica a grade respeitando a nova fila VIP
+                sortedIds.forEach(id => {
+                    let baseX = Math.round(actualPositions[id].x / radialStep) * radialStep;
+                    let baseY = Math.round(actualPositions[id].y / radialStep) * radialStep;
+                    
+                    // ALGORITMO ANTI-COLISÃO (Busca em Espiral)
+                    let ring = 0;
+                    let found = false;
+                    while (!found) {
+                        for (let dx = -ring; dx <= ring && !found; dx++) {
+                            for (let dy = -ring; dy <= ring && !found; dy++) {
+                                if (Math.abs(dx) === ring || Math.abs(dy) === ring) {
+                                    let checkX = baseX + (dx * radialStep);
+                                    let checkY = baseY + (dy * radialStep);
+                                    let key = `${checkX},${checkY}`;
+                                    
+                                    if (!occupied.has(key)) {
+                                        occupied.add(key);
+                                        newPos[id] = { x: checkX, y: checkY };
+                                        found = true;
+                                    }
+                                }
+                            }
+                        }
+                        ring++;
+                    }
+                });
+            } else {
+                // Motor D3 com Física Ativada
+                newPos = calculateOrthogonalLayout(allNodes, branches, sources, { gridSize: radialStep, charge: -forceCharge, distance: forceDist, openWeight: openWeight / 100, currentPos: actualPositions });
+            }
+        }
+
+        // 4. APLICAÇÃO
+        window.dispatchEvent(new CustomEvent('applyOrganicLayout', { detail: { positions: newPos } }));
         setTimeout(() => window.dispatchEvent(new CustomEvent('triggerZoomExtents')), 600);
     };
 
@@ -258,21 +322,31 @@ export default function EditSidebar({
 
                     {algoMode === 'orthogonal' && (
                         <div style={{ fontSize: '12px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                            {/* O NOVO CHECKBOX */}
+                            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', color: '#ff9800', fontWeight: 'bold' }}>
+                                <input type="checkbox" checked={usePhysics} onChange={e => setUsePhysics(e.target.checked)} />
+                                Usar repulsão física (Motor D3)
+                            </label>
+
                             <label style={{ color: '#00bcd4', fontWeight: 'bold' }}>Tamanho da Malha (Grid): {radialStep}px
-                                <input type="range" min="10" max="100" step="10" value={radialStep} onChange={e=>setRadialStep(Number(e.target.value))} style={{width:'100%'}}/>
+                                <input type="range" min="50" max="150" step="10" value={radialStep} onChange={e=>setRadialStep(Number(e.target.value))} style={{width:'100%'}}/>
                             </label>
                             
-                            <hr style={{ border: 'none', borderTop: `1px solid ${darkMode ? '#444' : '#ccc'}`, margin: '4px 0' }} />
-                            
-                            <label>Distância das Linhas: {forceDist}px
-                                <input type="range" min="1" max="250" value={forceDist} onChange={e=>setForceDist(Number(e.target.value))} style={{width:'100%'}}/>
-                            </label>
-                            <label>Repulsão Prévia (Ímã): {forceCharge}
-                                <input type="range" min="5" max="300" value={forceCharge} onChange={e=>setForceCharge(Number(e.target.value))} style={{width:'100%'}}/>
-                            </label>
-                            <label>Força das Chaves Abertas: {openWeight}%
-                                <input type="range" min="0" max="100" value={openWeight} onChange={e=>setOpenWeight(Number(e.target.value))} style={{width:'100%'}}/>
-                            </label>
+                            {/* SÓ MOSTRA OS SLIDERS DE FÍSICA SE O CHECKBOX ESTIVER MARCADO */}
+                            {usePhysics && (
+                                <>
+                                    <hr style={{ border: 'none', borderTop: `1px solid ${darkMode ? '#444' : '#ccc'}`, margin: '4px 0' }} />
+                                    <label>Distância das Linhas: {forceDist}px
+                                        <input type="range" min="1" max="250" value={forceDist} onChange={e=>setForceDist(Number(e.target.value))} style={{width:'100%'}}/>
+                                    </label>
+                                    <label>Repulsão Prévia (Ímã): {forceCharge}
+                                        <input type="range" min="5" max="300" value={forceCharge} onChange={e=>setForceCharge(Number(e.target.value))} style={{width:'100%'}}/>
+                                    </label>
+                                    <label>Força das Chaves Abertas: {openWeight}%
+                                        <input type="range" min="0" max="100" value={openWeight} onChange={e=>setOpenWeight(Number(e.target.value))} style={{width:'100%'}}/>
+                                    </label>
+                                </>
+                            )}
                         </div>
                     )}
 

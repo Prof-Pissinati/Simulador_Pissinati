@@ -90,6 +90,26 @@ function App() {
         setLayoutMode('project');
     }, [allNodes.length]);
 
+    // ✅ DISPARAR ZOOM AUTOMÁTICO AO TROCAR DE MODO (Projeto <-> Orgânico)
+    useEffect(() => {
+        // Disparamos dois eventos: 
+        // 1. Um imediato para iniciar o enquadramento
+        const timer1 = setTimeout(() => {
+            window.dispatchEvent(new CustomEvent('triggerZoomExtents'));
+        }, 50);
+
+        // 2. Um após 700ms para garantir o enquadramento final 
+        // (após a animação de 600ms do GraphArea terminar)
+        const timer2 = setTimeout(() => {
+            window.dispatchEvent(new CustomEvent('triggerZoomExtents'));
+        }, 700);
+
+        return () => {
+            clearTimeout(timer1);
+            clearTimeout(timer2);
+        };
+    }, [layoutMode]);
+
     useEffect(() => {
         if (darkMode) document.body.classList.add('dark-mode');
         else document.body.classList.remove('dark-mode');
@@ -98,15 +118,31 @@ function App() {
     const handleUndoLayout = useCallback(() => {
         if (layoutHistory.length === 0) return;
         const lastState = layoutHistory[layoutHistory.length - 1];
-        window.dispatchEvent(new CustomEvent('applyGraphLayout', { detail: lastState }));
+
+        // Restaura as posições de acordo com o modo atual para não "piscar" em branco
+        if (layoutMode === 'organic') {
+            setOrganicPositions(lastState.positions);
+        } else {
+            setProjectPositions(lastState.positions);
+            setProjectWaypoints(lastState.waypoints);
+        }
+
         setLayoutHistory(prev => prev.slice(0, -1));
-    }, [layoutHistory]);
+    }, [layoutHistory, layoutMode]);
 
 
     const saveLayoutToHistory = useCallback((positions, waypoints) => {
         const currentState = JSON.parse(JSON.stringify({ positions: positions, waypoints: waypoints }));
         setLayoutHistory(prev => [...prev, currentState].slice(-20)); 
     }, []);
+
+    useEffect(() => {
+        const handleSaveToHistory = (e) => {
+            saveLayoutToHistory(e.detail.positions, e.detail.waypoints);
+        };
+        window.addEventListener('saveToHistory', handleSaveToHistory);
+        return () => window.removeEventListener('saveToHistory', handleSaveToHistory);
+    }, [saveLayoutToHistory]);
 
     const handleResetToOriginalLayout = useCallback(() => {
         if (window.confirm("🚨 Tem certeza que deseja resetar o layout para o padrão do arquivo? Todas as alterações não salvas serão perdidas.")) {
