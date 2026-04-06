@@ -156,7 +156,9 @@ function App() {
         sources: activeSources, 
         loads: systemLoads, 
         Vbase: SYSTEM_DATA.Vbase || 13.8,
-        Sbase: SYSTEM_DATA.Sbase || 1000
+        Sbase: SYSTEM_DATA.Sbase || 1000,
+        shunts: SYSTEM_DATA.shunts || {}, // <-- INJETANDO CAPACITORES
+        sses: SYSTEM_DATA.sses || {}      // <-- INJETANDO LIMITES SSE
     }), [activeSources, branches]);
 
     // 2. PASSA O sysData PARA AS FUNÇÕES DE PROPAGAÇÃO
@@ -383,12 +385,12 @@ function App() {
                 const data = JSON.parse(event.target.result);
                 if (data.layout || data.positions) {
                     
-                    // 👇 A CORREÇÃO ENTRA AQUI: Restaurar a "Física" do sistema! 👇
                     if (data.loads) setSystemLoads(data.loads);
                     if (data.baseKV) SYSTEM_DATA.Vbase = data.baseKV;
                     if (data.sBase) SYSTEM_DATA.Sbase = data.sBase;
                     if (data.sources) SYSTEM_DATA.sources = data.sources;
-                    // 👆 ======================================================= 👆
+                    if (data.sses) SYSTEM_DATA.sses = data.sses;
+                    if (data.shunts) SYSTEM_DATA.shunts = data.shunts;
 
                     if (data.branches) {
                         setBranches(data.branches);
@@ -435,6 +437,9 @@ function App() {
                 SYSTEM_DATA.Vbase = parsedData.baseKV;
                 SYSTEM_DATA.Sbase = parsedData.sBase;
                 SYSTEM_DATA.sources = parsedData.sources;
+
+                SYSTEM_DATA.sses = parsedData.sses || {};
+                SYSTEM_DATA.shunts = parsedData.shunts || {};
 
                 setActiveSources(parsedData.sources);
                 setBranches(parsedData.branches);
@@ -667,9 +672,9 @@ param: L:   R       X       Imax    State   sw :=
         
         const sourceId = Array.from(feedsFrom)[0];
         
-        // CORREÇÃO DE OPACIDADE: O mínimo agora é 45% (nunca mais ficará cinza morta)
+        // CORREÇÃO DE OPACIDADE: O mínimo agora é 35% (nunca mais ficará cinza morta)
         const p = Math.min((current.percentage || 0) / 100, 1.0);
-        const alpha = 0.45 + (0.55 * Math.sqrt(p)); 
+        const alpha = 0.1 + (0.9 * Math.sqrt(p)); 
         
         if (SOURCE_COLORS[sourceId]) {
             const rgb = hexToRgb(SOURCE_COLORS[sourceId]);
@@ -847,7 +852,7 @@ param: L:   R       X       Imax    State   sw :=
                     activePositions={activePositions} lineCurrents={lineCurrents} nodeData={nodeData} 
                     isEditMode={isEditMode} setIsEditMode={setIsEditMode} activeWaypoints={activeWaypoints} 
                     darkMode={darkMode} onSaveLayoutToHistory={saveLayoutToHistory} loads={loads} systemLoads={systemLoads} 
-                    onExportRequest={handleExportFullState}
+                    onExportRequest={handleExportFullState} sses={SYSTEM_DATA.sses}
                 >
                     {showLegend && (
                         <div className="legend" style={{ position: 'absolute', bottom: '20px', right: '20px', zIndex: 1000, pointerEvents: 'all', background: darkMode ? '#121212' : '#ffffff', border: '1px solid #444', borderRadius: '8px', boxShadow: '0 6px 20px rgba(0,0,0,0.2)' }} onMouseDown={e=>e.stopPropagation()} onMouseUp={e=>e.stopPropagation()} onClick={e=>e.stopPropagation()} onWheel={e=>e.stopPropagation()} onDoubleClick={e=>e.stopPropagation()} >
@@ -888,7 +893,7 @@ param: L:   R       X       Imax    State   sw :=
                         toggleFault={toggleFault} setSelectedElement={setSelectedElement} 
                         selectedElement={displayElement}
                         setHoveredNodeId={setHoveredNodeId} getNodeColor={getNodeColor} darkMode={darkMode}
-                        THEME={THEME} nodeData={nodeData} lineCurrents={lineCurrents} loads={loads} branches={branches}
+                        THEME={THEME} nodeData={nodeData} lineCurrents={lineCurrents} loads={loads} branches={branches} sses={SYSTEM_DATA.sses || {}}
                     />
                 </div>
             </div>

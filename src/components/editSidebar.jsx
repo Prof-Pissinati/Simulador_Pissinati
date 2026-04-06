@@ -329,7 +329,7 @@ export default function EditSidebar({
                             </label>
 
                             <label style={{ color: '#00bcd4', fontWeight: 'bold' }}>Tamanho da Malha (Grid): {radialStep}px
-                                <input type="range" min="50" max="150" step="10" value={radialStep} onChange={e=>setRadialStep(Number(e.target.value))} style={{width:'100%'}}/>
+                                <input type="range" min="10" max="150" step="5" value={radialStep} onChange={e=>setRadialStep(Number(e.target.value))} style={{width:'100%'}}/>
                             </label>
                             
                             {/* SÓ MOSTRA OS SLIDERS DE FÍSICA SE O CHECKBOX ESTIVER MARCADO */}

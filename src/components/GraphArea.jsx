@@ -2,6 +2,7 @@ import React, { useRef, useState, useEffect, useCallback } from 'react';
 import { SYSTEM_DATA } from '../data/systemData';
 import SvgTooltips from './SvgTooltips';
 import GraphEdge from './GraphEdge';
+import GraphNode from './GraphNode';
 
 const FIXED_GRID_SIZE = 10;
 
@@ -27,7 +28,7 @@ export default function GraphArea({
     selectedElement, hoveredLineId, setHoveredLineId, hoveredNodeId, setHoveredNodeId, maintenanceMode,
     activePositions = {}, activeWaypoints = {}, lineCurrents = {}, nodeData = {}, isEditMode, setIsEditMode, darkMode,
     printFrameMode, isFaultSidebarOpen, onSaveLayoutToHistory, children, onExportRequest, loads,
-    systemLoads
+    systemLoads, sses
 }) {
     const svgRef = useRef(null);
     const measureRef = useRef(null); 
@@ -270,6 +271,156 @@ export default function GraphArea({
         const rawPt = getRawSVGPoint(clientX, clientY);
         return { x: (rawPt.x - transform.x) / transform.scale, y: (rawPt.y - transform.y) / transform.scale };
     }, [getRawSVGPoint, transform.x, transform.y, transform.scale]);
+
+    // =======================================================================
+    // O COFRE DE ESTADOS (Para as funções lerem sem recriar)
+    // =======================================================================
+    const contextRef = useRef({});
+    useEffect(() => {
+        contextRef.current = {
+            isEditMode, maintenanceMode, toggleSwitch, toggleFault,
+            selectedEditNodes, selectedEditWaypoints,
+            manualPositions, renderPositions, manualWaypoints, renderWaypoints,
+            onSaveLayoutToHistory, getCurrentFullLayout, branches, dragInfo
+        };
+    });
+
+    // =======================================================================
+    // FUNÇÕES IMUTÁVEIS (useCallback blindado, só nascem uma vez!)
+    // =======================================================================
+    const handleLineMouseDown = useCallback((e, branchId) => {
+        const ctx = contextRef.current;
+        if (!ctx.isEditMode) return;
+        e.stopPropagation(); wasDragged.current = false;
+        const svgPt = getTransformedPoint(e.clientX, e.clientY);
+        if (ctx.onSaveLayoutToHistory) ctx.onSaveLayoutToHistory(ctx.getCurrentFullLayout().positions, ctx.getCurrentFullLayout().waypoints);
+        
+        const branch = ctx.branches.find(b => b.id === branchId);
+        const p1 = ctx.manualPositions[branch.from] || ctx.renderPositions[branch.from];
+        const p2 = ctx.manualPositions[branch.to] || ctx.renderPositions[branch.to];
+        const wps = ctx.manualWaypoints[branchId] || ctx.renderWaypoints[branchId] || [];
+        const waypoints = Array.isArray(wps) ? wps : [];
+        
+        const insertIdx = getClosestSegmentIndex(p1, p2, waypoints, svgPt);
+        setDragInfo({ type: 'line', branchId, insertIdx, startX: svgPt.x, startY: svgPt.y });
+    }, [getTransformedPoint]);
+
+    const handleLineClick = useCallback((e, branchId) => {
+        e.stopPropagation();
+        const ctx = contextRef.current;
+        const branch = ctx.branches.find(b => b.id === branchId);
+        if (!ctx.isEditMode && (branch.hasSwitch || ctx.maintenanceMode)) ctx.toggleSwitch(branchId);
+    }, []);
+
+    const handleLineDoubleClick = useCallback((e, branchId) => {
+        const ctx = contextRef.current;
+        if (!ctx.isEditMode) return;
+        if (ctx.onSaveLayoutToHistory) ctx.onSaveLayoutToHistory(ctx.getCurrentFullLayout().positions, ctx.getCurrentFullLayout().waypoints);
+        e.stopPropagation();
+        const svgPt = getTransformedPoint(e.clientX, e.clientY);
+        
+        const branch = ctx.branches.find(b => b.id === branchId);
+        const p1 = ctx.manualPositions[branch.from] || ctx.renderPositions[branch.from];
+        const p2 = ctx.manualPositions[branch.to] || ctx.renderPositions[branch.to];
+        const wps = ctx.manualWaypoints[branchId] || ctx.renderWaypoints[branchId] || [];
+        const waypoints = Array.isArray(wps) ? wps : [];
+        
+        const insertIdx = getClosestSegmentIndex(p1, p2, waypoints, svgPt);
+        setManualWaypoints(prev => {
+            const currentWps = prev[branchId] && Array.isArray(prev[branchId]) ? [...prev[branchId]] : [];
+            currentWps.splice(insertIdx, 0, { x: svgPt.x, y: svgPt.y });
+            return { ...prev, [branchId]: currentWps };
+        });
+    }, [getTransformedPoint]);
+
+    const handleLineMouseEnter = useCallback((branchId) => {
+        setHoveredLineId(branchId); setLocalHoveredLine(branchId);
+    }, [setHoveredLineId]);
+
+    const handleLineMouseLeave = useCallback(() => {
+        setHoveredLineId(null); setLocalHoveredLine(null);
+    }, [setHoveredLineId]);
+
+    const handleWaypointMouseDown = useCallback((e, branchId, wpIndex, wpKey, wp) => {
+        const ctx = contextRef.current;
+        e.stopPropagation(); wasDragged.current = false;
+        if (ctx.onSaveLayoutToHistory) ctx.onSaveLayoutToHistory(ctx.getCurrentFullLayout().positions, ctx.getCurrentFullLayout().waypoints);
+        const svgPt = getTransformedPoint(e.clientX, e.clientY);
+        
+        let currentWps = new Set(ctx.selectedEditWaypoints);
+        let currentSelection = new Set(ctx.selectedEditNodes);
+        
+        if (!currentWps.has(wpKey)) {
+            if (!e.shiftKey) { currentWps.clear(); currentSelection.clear(); }
+            currentWps.add(wpKey); 
+            setSelectedEditWaypoints(currentWps); setSelectedEditNodes(currentSelection);
+        }
+        
+        const groupNodes = {}; 
+        currentSelection.forEach(id => { const p = ctx.manualPositions[id] || ctx.renderPositions[id]; if (p) groupNodes[id] = { ...p }; });
+        const groupWps = {}; 
+        currentWps.forEach(key => { 
+            const [bId, idxStr] = key.split('-'); const idx = parseInt(idxStr); 
+            if (ctx.manualWaypoints[bId] && ctx.manualWaypoints[bId][idx]) groupWps[key] = { ...ctx.manualWaypoints[bId][idx] }; 
+        });
+        
+        setDragInfo({ type: 'mixed', leaderType: 'waypoint', leaderId: wpKey, initialX: wp.x, initialY: wp.y, startX: svgPt.x, startY: svgPt.y, groupNodes, groupWps });
+    }, [getTransformedPoint]);
+
+    const handleWaypointDoubleClick = useCallback((e, branchId, wpIndex) => {
+        const ctx = contextRef.current;
+        if (!ctx.isEditMode) return;
+        if (ctx.onSaveLayoutToHistory) ctx.onSaveLayoutToHistory(ctx.getCurrentFullLayout().positions, ctx.getCurrentFullLayout().waypoints);
+        e.stopPropagation();
+        setManualWaypoints(prev => {
+            const currentWps = prev[branchId] && Array.isArray(prev[branchId]) ? [...prev[branchId]] : [];
+            currentWps.splice(wpIndex, 1);
+            return { ...prev, [branchId]: currentWps };
+        });
+    }, []);
+
+    const handleNodeMouseDown = useCallback((e, nodeId) => {
+        const ctx = contextRef.current;
+        if (!ctx.isEditMode) return; 
+        e.stopPropagation(); wasDragged.current = false;
+        if (ctx.onSaveLayoutToHistory) ctx.onSaveLayoutToHistory(ctx.getCurrentFullLayout().positions, ctx.getCurrentFullLayout().waypoints);
+        const svgPt = getTransformedPoint(e.clientX, e.clientY);
+        
+        let currentSelection = new Set(ctx.selectedEditNodes);
+        let currentWps = new Set(ctx.selectedEditWaypoints);
+        if (!currentSelection.has(nodeId)) {
+            if (!e.shiftKey) { currentSelection.clear(); currentWps.clear(); }
+            currentSelection.add(nodeId);
+            setSelectedEditNodes(currentSelection); setSelectedEditWaypoints(currentWps);
+        }
+        
+        const groupNodes = {}; 
+        currentSelection.forEach(id => { const p = ctx.manualPositions[id] || ctx.renderPositions[id]; if (p) groupNodes[id] = { ...p }; });
+        const groupWps = {}; 
+        currentWps.forEach(key => { 
+            const [bId, idxStr] = key.split('-'); const idx = parseInt(idxStr); 
+            if (ctx.manualWaypoints[bId] && ctx.manualWaypoints[bId][idx]) groupWps[key] = { ...ctx.manualWaypoints[bId][idx] }; 
+        });
+        
+        setDragInfo({ type: 'mixed', leaderType: 'node', leaderId: nodeId, startX: svgPt.x, startY: svgPt.y, groupNodes, groupWps });
+    }, [getTransformedPoint]);
+
+    const handleNodeClick = useCallback((e, nodeId) => {
+        const ctx = contextRef.current;
+        e.stopPropagation(); 
+        if (!ctx.isEditMode && !wasDragged.current) ctx.toggleFault(nodeId);
+    }, []);
+
+    const handleNodeMouseEnter = useCallback((nodeId) => {
+        const ctx = contextRef.current;
+        if(!ctx.dragInfo) { setHoveredNodeId(nodeId); setLocalHoveredNode(nodeId); }
+    }, [setHoveredNodeId]);
+
+    const handleNodeMouseLeave = useCallback((nodeId) => {
+        const ctx = contextRef.current;
+        if(!ctx.dragInfo) { setHoveredNodeId(null); setLocalHoveredNode(null); }
+    }, [setHoveredNodeId]);
+    // =======================================================================
 
     const isPaper = printFrameMode !== 'none';
     const isLandscape = printFrameMode === 'landscape';
@@ -561,6 +712,7 @@ export default function GraphArea({
                         )}
 
                         {/* --- DESENHO DAS LINHAS (CABOS) --- */}
+                        {/* --- DESENHO DAS LINHAS (CABOS) --- */}
                         {branches.map(b => {
                             const p1 = manualPositions[b.from] || renderPositions[b.from];
                             const p2 = manualPositions[b.to] || renderPositions[b.to];
@@ -573,7 +725,6 @@ export default function GraphArea({
                             
                             const isHovered = hoveredLineId === b.id || localHoveredLine === b.id;
                             const isSelected = selectedElement && selectedElement.type === 'edge' && selectedElement.data.id === b.id;
-                            const isHighlighted = isHovered || isSelected;
 
                             return (
                                 <GraphEdge 
@@ -581,66 +732,20 @@ export default function GraphArea({
                                     branch={b}
                                     pathString={pathString}
                                     color={color}
-                                    isHighlighted={isHighlighted}
+                                    isHighlighted={isHovered || isSelected}
                                     isEditMode={isEditMode}
                                     isRestoringLayout={isRestoringLayout}
                                     waypoints={waypoints}
                                     selectedEditWaypoints={selectedEditWaypoints}
                                     dragInfoType={dragInfo?.type}
                                     
-                                    /* EVENTOS DA LINHA */
-                                    onLineMouseDown={(e) => {
-                                        if (!isEditMode) return;
-                                        e.stopPropagation(); wasDragged.current = false;
-                                        const svgPt = getTransformedPoint(e.clientX, e.clientY);
-                                        if (onSaveLayoutToHistory) onSaveLayoutToHistory(getCurrentFullLayout().positions, getCurrentFullLayout().waypoints);
-                                        const insertIdx = getClosestSegmentIndex(p1, p2, waypoints, svgPt);
-                                        setDragInfo({ type: 'line', branchId: b.id, insertIdx: insertIdx, startX: svgPt.x, startY: svgPt.y });
-                                    }}
-                                    onLineClick={(e) => { 
-                                        e.stopPropagation(); 
-                                        if (!isEditMode && (b.hasSwitch || maintenanceMode)) toggleSwitch(b.id); 
-                                    }}
-                                    onLineDoubleClick={(e) => {
-                                        if (!isEditMode) return;
-                                        if (onSaveLayoutToHistory) onSaveLayoutToHistory(getCurrentFullLayout().positions, getCurrentFullLayout().waypoints);
-                                        e.stopPropagation();
-                                        const svgPt = getTransformedPoint(e.clientX, e.clientY);
-                                        const insertIdx = getClosestSegmentIndex(p1, p2, waypoints, svgPt);
-                                        setManualWaypoints(prev => {
-                                            const currentWps = prev[b.id] && Array.isArray(prev[b.id]) ? [...prev[b.id]] : [];
-                                            currentWps.splice(insertIdx, 0, { x: svgPt.x, y: svgPt.y });
-                                            return { ...prev, [b.id]: currentWps };
-                                        });
-                                    }}
-                                    onLineMouseEnter={() => { setHoveredLineId(b.id); setLocalHoveredLine(b.id); }}
-                                    onLineMouseLeave={() => { setHoveredLineId(null); setLocalHoveredLine(null); }}
-                                    
-                                    /* EVENTOS DOS WAYPOINTS (JOELHOS) */
-                                    onWaypointMouseDown={(e, wpIndex, wpKey, wp) => {
-                                        e.stopPropagation(); wasDragged.current = false;
-                                        if (onSaveLayoutToHistory) onSaveLayoutToHistory(getCurrentFullLayout().positions, getCurrentFullLayout().waypoints);
-                                        const svgPt = getTransformedPoint(e.clientX, e.clientY);
-                                        let currentWps = new Set(selectedEditWaypoints);
-                                        let currentSelection = new Set(selectedEditNodes);
-                                        if (!currentWps.has(wpKey)) {
-                                            if (!e.shiftKey) { currentWps.clear(); currentSelection.clear(); }
-                                            currentWps.add(wpKey); setSelectedEditWaypoints(currentWps); setSelectedEditNodes(currentSelection);
-                                        }
-                                        const groupNodes = {}; currentSelection.forEach(id => { const p = manualPositions[id] || renderPositions[id]; if (p) groupNodes[id] = { ...p }; });
-                                        const groupWps = {}; currentWps.forEach(key => { const [bId, idxStr] = key.split('-'); const idx = parseInt(idxStr); if (manualWaypoints[bId] && manualWaypoints[bId][idx]) groupWps[key] = { ...manualWaypoints[bId][idx] }; });
-                                        setDragInfo({ type: 'mixed', leaderType: 'waypoint', leaderId: wpKey, initialX: wp.x, initialY: wp.y, startX: svgPt.x, startY: svgPt.y, groupNodes, groupWps });
-                                    }}
-                                    onWaypointDoubleClick={(e, wpIndex) => {
-                                        if (!isEditMode) return;
-                                        if (onSaveLayoutToHistory) onSaveLayoutToHistory(getCurrentFullLayout().positions, getCurrentFullLayout().waypoints);
-                                        e.stopPropagation();
-                                        setManualWaypoints(prev => {
-                                            const currentWps = prev[b.id] && Array.isArray(prev[b.id]) ? [...prev[b.id]] : [];
-                                            currentWps.splice(wpIndex, 1);
-                                            return { ...prev, [b.id]: currentWps };
-                                        });
-                                    }}
+                                    onLineMouseDown={handleLineMouseDown}
+                                    onLineClick={handleLineClick}
+                                    onLineDoubleClick={handleLineDoubleClick}
+                                    onLineMouseEnter={handleLineMouseEnter}
+                                    onLineMouseLeave={handleLineMouseLeave}
+                                    onWaypointMouseDown={handleWaypointMouseDown}
+                                    onWaypointDoubleClick={handleWaypointDoubleClick}
                                 />
                             );
                         })}
@@ -653,53 +758,27 @@ export default function GraphArea({
                             const isSource = sources.includes(nodeId);
                             const color = getNodeColor(nodeId);
                             const isSelectedEdit = selectedEditNodes.has(nodeId);
-                            
                             const isHighlighted = hoveredNodeId === nodeId || localHoveredNode === nodeId || isSelectedEdit || (!isEditMode && selectedElement?.id === nodeId);
-                            
-                            // BORDAS ORIGINAIS DO SEU GIT
-                            const strokeColor = isHighlighted ? '#ffffff33' : (darkMode ? '#ffffff17' : '#00000017');
-                            const strokeWidth = isHighlighted ? 3 : 2;
-                            
-                            // SOMBRA ORIGINAL DO SEU GIT
-                            const shadowFilter = isHighlighted 
-                                ? `drop-shadow(0 0 10px ${color})` 
-                                : 'drop-shadow(0 2px 3px rgba(129, 129, 129, 0.3))';
+                            const nodeLoad = systemLoads && systemLoads[nodeId] ? (systemLoads[nodeId].p / 1000).toFixed(1) : null;
 
                             return (
-                                <g key={nodeId} style={{ transform: `translate(${pos.x}px, ${pos.y}px)`, cursor: isEditMode ? 'grab' : 'pointer', transition: isRestoringLayout ? 'transform 0.4s cubic-bezier(0.25, 1, 0.5, 1)' : 'none' }}
-                                   onMouseDown={(e) => {
-                                       if (!isEditMode) return; 
-                                       e.stopPropagation(); wasDragged.current = false;
-                                       if (onSaveLayoutToHistory) onSaveLayoutToHistory(getCurrentFullLayout().positions, getCurrentFullLayout().waypoints);
-                                       const svgPt = getTransformedPoint(e.clientX, e.clientY);
-                                       let currentSelection = new Set(selectedEditNodes);
-                                       let currentWps = new Set(selectedEditWaypoints);
-                                       if (!currentSelection.has(nodeId)) {
-                                           if (!e.shiftKey) { currentSelection.clear(); currentWps.clear(); }
-                                           currentSelection.add(nodeId);
-                                           setSelectedEditNodes(currentSelection); setSelectedEditWaypoints(currentWps);
-                                       }
-                                       const groupNodes = {}; currentSelection.forEach(id => { const p = manualPositions[id] || renderPositions[id]; if (p) groupNodes[id] = { ...p }; });
-                                       const groupWps = {}; currentWps.forEach(key => { const [bId, idxStr] = key.split('-'); const idx = parseInt(idxStr); if (manualWaypoints[bId] && manualWaypoints[bId][idx]) groupWps[key] = { ...manualWaypoints[bId][idx] }; });
-                                       setDragInfo({ type: 'mixed', leaderType: 'node', leaderId: nodeId, startX: svgPt.x, startY: svgPt.y, groupNodes, groupWps });
-                                   }}
-                                    onClick={(e) => { e.stopPropagation(); if (!isEditMode && !wasDragged.current) toggleFault(nodeId); }} 
-                                    onMouseEnter={() => { if(!dragInfo) { setHoveredNodeId(nodeId); setLocalHoveredNode(nodeId); } }}
-                                    onMouseLeave={() => { if(!dragInfo) { setHoveredNodeId(null); setLocalHoveredNode(null); } }}
-                                >
-                                    {isSource ? (
-                                        <circle cx="0" cy="0" r={isHighlighted ? 26 : 22} fill={color} stroke={strokeColor} strokeWidth={strokeWidth} style={{ filter: shadowFilter, transition: colorTransition }} />
-                                    ) : (
-                                        <g>
-                                            <rect x="-20" y="-12" width="40" height="24" fill="transparent" />
-                                            <rect x="-14" y="-8" width="28" height="16" rx="2" fill={color} stroke={strokeColor} strokeWidth={strokeWidth} style={{ filter: shadowFilter, transition: colorTransition }} />
-                                        </g>
-                                    )}
-                                    {/* TEXTO BRANCO CLÁSSICO DO GIT */}
-                                    <text x="0" y="0" textAnchor="middle" dominantBaseline="central" fill="white" fontSize={isSource ? "14px" : "10px"} fontWeight="bold" pointerEvents="none" className="node-label" style={{ textShadow: '0 1px 2px rgba(0,0,0,0.8)' }}>{nodeId}</text>
-                                    
-                                    {showLabels && !isSource && SYSTEM_DATA.systemLoads[nodeId] && (<text x="0" y="22" textAnchor="middle" fill="gray" fontSize="9px" pointerEvents="none">{(SYSTEM_DATA.systemLoads[nodeId].p / 1000).toFixed(1)} MW</text>)}
-                                </g>
+                                <GraphNode
+                                    key={nodeId}
+                                    nodeId={nodeId}
+                                    pos={pos}
+                                    isSource={isSource}
+                                    color={color}
+                                    isHighlighted={isHighlighted}
+                                    darkMode={darkMode}
+                                    isEditMode={isEditMode}
+                                    isRestoringLayout={isRestoringLayout}
+                                    showLabels={showLabels}
+                                    nodeLoad={nodeLoad}
+                                    onMouseDown={handleNodeMouseDown}
+                                    onClick={handleNodeClick}
+                                    onMouseEnter={handleNodeMouseEnter}
+                                    onMouseLeave={handleNodeMouseLeave}
+                                />
                             );
                         })}
 
@@ -722,6 +801,7 @@ export default function GraphArea({
                                 lineCurrents={lineCurrents}
                                 loads={loads}
                                 systemLoads={systemLoads}
+                                sses={sses}
                             />
                         )}
                     </g>

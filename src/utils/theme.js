@@ -1,6 +1,6 @@
 export const THEME = {
     light: { 
-        de: '#444444', 
+        de: '#9e9e9e', 
         loop: '#ffd600', 
         fault: '#d50000', 
         sub101: '#2e7d32', 
@@ -8,7 +8,7 @@ export const THEME = {
         sub104: '#7b1fa2' 
     },
     dark: { 
-        de: '#9e9e9e', 
+        de: '#444444', 
         loop: '#ffea00', 
         fault: '#d50000', 
         sub101: '#00e676', 

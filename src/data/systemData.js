@@ -6,8 +6,18 @@ export const SYSTEM_DATA = {
     Vmax: 1.00, 
     Vmin: 0.95,
     
-    // FONTES DO SISTEMA (Necessário para o cálculo de fluxo de potência)
+    // FONTES DO SISTEMA
     sources: [101, 102, 104], 
+
+    // Limites das subestações (kVA)
+    sses: { 
+        101: 33400,
+        102: 30000,
+        104: 22000
+    },    
+    shunts: {},  // Bancos de Capacitores/Reatores
+    dgs: {},     // Geração Distribuída
+    oltcs: {},   // Reguladores de Tensão
 
     // --- LAYOUT 1: PROJETO (Esquemático/Ortogonal) ---
     positionsProject: {
