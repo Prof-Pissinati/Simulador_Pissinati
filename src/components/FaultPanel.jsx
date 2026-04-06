@@ -20,7 +20,8 @@ export default function FaultPanel({
     loads,
     branches,
     sses,
-    feedersList = [] // 👈 Recebendo a lista de alimentadores
+    feedersList = [], // 👈 Recebendo a lista de alimentadores
+    handleTapChange
 }) {
     const getStatusText = (id) => {
         if (faultNodes.has(id)) return 'EM FALTA';
@@ -133,18 +134,59 @@ export default function FaultPanel({
                                 </div>
                                 <div className="inspector-row"><span>Ângulo:</span><b>{angle.toFixed(2)}°</b></div>
                                 
-                                {/* BARRA DE PROGRESSO DINÂMICA */}
-                                <div className="current-bar-container" style={{marginTop:'8px', height:'24px', borderRadius:'12px'}}>
-                                    <div className="current-bar" 
-                                            style={{
-                                                width: isSource ? `${Math.min(loadingPercent, 100)}%` : `${Math.min(v * 100, 100)}%`, 
-                                                background: isSource ? loadColor : vColor,
-                                                transition: 'width 0.4s ease, background 0.4s ease',
-                                                fontSize: '12px'
-                                            }}>
-                                        {isSource ? `${loadingPercent.toFixed(1)}%` : `${puVal} pu`}
+                                {/* 👇 BARRA DE PROGRESSO OU AGULHA DE TENSÃO 👇 */}
+                                {isSource ? (
+                                    /* Se for Subestação/Alimentador, mostra o % de Carregamento */
+                                    <div className="current-bar-container" style={{marginTop:'12px', height:'24px', borderRadius:'12px'}}>
+                                        <div className="current-bar" 
+                                                style={{
+                                                    width: `${Math.min(loadingPercent, 100)}%`, 
+                                                    background: loadColor,
+                                                    transition: 'width 0.4s ease, background 0.4s ease',
+                                                    fontSize: '12px'
+                                                }}>
+                                            {loadingPercent.toFixed(1)}%
+                                        </div>
                                     </div>
-                                </div>
+                                ) : (
+                                    /* 💎 NOVO MEDIDOR HORIZONTAL "BULLET GAUGE" (0.90 a 1.10) 💎 */
+                                    <div style={{ marginTop: '15px', padding: '0 10px' }}>
+                                        {/* Régua de Valores */}
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: '#888', marginBottom: '6px', fontFamily: 'monospace', fontWeight: 'bold' }}>
+                                            <span>0.90</span>
+                                            <span style={{ color: '#ccc' }}>1.00</span>
+                                            <span>1.10</span>
+                                        </div>
+                                        
+                                        {/* Trilha do Gradiente (Embutida) */}
+                                        <div style={{ position: 'relative', height: '10px', background: 'linear-gradient(90deg, #d32f2f 0%, #d32f2f 15%, #fbc02d 25%, #388e3c 40%, #388e3c 60%, #fbc02d 75%, #d32f2f 85%, #d32f2f 100%)', borderRadius: '4px', boxShadow: 'inset 0 1px 3px rgba(0,0,0,0.5)' }}>
+                                            
+                                            {/* Marcação central de 1.00 pu */}
+                                            <div style={{ position: 'absolute', left: '50%', top: '0', bottom: '0', width: '2px', background: 'rgba(255,255,255,0.4)', transform: 'translateX(-50%)' }}></div>
+                                            
+                                            {/* O Ponteiro (Barra Vertical Branca) */}
+                                            <div style={{ 
+                                                position: 'absolute', 
+                                                top: '-4px', 
+                                                bottom: '-4px', 
+                                                left: `${Math.max(0, Math.min(100, ((v - 0.90) / 0.20) * 100))}%`, 
+                                                width: '6px', 
+                                                background: '#ffffff', 
+                                                border: '1px solid #333',
+                                                borderRadius: '3px', 
+                                                boxShadow: '0 0 5px rgba(0,0,0,0.8)',
+                                                transform: 'translateX(-50%)',
+                                                transition: 'left 0.4s cubic-bezier(0.25, 1, 0.5, 1)'
+                                            }}></div>
+                                        </div>
+                                        
+                                        {/* Valor Exato em Destaque */}
+                                        <div style={{ textAlign: 'center', marginTop: '10px', fontSize: '14px', fontWeight: 'bold', color: vColor, fontFamily: 'monospace' }}>
+                                            {puVal} pu
+                                        </div>
+                                    </div>
+                                )}
+                                {/* 👆 ========================================= 👆 */}
                             </>
                         );
                     })()
@@ -163,6 +205,35 @@ export default function FaultPanel({
                                     <div className="inspector-row"><span>Resistência (R):</span><b>{liveBranch.r} Ω</b></div>
                                     <div className="inspector-row"><span>Reatância (X):</span><b>{liveBranch.x} Ω</b></div>
                                     <div className="inspector-row"><span>Limite (Imax):</span><b>{liveBranch.Imax} A</b></div>
+
+                                    {liveBranch.isRegulator && (
+                                        <div style={{ marginTop: '15px', padding: '10px', background: darkMode ? 'rgba(0,0,0,0.2)' : 'rgba(0,0,0,0.05)', borderRadius: '8px', border: `1px solid ${darkMode ? '#444' : '#ccc'}` }}>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px', fontSize: '12px' }}>
+                                                <span style={{ color: '#888' }}>Regulador de Tensão:</span>
+                                                <b style={{ color: '#00bcd4' }}>Tap {liveBranch.currentTap > 0 ? `+${liveBranch.currentTap}` : liveBranch.currentTap}</b>
+                                            </div>
+                                            
+                                            <div style={{ display: 'flex', gap: '8px' }}>
+                                                <button 
+                                                    onClick={() => handleTapChange(liveBranch.id, -1)} 
+                                                    disabled={liveBranch.currentTap <= -liveBranch.maxTaps}
+                                                    style={{ flex: 1, padding: '6px', background: liveBranch.currentTap <= -liveBranch.maxTaps ? 'transparent' : '#d32f2f', color: liveBranch.currentTap <= -liveBranch.maxTaps ? '#555' : '#fff', border: liveBranch.currentTap <= -liveBranch.maxTaps ? '1px dashed #555' : 'none', borderRadius: '4px', cursor: liveBranch.currentTap <= -liveBranch.maxTaps ? 'not-allowed' : 'pointer', fontWeight: 'bold', transition: 'all 0.2s' }}
+                                                >
+                                                    - TAP
+                                                </button>
+                                                <button 
+                                                    onClick={() => handleTapChange(liveBranch.id, 1)} 
+                                                    disabled={liveBranch.currentTap >= liveBranch.maxTaps}
+                                                    style={{ flex: 1, padding: '6px', background: liveBranch.currentTap >= liveBranch.maxTaps ? 'transparent' : '#2e7d32', color: liveBranch.currentTap >= liveBranch.maxTaps ? '#555' : '#fff', border: liveBranch.currentTap >= liveBranch.maxTaps ? '1px dashed #555' : 'none', borderRadius: '4px', cursor: liveBranch.currentTap >= liveBranch.maxTaps ? 'not-allowed' : 'pointer', fontWeight: 'bold', transition: 'all 0.2s' }}
+                                                >
+                                                    + TAP
+                                                </button>
+                                            </div>
+                                            <div style={{ textAlign: 'center', fontSize: '10px', color: '#666', marginTop: '6px' }}>
+                                                Faixa Operacional: ±{liveBranch.maxTaps} posições
+                                            </div>
+                                        </div>
+                                    )}
                                     
                                     {liveBranch.state === 1 && (
                                         <>

@@ -5,7 +5,8 @@ import { solveLinearSystem } from './mathSolver';
 export const CacheManager = {
     cache: new Map(),
     getKey: (branches, faultNodes, method) => {
-        const branchState = branches.map(b => `${b.id}:${b.state}`).join('|');
+        // 👇 MUDANÇA: Agora o cache também olha para o currentTap! 👇
+        const branchState = branches.map(b => `${b.id}:${b.state}:${b.currentTap || 0}`).join('|');
         const faultState = Array.from(faultNodes).sort().join(',');
         return `${method}-${branchState}-${faultState}`;
     },
@@ -24,7 +25,7 @@ export function runPowerFlow(branches, faultNodes, method = 'NR', sysData){
 
     CacheManager.cache.clear();
 
-    const { sources = [], loads = {}, Vbase = 13.8, Sbase = 1000 } = sysData || {};
+    const { sources = [], loads = {}, Vbase = 13.8, Sbase = 1000, shunts = {} } = sysData || {};
 
     if (sources.length === 0) {
         console.warn("Nenhuma fonte definida no sistema!");
@@ -69,7 +70,7 @@ export function runPowerFlow(branches, faultNodes, method = 'NR', sysData){
     const nodes = Array.from(energizedNodes).sort((a,b) => a-b);
     const n = nodes.length;
     
-    if (n === 0) return buildResult([], [], [], 1, branches, new Map(), new Set());
+    if (n === 0) return buildResult([], [], [], 1, branches, new Map(), new Set(), sysData);
 
     const nodeMap = new Map(nodes.map((id, index) => [id, index]));
     const Zbase = (Math.pow(Vbase, 2) * 1000) / Sbase;
@@ -91,12 +92,36 @@ export function runPowerFlow(branches, faultNodes, method = 'NR', sysData){
         if (mag2 < 1e-20) return; 
 
         const g = r_pu / mag2;
-        const b = -x_pu / mag2; 
+        const b_line = -x_pu / mag2; 
         
-        G[u][v] -= g; G[v][u] -= g;
-        B[u][v] -= b; B[v][u] -= b;
-        G[u][u] += g; G[v][v] += g;
-        B[u][u] += b; B[v][v] += b;
+        // 👇 MÁGICA 1: CÁLCULO DO TAP (Relação de Transformação 'a') 👇
+        let a = 1.0;
+        if (branch.isRegulator && branch.maxTaps > 0) {
+            // Se o arquivo informa regMax = 10, é 10%. Transformamos em 0.1 pu.
+            const regMaxPu = branch.regMax > 1 ? branch.regMax / 100 : (branch.regMax || 0.1); 
+            a = 1.0 + (branch.currentTap * (regMaxPu / branch.maxTaps));
+        }
+        const a2 = a * a;
+        
+        // Aplicação do Modelo Pi Equivalente com Tap
+        G[u][v] -= g / a; 
+        B[u][v] -= b_line / a;
+        G[v][u] -= g / a; 
+        B[v][u] -= b_line / a;
+        
+        G[u][u] += g / a2; 
+        B[u][u] += b_line / a2;
+        G[v][v] += g; 
+        B[v][v] += b_line;
+    });
+
+    // 👇 MÁGICA 2: INJEÇÃO DOS BANCOS DE CAPACITORES (SHUNTS) 👇
+    nodes.forEach((id, i) => {
+        if (shunts[id]) {
+            // Capacitores injetam reativos, logo aumentam a Susceptância positiva na diagonal
+            const b_shunt_pu = shunts[id] / Sbase;
+            B[i][i] += b_shunt_pu;
+        }
     });
 
     // 4. INICIALIZAÇÃO (Flat Start)
@@ -112,7 +137,7 @@ export function runPowerFlow(branches, faultNodes, method = 'NR', sysData){
             V[i] = 1.0; 
             Theta[i] = 0.0;
         } else {
-            const load = loads[id]; // <-- Agora usa a carga real do arquivo!
+            const load = loads[id]; 
             if (load) {
                 P_spec[i] = -(load.p / Sbase);
                 Q_spec[i] = -(load.q / Sbase);
@@ -272,7 +297,7 @@ function solveNewtonRaphson(n, busType, P_spec, Q_spec, G, B, V, Theta) {
 
 // --- CONSTRUTOR DE RESULTADOS ---
 function buildResult(nodes, V, Theta, Zbase, branches, nodeMap, energizedNodes, sysData) {
-    const { Sbase = 1000, Vbase = 13.8 } = sysData || {}; // <-- Pega as bases corretas
+    const { Sbase = 1000, Vbase = 13.8 } = sysData || {}; 
     const nodeResults = {};
     const lineResults = {};
 
@@ -302,9 +327,19 @@ function buildResult(nodes, V, Theta, Zbase, branches, nodeMap, energizedNodes, 
         const g = r_pu / mag2; 
         const bb = -x_pu / mag2;
 
+        // 👇 CÁLCULO DO FLUXO DE LINHA CONSIDERANDO O TAP 👇
+        let a = 1.0;
+        if (b.isRegulator && b.maxTaps > 0) {
+            const regMaxPu = b.regMax > 1 ? b.regMax / 100 : (b.regMax || 0.1); 
+            a = 1.0 + (b.currentTap * (regMaxPu / b.maxTaps));
+        }
+        const a2 = a * a;
+
         const ang = Theta[u] - Theta[v];
-        const p_pu = (V[u]**2 * g) - (V[u] * V[v] * (g * Math.cos(ang) + bb * Math.sin(ang)));
-        const q_pu = -(V[u]**2 * bb) - (V[u] * V[v] * (g * Math.sin(ang) - bb * Math.cos(ang)));
+        
+        // Fórmulas de potência ativas e reativas com o modelo Pi-Equivalente do Transformador
+        const p_pu = (V[u]**2 * g / a2) - (V[u] * V[v] * (g * Math.cos(ang) + bb * Math.sin(ang)) / a);
+        const q_pu = -(V[u]**2 * bb / a2) - (V[u] * V[v] * (g * Math.sin(ang) - bb * Math.cos(ang)) / a);
         
         const i_real = (Math.sqrt(p_pu**2 + q_pu**2) / V[u]) * (Sbase / (Math.sqrt(3) * Vbase));
         const limitCurrent = b.Imax || b.imax || b.capacity || b.limit || 1000;

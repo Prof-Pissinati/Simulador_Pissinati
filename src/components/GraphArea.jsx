@@ -290,7 +290,17 @@ export default function GraphArea({
     // =======================================================================
     const handleLineMouseDown = useCallback((e, branchId) => {
         e.preventDefault();
+        if (e.shiftKey) {
+            const branchClicado = branches.find(b => b.id === branchId);
+            if (branchClicado) setSelectedElement({ type: 'edge', data: branchClicado });
+            e.stopPropagation();
+            return; // Interrompe tudo, não arrasta nem manobra
+        }
         const ctx = contextRef.current;
+
+        const branchClicado = branches.find(b => b.id === branchId);
+        if (branchClicado) setSelectedElement({ type: 'edge', data: branchClicado });
+
         if (!ctx.isEditMode) return;
         e.stopPropagation(); wasDragged.current = false;
         const svgPt = getTransformedPoint(e.clientX, e.clientY);
@@ -782,27 +792,38 @@ export default function GraphArea({
                             // 👇 NOVA VERIFICAÇÃO MATEMÁTICA DO CAPACITOR 👇
                             const hasShunt = SYSTEM_DATA.shunts && SYSTEM_DATA.shunts[nodeId] !== undefined && SYSTEM_DATA.shunts[nodeId] !== 0;
 
-                            return (
-                                <GraphNode
-                                    key={nodeId}
-                                    nodeId={nodeId}
-                                    pos={pos}
-                                    isSource={isSource}
-                                    color={color}
-                                    isHighlighted={isHighlighted}
-                                    darkMode={darkMode}
-                                    isEditMode={isEditMode}
-                                    isRestoringLayout={isRestoringLayout}
-                                    showLabels={showLabels}
-                                    nodeLoad={nodeLoad}
-                                    
-                                    hasShunt={hasShunt} // 👈 A MÁGICA ENTRA AQUI!
+                            // LÓGICA DA AURA DE VIOLAÇÃO DE TENSÃO  
+                            const v_pu = nodeData[nodeId]?.v;
+                            // Consideramos violação se a tensão cair abaixo de 0.93 ou subir acima de 1.05
+                            const hasViolation = v_pu && (v_pu < 0.93 || v_pu > 1.05);
 
-                                    onMouseDown={handleNodeMouseDown}
-                                    onClick={handleNodeClick}
-                                    onMouseEnter={handleNodeMouseEnter}
-                                    onMouseLeave={handleNodeMouseLeave}
-                                />
+                            return (
+                                // 👇 A MÁGICA ESTÁ AQUI: A classe entra no grupo pai! 👇
+                                <g 
+                                    key={`wrapper-${nodeId}`} 
+                                    className={hasViolation ? "voltage-glow-wrapper" : ""}
+                                >
+                                    {/* (O <circle> vermelho exagerado foi apagado!) */}
+
+                                    <GraphNode
+                                        key={nodeId}
+                                        nodeId={nodeId}
+                                        pos={pos}
+                                        isSource={isSource}
+                                        color={color}
+                                        isHighlighted={isHighlighted}
+                                        darkMode={darkMode}
+                                        isEditMode={isEditMode}
+                                        isRestoringLayout={isRestoringLayout}
+                                        showLabels={showLabels}
+                                        nodeLoad={nodeLoad}
+                                        hasShunt={hasShunt} 
+                                        onMouseDown={handleNodeMouseDown}
+                                        onClick={handleNodeClick}
+                                        onMouseEnter={handleNodeMouseEnter}
+                                        onMouseLeave={handleNodeMouseLeave}
+                                    />
+                                </g>
                             );
                         })}
 

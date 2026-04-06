@@ -139,46 +139,86 @@ function App() {
     const loads = useMemo(() => calculateLoads(nodeFeeds, faultNodes, sysData), [nodeFeeds, faultNodes, sysData]);
     
     // 👇👇👇 A NOVA INTELIGÊNCIA DE PROPAGAÇÃO DE CORES DA ENGENHARIA 👇👇👇
-    const { nodeZones, edgeZones, feedersList } = useMemo(() => {
-        const nZ = {};
-        const eZ = {};
+    // 👇 NOVO CÉREBRO VISUAL DE CORES E LOOPS 👇
+    const { nodeZones, edgeZones, loopNodes, loopEdges, feedersList } = useMemo(() => {
+        const feeders = SYSTEM_DATA.feeders || [];
         const mainSources = activeSources; 
         
-        // O App não calcula mais nada. Ele só pega a lista que o Parser fez!
-        const feeders = SYSTEM_DATA.feeders || [];
-            
-        const roots = mainSources.length > 0 ? mainSources : [1];
-        let queue = [...roots];
-        roots.forEach(r => nZ[r] = r);
+        const nZ = {}; const eZ = {};
+        const loopN = new Set(); const loopE = new Set();
         
-        const visited = new Set(roots);
-                
+        // As raízes de cor são a 1000 e os alimentadores.
+        const colorRoots = [...mainSources, ...feeders];
+        const tracker = {}; 
+        
+        let queue = [...colorRoots];
+        colorRoots.forEach(r => {
+            tracker[r] = new Set([r]);
+            nZ[r] = r;
+        });
+        
         while(queue.length > 0) {
             const curr = queue.shift();
             
-            // O Efeito Prisma: Se o nó atual for um Alimentador, tudo que sai dele leva a cor dele.
-            // Senão, continua levando a cor da Subestação Principal.
-            const propagationZone = feeders.includes(curr) ? curr : nZ[curr];
-            
+            // O segredo do prisma: Se passou por um alimentador, a cor que propaga é SÓ a dele!
+            const zonesToPropagate = feeders.includes(curr) ? new Set([curr]) : tracker[curr];
+
             branches.forEach(b => {
                 if (b.state === 1 && !faultNodes.has(b.from) && !faultNodes.has(b.to)) {
-                    if (b.from === curr && !visited.has(b.to)) {
-                        nZ[b.to] = propagationZone;
-                        eZ[b.id] = propagationZone; // A linha assume a cor da propagação
-                        visited.add(b.to);
-                        queue.push(b.to);
-                    } else if (b.to === curr && !visited.has(b.from)) {
-                        nZ[b.from] = propagationZone;
-                        eZ[b.id] = propagationZone;
-                        visited.add(b.from);
-                        queue.push(b.from);
+                    const neighbor = (b.from === curr) ? b.to : ((b.to === curr) ? b.from : null);
+                    
+                    if (neighbor !== null) {
+                        // Não deixa a cor "subir" de volta para a subestação principal
+                        if (mainSources.includes(neighbor)) return;
+
+                        if (!tracker[neighbor]) {
+                            tracker[neighbor] = new Set(zonesToPropagate);
+                            nZ[neighbor] = Array.from(zonesToPropagate)[0];
+                            eZ[b.id] = nZ[neighbor];
+                            queue.push(neighbor);
+                        } else {
+                            let isNewConflict = false;
+                            zonesToPropagate.forEach(z => {
+                                if (!tracker[neighbor].has(z)) {
+                                    tracker[neighbor].add(z);
+                                    isNewConflict = true;
+                                }
+                            });
+                            if (isNewConflict) queue.push(neighbor);
+                        }
                     }
                 }
             });
         }
+        
+        // Pós-processamento: Define quem está em Loop (Amarelo)
+        Object.keys(tracker).forEach(nStr => {
+            const node = Number(nStr);
+            // Ignora a 1000 da contagem de loop para não dar conflito na alta tensão
+            const validZones = Array.from(tracker[node]).filter(z => !mainSources.includes(z));
+            // Se o nó foi atingido por mais de um alimentador, ele fica amarelo!
+            if (validZones.length > 1) loopN.add(node);
+        });
 
-        return { nodeZones: nZ, edgeZones: eZ, feedersList: feeders };
+        branches.forEach(b => {
+            if (b.state === 1) {
+                // Se a linha liga dois nós em loop, ela também fica amarela
+                if (loopN.has(b.from) && loopN.has(b.to)) loopE.add(b.id);
+                else {
+                    // Se a linha for exatamente a chave divisória entre duas cores
+                    const zF = Array.from(tracker[b.from] || []).filter(z => !mainSources.includes(z));
+                    const zT = Array.from(tracker[b.to] || []).filter(z => !mainSources.includes(z));
+                    if (zF.length > 0 && zT.length > 0 && zF[0] !== zT[0]) {
+                        loopE.add(b.id);
+                        loopN.add(b.from); loopN.add(b.to);
+                    }
+                }
+            }
+        });
+
+        return { nodeZones: nZ, edgeZones: eZ, loopNodes: loopN, loopEdges: loopE, feedersList: feeders };
     }, [branches, faultNodes, activeSources]);
+    // 👆 ======================================== 👆
     // 👆👆👆 ========================================================== 👆👆👆
 
     const disconnectedStats = useMemo(() => {
@@ -276,6 +316,18 @@ function App() {
         showToast('Chave alterada', 'success');
     };
 
+    const handleTapChange = (branchId, increment) => {
+        setBranches(prev => prev.map(b => {
+            if (b.id === branchId && b.isRegulator) {
+                let newTap = b.currentTap + increment;
+                if (newTap > b.maxTaps) newTap = b.maxTaps;
+                if (newTap < -b.maxTaps) newTap = -b.maxTaps;
+                return { ...b, currentTap: newTap };
+            }
+            return b;
+        }));
+    };
+    
     const toggleFault = (nodeId) => {
         if (faultNodes.has(nodeId)) {
             setFaultNodes(prev => { const newSet = new Set(prev); newSet.delete(nodeId); return newSet; });
@@ -489,50 +541,53 @@ function App() {
     const handleExportPDF = () => { setSelectedElement(null); setTimeout(() => window.print(), 100); };
 
     // 👇👇👇 A NOVA LÓGICA DE DEFINIÇÃO DE CORES DA ENGENHARIA 👇👇👇
-    const getNodeColor = (nodeId) => {
+   const getNodeColor = (nodeId) => {
         const colors = darkMode ? THEME.dark : THEME.light;
-        
         if (faultNodes.has(nodeId)) return colors.fault;
-        if (!nodeZones[nodeId]) return colors.de;
-
-        // Se for Fonte Principal (1000) OU Alimentador (101), exibe a cor própria
-        if (activeSources.includes(nodeId) || feedersList.includes(nodeId)) {
-            if (SOURCE_COLORS[nodeId]) return SOURCE_COLORS[nodeId];
-            return `hsl(${getSafeHue(nodeId)}, 70%, ${darkMode ? 65 : 45}%)`;
+        
+        // NOVA REGRA: Se foi pego no rastreador de Loop, é Amarelo!
+        if (loopNodes.has(nodeId)) return colors.loop;
+        
+        let sourceToUse = null;
+        if (sources.includes(nodeId)) {
+            sourceToUse = nodeId;
+        } else {
+            const feeds = nodeFeeds[nodeId];
+            if (!feeds || feeds.size === 0) return colors.de;
+            sourceToUse = Array.from(feeds)[0];
         }
         
-        // Se for Carga comum, herda a cor da Zona (1000, 101, etc) calculada no BFS
-        const zone = nodeZones[nodeId];
+        // Puxa a cor do rastreador inteligente
+        const zone = nodeZones[nodeId] || sourceToUse;
         if (SOURCE_COLORS[zone]) return SOURCE_COLORS[zone];
-        return `hsl(${getSafeHue(zone)}, 70%, ${darkMode ? 65 : 45}%)`;
+        
+        const h = getSafeHue(zone);
+        return `hsl(${h}, 70%, ${darkMode ? 65 : 45}%)`;
     };
 
     const getEdgeColor = (branch) => {
         const colors = darkMode ? THEME.dark : THEME.light;
         if (branch.state === 0) return colors.de;
         
-        const zone = edgeZones[branch.id];
-        if (!zone) return colors.de; 
-        
         const current = lineCurrents[branch.id];
         if (!current || current.current < 0.01) return colors.de;
         if (current.percentage >= 100) return '#d50000'; 
         
-        // Mantemos a segurança extra de Loop do sistema antigo
-        const feedsFrom = nodeFeeds[branch.from] || new Set();
-        if (feedsFrom.size > 1) return colors.loop; 
+        // NOVA REGRA: Se a linha é um Loop, brilha em Amarelo!
+        if (loopEdges.has(branch.id)) return colors.loop; 
+        
+        const zone = edgeZones[branch.id];
+        if (!zone) return colors.de; 
         
         const p = Math.min((current.percentage || 0) / 100, 1.0);
         const alpha = 0.1 + (0.9 * Math.sqrt(p)); 
         
-        // Renderiza a cor da Zona para a linha!
         if (SOURCE_COLORS[zone]) {
             const rgb = hexToRgb(SOURCE_COLORS[zone]);
             return `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${alpha.toFixed(3)})`; 
         } else {
             const hue = getSafeHue(zone);
-            const l = darkMode ? 65 : 45; 
-            return `hsla(${hue}, 70%, ${l}%, ${alpha.toFixed(3)})`; 
+            return `hsla(${hue}, 70%, ${darkMode ? 65 : 45}%, ${alpha.toFixed(3)})`; 
         }
     };
     // 👆👆👆 ========================================================= 👆👆👆
@@ -584,6 +639,24 @@ function App() {
                     .paper-container { position: absolute !important; top: 0 !important; left: 0 !important; width: 100vw !important; height: 100vh !important; max-width: none !important; max-height: none !important; margin: 0 !important; border: none !important; box-shadow: none !important; aspect-ratio: auto !important; background-color: ${darkMode ? '#121212' : '#ffffff'} !important;}
                     .graph-svg { width: 100% !important; height: 100% !important; }
                 }
+
+                /* 👇 ALARME GLOW SCADA (SOMBRA FIXA) 👇 */
+                .voltage-glow-wrapper {
+                    filter: drop-shadow(0 0 8px rgba(255, 0, 0, 0.9));
+                    transition: filter 0.4s ease-in-out;
+                }
+                /* 👆 ===================================== 👆 */
+
+                /* 👇 ALARME GLOW SCADA (SOMBRA PULSANTE) 👇 COMENTADO
+                @keyframes voltage-glow {
+                    0% { filter: drop-shadow(0 0 3px rgba(255, 0, 0, 0.5)); }
+                    50% { filter: drop-shadow(0 0 12px rgba(255, 0, 0, 1)); }
+                    100% { filter: drop-shadow(0 0 3px rgba(255, 0, 0, 0.5)); }
+                }
+                .voltage-glow-wrapper {
+                    animation: voltage-glow 1.5s infinite ease-in-out;
+                }
+                 */
                 `}
             </style>
 
@@ -619,7 +692,7 @@ function App() {
                 )}
 
                 <GraphArea 
-                    printFrameMode={printFrameMode} isFaultSidebarOpen={isFaultSidebarOpen} branches={branches} allNodes={allNodes} sources={sources} showLabels={showLabels} getEdgeColor={getEdgeColor} getNodeColor={getNodeColor} toggleSwitch={toggleSwitch} toggleFault={toggleFault} setSelectedElement={setSelectedElement} selectedElement={selectedElement} hoveredLineId={hoveredLineId} setHoveredLineId={setHoveredLineId} hoveredNodeId={hoveredNodeId} setHoveredNodeId={setHoveredNodeId} maintenanceMode={maintenanceMode} activePositions={activePositions} lineCurrents={lineCurrents} nodeData={nodeData} isEditMode={isEditMode} setIsEditMode={setIsEditMode} activeWaypoints={activeWaypoints} darkMode={darkMode} onSaveLayoutToHistory={saveLayoutToHistory} loads={loads} systemLoads={systemLoads} onExportRequest={handleExportFullState} sses={SYSTEM_DATA.sses} feedersList={SYSTEM_DATA.feeders || []}
+                    printFrameMode={printFrameMode} isFaultSidebarOpen={isFaultSidebarOpen} branches={branches} allNodes={allNodes} sources={sources} showLabels={showLabels} getEdgeColor={getEdgeColor} getNodeColor={getNodeColor} toggleSwitch={toggleSwitch} toggleFault={toggleFault} setSelectedElement={setSelectedElement} selectedElement={selectedElement} hoveredLineId={hoveredLineId} setHoveredLineId={setHoveredLineId} hoveredNodeId={hoveredNodeId} setHoveredNodeId={setHoveredNodeId} maintenanceMode={maintenanceMode} activePositions={activePositions} lineCurrents={lineCurrents} nodeData={nodeData} isEditMode={isEditMode} setIsEditMode={setIsEditMode} activeWaypoints={activeWaypoints} darkMode={darkMode} onSaveLayoutToHistory={saveLayoutToHistory} loads={loads} systemLoads={systemLoads} onExportRequest={handleExportFullState} sses={SYSTEM_DATA.sses} feedersList={SYSTEM_DATA.feeders || []} handleTapChange={handleTapChange}
                 >
                     {showLegend && (
                         <div className="legend" style={{ position: 'absolute', bottom: '20px', right: '20px', zIndex: 1000, pointerEvents: 'all', background: darkMode ? '#121212' : '#ffffff', border: '1px solid #444', borderRadius: '8px', boxShadow: '0 6px 20px rgba(0,0,0,0.2)' }} onMouseDown={e=>e.stopPropagation()} onMouseUp={e=>e.stopPropagation()} onClick={e=>e.stopPropagation()} onWheel={e=>e.stopPropagation()} onDoubleClick={e=>e.stopPropagation()} >
@@ -651,7 +724,7 @@ function App() {
                 <div onClick={() => setFaultSidebarOpen(!isFaultSidebarOpen)} title={isFaultSidebarOpen ? "Ocultar Painel" : "Painel de Faltas"} style={{ position: 'absolute', left: '-28px', top: 'calc(50% - 35px)', width: '28px', height: '70px', background: darkMode ? '#1e1e1e' : '#fff', borderTop: `1px solid ${darkMode ? '#333' : '#ccc'}`, borderBottom: `1px solid ${darkMode ? '#333' : '#ccc'}`, borderLeft: `1px solid ${darkMode ? '#333' : '#ccc'}`, borderRadius: '12px 0 0 12px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', boxShadow: '-4px 0 15px rgba(0,0,0,0.1)', color: '#ff9800', zIndex: 101, transition: 'background-color 0.2s' }}> {isFaultSidebarOpen ? '▶' : '⚡'} </div>
                 <div className="panel-content">
                     <FaultPanel 
-                        isFaultSidebarOpen={isFaultSidebarOpen} setFaultSidebarOpen={setFaultSidebarOpen} sources={sources} loadNodes={loadNodes} faultNodes={faultNodes} nodeFeeds={nodeFeeds} toggleFault={toggleFault} setSelectedElement={setSelectedElement} selectedElement={displayElement} setHoveredNodeId={setHoveredNodeId} getNodeColor={getNodeColor} darkMode={darkMode} THEME={THEME} nodeData={nodeData} lineCurrents={lineCurrents} loads={loads} branches={branches} sses={SYSTEM_DATA.sses || {}} feedersList={feedersList}
+                        isFaultSidebarOpen={isFaultSidebarOpen} setFaultSidebarOpen={setFaultSidebarOpen} sources={sources} loadNodes={loadNodes} faultNodes={faultNodes} nodeFeeds={nodeFeeds} toggleFault={toggleFault} setSelectedElement={setSelectedElement} selectedElement={displayElement} setHoveredNodeId={setHoveredNodeId} getNodeColor={getNodeColor} darkMode={darkMode} THEME={THEME} nodeData={nodeData} lineCurrents={lineCurrents} loads={loads} branches={branches} sses={SYSTEM_DATA.sses || {}} feedersList={feedersList} handleTapChange={handleTapChange}
                     />
                 </div>
             </div>
