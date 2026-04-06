@@ -27,7 +27,8 @@ export default function Sidebar({
     onExportPDF = () => console.warn("Função onExportPDF não conectada!"),
     getNodeColor,
     systemSize,
-    lineCurrents
+    lineCurrents,
+    feedersList = [] // 👈 ADICIONADO AQUI
 }) {
     const fileInputRef = useRef(null);
     const [unlockFixed, setUnlockFixed] = useState(false);
@@ -86,65 +87,90 @@ export default function Sidebar({
                     </button>
                 </div>
 
-                {/* BOTÃO RELATÓRIO OCUPANDO A LARGURA TOTAL */}
                 <button className="sidebar-action-btn" style={{ '--btn-color': '#9c27b0', width: '100%', marginBottom: '-10px' }} onClick={onDownloadReport} title="Baixar Relatório TXT">
                     📄 Relatório
                 </button>
             </div>
 
             {/* LOAD DISPLAY */}
+            {/* LOAD DISPLAY */}
             <div className="load-display" style={{ marginTop: '0px'}}> 
-                {sources.map(subId => {
-                    // 👇 NOVA LÓGICA DE GERAÇÃO REAL 👇
-                    let totalP = 0;
-                    let totalQ = 0;
-                    
-                    if (lineCurrents) {
-                        branches.forEach(b => {
-                            if (b.state === 1 && lineCurrents[b.id]) {
-                                if (b.from === subId) {
-                                    totalP += lineCurrents[b.id].pFlow;
-                                    totalQ += lineCurrents[b.id].qFlow;
-                                } else if (b.to === subId) {
-                                    totalP -= lineCurrents[b.id].pFlow;
-                                    totalQ -= lineCurrents[b.id].qFlow;
-                                }
-                            }
-                        });
-                    }
-                    totalP = Math.abs(totalP);
-                    totalQ = Math.abs(totalQ);
-
-                    const vbase = SYSTEM_DATA?.Vbase || 13.8; 
-                    const S = Math.sqrt((totalP)**2 + (totalQ)**2);
-                    const I = S / (Math.sqrt(3) * vbase);
-                    const inFault = faultNodes.has(subId);
-                    
-                    const cardColor = getNodeColor ? getNodeColor(subId) : 'var(--eng-orange)';
-                    
-                    return (
-                        <div key={subId} className={`load-card lc-${subId}`} style={{ borderTop: `4px solid ${cardColor}` }}>
-                            <div className="load-card-title" style={{ color: cardColor }}>SUB {subId}</div>
-                            <span className="load-card-value">{inFault ? '—' : I.toFixed(0)} A</span>
-                            <div className="load-card-subtitle">{inFault ? '—' : totalP.toFixed(0)} kW</div>
-                            <div className="load-card-subtitle">{inFault ? '—' : (loads[subId]?.nodes || 0)} barras</div>
-                        </div>
-                    );
-                })}
                 
-                {/* --- SUBESTAÇÃO 200 (Cargas Desconectadas / Apagão) --- */}
-                {disconnectedStats && (
-                    <div key="200" className="load-card" style={{ 
-                        borderTop: '4px solid #757575', 
-                        opacity: disconnectedStats.count > 0 ? 1 : 0.4,
-                        transition: 'opacity 0.3s ease'
-                    }}>
-                        <div className="load-card-title" style={{ color: '#757575' }}>SUB (Off)</div>
-                        <span className="load-card-value">{disconnectedStats.current.toFixed(0)} A</span>
-                        <div className="load-card-subtitle">{disconnectedStats.p.toFixed(0)} kW</div>
-                        <div className="load-card-subtitle">{disconnectedStats.count} barras</div>
-                    </div>
-                )}
+                {/* FUNÇÃO GERADORA DE CARDS (Para não repetir código) */}
+                {(() => {
+                    const renderLoadCard = (subId, isFeeder) => {
+                        let totalP = 0;
+                        let totalQ = 0;
+                        
+                        if (lineCurrents) {
+                            if (!isFeeder) {
+                                branches.forEach(b => {
+                                    if (b.state === 1 && lineCurrents[b.id]) {
+                                        if (b.from === subId) { totalP += lineCurrents[b.id].pFlow; totalQ += lineCurrents[b.id].qFlow; } 
+                                        else if (b.to === subId) { totalP -= lineCurrents[b.id].pFlow; totalQ -= lineCurrents[b.id].qFlow; }
+                                    }
+                                });
+                                totalP = Math.abs(totalP);
+                                totalQ = Math.abs(totalQ);
+                            } else {
+                                let sumP = 0, sumQ = 0;
+                                branches.forEach(b => {
+                                    if (b.state === 1 && lineCurrents[b.id]) {
+                                        if (b.from === subId || b.to === subId) {
+                                            sumP += Math.abs(lineCurrents[b.id].pFlow);
+                                            sumQ += Math.abs(lineCurrents[b.id].qFlow);
+                                        }
+                                    }
+                                });
+                                totalP = sumP / 2;
+                                totalQ = sumQ / 2;
+                            }
+                        }
+
+                        const vbase = SYSTEM_DATA?.Vbase || 13.8; 
+                        const S = Math.sqrt((totalP)**2 + (totalQ)**2);
+                        const I = S / (Math.sqrt(3) * vbase);
+                        const inFault = faultNodes.has(subId);
+                        const cardColor = getNodeColor ? getNodeColor(subId) : 'var(--eng-orange)';
+                        
+                        return (
+                            <div key={subId} className={`load-card lc-${subId}`} style={{ borderTop: `4px solid ${cardColor}` }}>
+                                <div className="load-card-title" style={{ color: cardColor }}>
+                                    {isFeeder ? `ALIM. ${subId}` : `SUB ${subId}`}
+                                </div>
+                                <span className="load-card-value">{inFault ? '—' : I.toFixed(0)} A</span>
+                                <div className="load-card-subtitle">{inFault ? '—' : totalP.toFixed(0)} kW</div>
+                                <div className="load-card-subtitle">
+                                    {inFault ? '—' : (isFeeder ? 'Alimentador' : `${loads[subId]?.nodes || 0} barras`)}
+                                </div>
+                            </div>
+                        );
+                    };
+
+                    return (
+                        <>
+                            {/* 1. SUBESTAÇÕES PRINCIPAIS */}
+                            {sources.map(id => renderLoadCard(id, false))}
+
+                            {/* 2. SUBESTAÇÃO OFF (Cargas Desconectadas) */}
+                            {disconnectedStats && (
+                                <div key="200" className="load-card" style={{ 
+                                    borderTop: '4px solid #757575', 
+                                    opacity: disconnectedStats.count > 0 ? 1 : 0.4,
+                                    transition: 'opacity 0.3s ease'
+                                }}>
+                                    <div className="load-card-title" style={{ color: '#757575' }}>SUB (Off)</div>
+                                    <span className="load-card-value">{disconnectedStats.current.toFixed(0)} A</span>
+                                    <div className="load-card-subtitle">{disconnectedStats.p.toFixed(0)} kW</div>
+                                    <div className="load-card-subtitle">{disconnectedStats.count} barras</div>
+                                </div>
+                            )}
+
+                            {/* 3. ALIMENTADORES */}
+                            {feedersList.map(id => renderLoadCard(id, true))}
+                        </>
+                    );
+                })()}
             </div>
 
             {/* STATS */}
@@ -175,15 +201,13 @@ export default function Sidebar({
                         return Math.max(a.from, a.to) - Math.max(b.from, b.to);
                     };
 
-                    // Separa e ordena as duas listas
                     const switchable = branches.filter(b => b.hasSwitch).sort(sorter);
                     const fixed = branches.filter(b => !b.hasSwitch).sort(sorter);
 
-                    // Função padronizada para desenhar qualquer tipo de chave
                     const renderItem = (branch, isFixedType) => {
                         const nodeColor = getNodeColor ? getNodeColor(branch.from) : '#4caf50';
                         const isOn = branch.state === 1;
-                        const canClick = !isFixedType || unlockFixed; // Só clica se for manobrável ou se o cadeado estiver aberto
+                        const canClick = !isFixedType || unlockFixed; 
 
                         return (
                             <div key={branch.id} className="switch-item" 
@@ -195,7 +219,6 @@ export default function Sidebar({
                                     className={`switch-btn ${isOn ? 'on' : 'off'}`} 
                                     onClick={() => { if (canClick) toggleSwitch(branch.id); }}
                                     style={{
-                                        // Pinta com a cor da subestação se estiver ON e for clicável
                                         backgroundColor: canClick ? (isOn ? nodeColor : '') : 'transparent',
                                         color: canClick ? (isOn ? '#000' : '') : '#999',
                                         border: canClick ? 'none' : '1px solid #555',
@@ -211,10 +234,8 @@ export default function Sidebar({
 
                     return (
                         <>
-                            {/* 1. Lista as Chaves Normais */}
                             {switchable.map(b => renderItem(b, false))}
                             
-                            {/* 2. O Botão de Desbloqueio (só aparece se existirem trechos fixos) */}
                             {fixed.length > 0 && (
                                 <div className="switch-item" style={{ justifyContent: 'center', background: 'transparent', padding: '10px 0', borderBottom: 'none' }}>
                                     <button 
@@ -233,7 +254,6 @@ export default function Sidebar({
                                 </div>
                             )}
                             
-                            {/* 3. Lista as Chaves Fixas logo abaixo do botão */}
                             {fixed.map(b => renderItem(b, true))}
                         </>
                     );

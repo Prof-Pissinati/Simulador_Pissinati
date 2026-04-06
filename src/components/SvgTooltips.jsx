@@ -15,9 +15,10 @@ export default function SvgTooltips({
     lineCurrents,
     loads,
     systemLoads,
-    sses
+    sses,
+    feedersList = [] // 👈 ADICIONADO AQUI
 }) {
-    if (!isHoveringSVG) return null;
+    //if (!isHoveringSVG) return null;
 
     return (
         <>
@@ -64,53 +65,71 @@ export default function SvgTooltips({
                 const pos = manualPositions[localHoveredNode] || animPositions[localHoveredNode];
                 if (!pos) return null;
 
-                const isSource = sources.includes(localHoveredNode);
+                // 👇 LÓGICA DE IDENTIFICAÇÃO ATUALIZADA 👇
+                const isMainSource = sources.includes(localHoveredNode);
+                const isFeeder = feedersList.includes(localHoveredNode);
+                const isSource = isMainSource || isFeeder;
                 const hoveredLoad = systemLoads && systemLoads[localHoveredNode];
 
-                // Variáveis para a Subestação
+                // Variáveis
                 let sLimit = 1000, sApparent = 0, loadingPercent = 0;
                 let totalP = 0, totalQ = 0;
 
                 if (isSource) {
-                    // Calcula a geração real somando o fluxo das linhas (P e Q)
                     if (lineCurrents) {
-                        branches.forEach(b => {
-                            if (b.state === 1 && lineCurrents[b.id]) {
-                                if (b.from === localHoveredNode) {
-                                    totalP += lineCurrents[b.id].pFlow;
-                                    totalQ += lineCurrents[b.id].qFlow;
-                                } else if (b.to === localHoveredNode) {
-                                    totalP -= lineCurrents[b.id].pFlow;
-                                    totalQ -= lineCurrents[b.id].qFlow;
+                        if (isMainSource) {
+                            // GERAÇÃO: Saldo líquido
+                            branches.forEach(b => {
+                                if (b.state === 1 && lineCurrents[b.id]) {
+                                    if (b.from === localHoveredNode) {
+                                        totalP += lineCurrents[b.id].pFlow;
+                                        totalQ += lineCurrents[b.id].qFlow;
+                                    } else if (b.to === localHoveredNode) {
+                                        totalP -= lineCurrents[b.id].pFlow;
+                                        totalQ -= lineCurrents[b.id].qFlow;
+                                    }
                                 }
-                            }
-                        });
+                            });
+                            totalP = Math.abs(totalP);
+                            totalQ = Math.abs(totalQ);
+                        } else if (isFeeder) {
+                            // ALIMENTADOR: Soma do módulo dividida por 2
+                            let sumP = 0, sumQ = 0;
+                            branches.forEach(b => {
+                                if (b.state === 1 && lineCurrents[b.id]) {
+                                    if (b.from === localHoveredNode || b.to === localHoveredNode) {
+                                        sumP += Math.abs(lineCurrents[b.id].pFlow);
+                                        sumQ += Math.abs(lineCurrents[b.id].qFlow);
+                                    }
+                                }
+                            });
+                            totalP = sumP / 2;
+                            totalQ = sumQ / 2;
+                        }
                     }
-                    totalP = Math.abs(totalP);
-                    totalQ = Math.abs(totalQ);
 
-                    // Puxa o limite real em kVA (SSE)
                     sLimit = sses && sses[localHoveredNode] ? sses[localHoveredNode] : 1000;
                     sApparent = Math.sqrt(Math.pow(totalP, 2) + Math.pow(totalQ, 2));
                     loadingPercent = (sApparent / sLimit) * 100;
                 }
 
-                // Ajusta a altura da caixinha: maior para Fonte, média para Carga, pequena para Nó Simples
                 const h = isSource ? 105 : (hoveredLoad ? 105 : 65);
                 const vPu = hoveredNodeInfo.v ? hoveredNodeInfo.v.toFixed(3) : '1.000';
                 const angle = hoveredNodeInfo.angle ? hoveredNodeInfo.angle.toFixed(2) : '0.00';
                 
-                // Cores dinâmicas de alerta
                 const vColor = (hoveredNodeInfo.v < 0.95 || hoveredNodeInfo.v > 1.05) ? '#ff5252' : '#fff';
                 const loadColor = loadingPercent > 100 ? '#ff0000' : (loadingPercent > 80 ? '#ff9800' : '#4caf50');
 
                 return (
                     <g transform={`translate(${pos.x + 25}, ${pos.y + 25})`} pointerEvents="none" className="svg-tooltip">
                         <rect x="0" y="0" width="160" height={h} rx="6" fill="rgba(20, 20, 20, 0.95)" stroke="#444" strokeWidth="1" />
-                        <text x="12" y="20" fill="#00bcd4" fontSize="12" fontWeight="bold" fontFamily="monospace">{isSource ? `Subestação ${localHoveredNode}` : `Barra ${localHoveredNode}`}</text>
+                        
+                        {/* Título dinâmico: SUB, ALIM ou BARRA */}
+                        <text x="12" y="20" fill={isMainSource ? '#00bcd4' : (isFeeder ? '#4caf50' : '#ff9800')} fontSize="12" fontWeight="bold" fontFamily="monospace">
+                            {isMainSource ? `Subestação ${localHoveredNode}` : (isFeeder ? `Alim. ${localHoveredNode}` : `Barra ${localHoveredNode}`)}
+                        </text>
                         <line x1="10" y1="28" x2="150" y2="28" stroke="#555" strokeWidth="1" />
                         
-                        {/* SE NÃO FOR FONTE, MOSTRA TENSÃO E ÂNGULO CLÁSSICOS */}
                         {!isSource && (
                             <>
                                 <text x="12" y="44" fill="#aaa" fontSize="11" fontFamily="monospace">Tensão:</text>
@@ -120,25 +139,22 @@ export default function SvgTooltips({
                             </>
                         )}
 
-                        {/* --- EXIBIÇÃO EXCLUSIVA PARA SUBESTAÇÕES (O QUE VOCÊ PEDIU) --- */}
                         {isSource && (
                             <>
-                                <text x="12" y="44" fill="#aaa" fontSize="11" fontFamily="monospace">Total P:</text>
+                                <text x="12" y="44" fill="#aaa" fontSize="11" fontFamily="monospace">{isFeeder ? 'Demanda P:' : 'Geração P:'}</text>
                                 <text x="148" y="44" fill="#fff" fontSize="11" fontWeight="bold" fontFamily="monospace" textAnchor="end">{totalP.toFixed(1)} kW</text>
-                                <text x="12" y="58" fill="#aaa" fontSize="11" fontFamily="monospace">Total Q:</text>
+                                <text x="12" y="58" fill="#aaa" fontSize="11" fontFamily="monospace">{isFeeder ? 'Demanda Q:' : 'Geração Q:'}</text>
                                 <text x="148" y="58" fill="#fff" fontSize="11" fontWeight="bold" fontFamily="monospace" textAnchor="end">{totalQ.toFixed(1)} kVAr</text>
 
-                                <text x="12" y="72 " fill="#aaa" fontSize="11" fontFamily="monospace">Total S:</text>
+                                <text x="12" y="72" fill="#aaa" fontSize="11" fontFamily="monospace">{isFeeder ? 'Demanda S:' : 'Geração S:'}</text>
                                 <text x="148" y="72" fill="#fff" fontSize="11" fontWeight="bold" fontFamily="monospace" textAnchor="end">{sApparent.toFixed(1)} kVA</text>
                                 
-                                {/* Barra de progresso SVG */}
                                 <rect x="12" y="82" width="136" height="12" rx="3" fill="#333" />
                                 <rect x="12" y="82" width={Math.min(136, (loadingPercent / 100) * 136)} height="12" rx="3" fill={loadColor} style={{transition: 'width 0.3s ease'}} />
                                 <text x="80" y="91" fill="#fff" fontSize="11" fontWeight="bold" fontFamily="monospace" textAnchor="middle">{loadingPercent.toFixed(1)}%</text>
                             </>
                         )}
 
-                        {/* --- EXIBIÇÃO EXCLUSIVA PARA BARRAS COM CARGA --- */}
                         {!isSource && hoveredLoad && (
                             <>
                                 <line x1="10" y1="66" x2="150" y2="66" stroke="#444" strokeWidth="1" strokeDasharray="3,3" />

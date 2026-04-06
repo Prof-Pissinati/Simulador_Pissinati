@@ -3,6 +3,7 @@ import React, { memo } from 'react';
 const GraphNode = memo(function GraphNode({
     nodeId, pos, isSource, color, isHighlighted, darkMode,
     isEditMode, isRestoringLayout, showLabels, nodeLoad,
+    hasShunt, // 👇 NOVA PROPRIEDADE ADICIONADA AQUI
     onMouseDown, onClick, onMouseEnter, onMouseLeave
 }) {
     // Cálculo dos estilos de destaque
@@ -23,8 +24,13 @@ const GraphNode = memo(function GraphNode({
            onMouseLeave={() => onMouseLeave(nodeId)}
         >
             {isSource ? (
+                /* SUBESTAÇÃO: Círculo original */
                 <circle cx="0" cy="0" r={isHighlighted ? 26 : 22} fill={color} stroke={strokeColor} strokeWidth={strokeWidth} style={{ filter: shadowFilter, transition: colorTransition }} />
+            ) : hasShunt ? (
+                /* 👇 NOVO: CAPACITOR (SHUNT): Formato de Diamante (Losango) 👇 */
+                <polygon points="0,-18 18,0 0,18 -18,0" fill={color} stroke={strokeColor} strokeWidth={strokeWidth} style={{ filter: shadowFilter, transition: colorTransition }} />
             ) : (
+                /* CARGA NORMAL: Retângulo Arredondado original */
                 <g>
                     <rect x="-20" y="-12" width="40" height="24" fill="transparent" />
                     <rect x="-14" y="-8" width="28" height="16" rx="2" fill={color} stroke={strokeColor} strokeWidth={strokeWidth} style={{ filter: shadowFilter, transition: colorTransition }} />

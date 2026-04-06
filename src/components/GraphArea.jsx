@@ -28,7 +28,7 @@ export default function GraphArea({
     selectedElement, hoveredLineId, setHoveredLineId, hoveredNodeId, setHoveredNodeId, maintenanceMode,
     activePositions = {}, activeWaypoints = {}, lineCurrents = {}, nodeData = {}, isEditMode, setIsEditMode, darkMode,
     printFrameMode, isFaultSidebarOpen, onSaveLayoutToHistory, children, onExportRequest, loads,
-    systemLoads, sses
+    systemLoads, sses, feedersList = []
 }) {
     const svgRef = useRef(null);
     const measureRef = useRef(null); 
@@ -289,6 +289,7 @@ export default function GraphArea({
     // FUNÇÕES IMUTÁVEIS (useCallback blindado, só nascem uma vez!)
     // =======================================================================
     const handleLineMouseDown = useCallback((e, branchId) => {
+        e.preventDefault();
         const ctx = contextRef.current;
         if (!ctx.isEditMode) return;
         e.stopPropagation(); wasDragged.current = false;
@@ -342,6 +343,7 @@ export default function GraphArea({
     }, [setHoveredLineId]);
 
     const handleWaypointMouseDown = useCallback((e, branchId, wpIndex, wpKey, wp) => {
+        e.preventDefault();
         const ctx = contextRef.current;
         e.stopPropagation(); wasDragged.current = false;
         if (ctx.onSaveLayoutToHistory) ctx.onSaveLayoutToHistory(ctx.getCurrentFullLayout().positions, ctx.getCurrentFullLayout().waypoints);
@@ -380,6 +382,7 @@ export default function GraphArea({
     }, []);
 
     const handleNodeMouseDown = useCallback((e, nodeId) => {
+        e.preventDefault();
         const ctx = contextRef.current;
         if (!ctx.isEditMode) return; 
         e.stopPropagation(); wasDragged.current = false;
@@ -633,7 +636,22 @@ export default function GraphArea({
             setSelectedEditNodes(newSelection); setSelectedEditWaypoints(newWpSelection);
             setSelectionBox(null); isSelecting.current = false;
         }
-        if (dragInfo) { setDragInfo(null); setTimeout(() => { wasDragged.current = false; }, 50); }
+        
+        if (dragInfo) { 
+            // 👇 SALVA A NOVA POSIÇÃO NO CÉREBRO (App.jsx) AO SOLTAR O MOUSE 👇
+            const finalLayout = getCurrentFullLayout();
+            window.dispatchEvent(new CustomEvent('applyGraphLayout', { 
+                detail: { 
+                    positions: finalLayout.positions, 
+                    waypoints: finalLayout.waypoints 
+                } 
+            }));
+            // 👆 ========================================================== 👆
+            
+            setDragInfo(null); 
+            setTimeout(() => { wasDragged.current = false; }, 50); 
+        }
+        
         isPanning.current = false;
         const isBackgroundClick = e.target.tagName === 'svg' || e.target.id === 'bg-grid-rect';
         if (isBackgroundClick && !hasMoved.current && !isEditMode) setSelectedElement(null);
@@ -755,11 +773,14 @@ export default function GraphArea({
                             const pos = manualPositions[nodeId] || renderPositions[nodeId];
                             if (!pos) return null;
                             
-                            const isSource = sources.includes(nodeId);
+                            const isSource = sources.includes(nodeId) || feedersList.includes(nodeId);
                             const color = getNodeColor(nodeId);
                             const isSelectedEdit = selectedEditNodes.has(nodeId);
                             const isHighlighted = hoveredNodeId === nodeId || localHoveredNode === nodeId || isSelectedEdit || (!isEditMode && selectedElement?.id === nodeId);
                             const nodeLoad = systemLoads && systemLoads[nodeId] ? (systemLoads[nodeId].p / 1000).toFixed(1) : null;
+
+                            // 👇 NOVA VERIFICAÇÃO MATEMÁTICA DO CAPACITOR 👇
+                            const hasShunt = SYSTEM_DATA.shunts && SYSTEM_DATA.shunts[nodeId] !== undefined && SYSTEM_DATA.shunts[nodeId] !== 0;
 
                             return (
                                 <GraphNode
@@ -774,6 +795,9 @@ export default function GraphArea({
                                     isRestoringLayout={isRestoringLayout}
                                     showLabels={showLabels}
                                     nodeLoad={nodeLoad}
+                                    
+                                    hasShunt={hasShunt} // 👈 A MÁGICA ENTRA AQUI!
+
                                     onMouseDown={handleNodeMouseDown}
                                     onClick={handleNodeClick}
                                     onMouseEnter={handleNodeMouseEnter}
@@ -802,6 +826,7 @@ export default function GraphArea({
                                 loads={loads}
                                 systemLoads={systemLoads}
                                 sses={sses}
+                                feedersList={feedersList}
                             />
                         )}
                     </g>

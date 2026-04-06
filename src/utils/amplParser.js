@@ -6,28 +6,30 @@ export function parseAMPLDat(text) {
     let parsingNodes = false;
     let parsingBranches = false;
     
-    let nHeaders = []; // Guardará os títulos das colunas das barras
-    let lHeaders = []; // Guardará os títulos das colunas das linhas
+    let nHeaders = []; 
+    let lHeaders = []; 
     
     const nodes = new Set();
     const loads = {};
     const branches = [];
-    let sources = [];
     
-    // Novas variáveis globais extraídas do dicionário
+    // Nossas Listas de Hierarquia
+    let sources = [];
+    let feeders = []; // 👈 NOVA LISTA
+    
     let baseKV = 13.8;
     let sBase = 1000;
     let sefNode = null;
-    let qbc = 0;        // Valor base do módulo de capacitor em kVAr
-    let bfSet = [];     // Guarda as seções/nós sob falta
+    let qbc = 0;        
+    let bfSet = [];     
 
-    // Novos dicionários de equipamentos
-    const shunts = {};  // Bancos de Capacitores (kVAr)
-    const dgs = {};     // Geração Distribuída
-    const oltcs = {};   // Reguladores de Tensão com Tap (OLTC)
-    const sses = {};    // Limite de Potência Aparente das Subestações (kVA)
+    const shunts = {};  
+    const dgs = {};     
+    const oltcs = {};   
+    const sses = {};    
+    const nodeTypes = {}; // 👈 NOVO DICIONÁRIO DE TIPOS UNIVERSAL
 
-    // --- PRIMEIRA PASSADA: Coleta as Variáveis Globais e Lê os Cabeçalhos ---
+    // --- PRIMEIRA PASSADA: Coleta as Variáveis Globais ---
     for (let i = 0; i < lines.length; i++) {
         let line = lines[i];
         if (line.includes('#')) line = line.split('#')[0].trim();
@@ -47,27 +49,25 @@ export function parseAMPLDat(text) {
         }
         if (line.startsWith('param Qbc')) {
             const match = line.match(/[\d.]+/);
-            if (match) qbc = parseFloat(match[0]); // Pega o tamanho do banco (ex: 300)
-        }
-        if (line.startsWith('set SR :=')) {
-            const parts = line.replace('set SR :=', '').replace(';', '').trim().split(/\s+/);
-            sources = [...new Set([...sources, ...parts.map(Number).filter(n => !isNaN(n))])];
+            if (match) qbc = parseFloat(match[0]); 
         }
         if (line.startsWith('set BF :=')) {
             const parts = line.replace('set BF :=', '').replace(';', '').trim().split(/\s+/);
             bfSet = parts.map(Number).filter(n => !isNaN(n));
         }
         
-        // LEITURA DINÂMICA DE CABEÇALHOS
-        if (line.startsWith('param: N:')) {
-            nHeaders = line.replace('param:', '').replace('N:', '').replace(':=', '').trim().split(/\s+/);
+        // 👇 O PARSER LÊ A FONTE PRINCIPAL DIRETO DO ARQUIVO 👇
+        if (line.match(/^set\s+S\s*:=/)) {
+            const parts = line.replace(/^set\s+S\s*:=/, '').replace(';', '').trim().split(/\s+/);
+            const sSet = parts.map(Number).filter(n => !isNaN(n));
+            sources = [...new Set([...sources, ...sSet])];
         }
-        if (line.startsWith('param: L:')) {
-            lHeaders = line.replace('param:', '').replace('L:', '').replace(':=', '').trim().split(/\s+/);
-        }
+        
+        if (line.startsWith('param: N:')) nHeaders = line.replace('param:', '').replace('N:', '').replace(':=', '').trim().split(/\s+/);
+        if (line.startsWith('param: L:')) lHeaders = line.replace('param:', '').replace('L:', '').replace(':=', '').trim().split(/\s+/);
     }
 
-    // --- SEGUNDA PASSADA: Leitura das Tabelas Adaptável ---
+    // --- SEGUNDA PASSADA: Leitura das Tabelas ---
     for (let i = 0; i < lines.length; i++) {
         let line = lines[i];
         if (line.includes('#')) line = line.split('#')[0].trim();
@@ -91,51 +91,40 @@ export function parseAMPLDat(text) {
                     const pd = getVal('Pd');
                     const qd = getVal('Qd');
 
-                    // ⚡ EXTRAÇÃO DOS NOVOS EQUIPAMENTOS ⚡
-                    
-                    // 1. Bancos de Capacitores (Módulos x Valor Base)
                     const nmax = getVal('nmax');
-                    if (nmax > 0 && qbc > 0) {
-                        shunts[id] = nmax * qbc; // Ex: 2 módulos de 300 = 600 kVAr
-                    }
+                    if (nmax > 0 && qbc > 0) shunts[id] = nmax * qbc; 
 
-                    // 2. Geração Distribuída
                     const pgd = getVal('Pgdini');
                     const qgd = getVal('Qgdini');
                     const sgd = getVal('Sgd');
-                    if (sgd > 0 || pgd > 0 || qgd > 0) {
-                        dgs[id] = { p: pgd, q: qgd, s: sgd };
-                    }
+                    if (sgd > 0 || pgd > 0 || qgd > 0) dgs[id] = { p: pgd, q: qgd, s: sgd };
 
-                    // 2.5 Limite da Subestação (SSE)
+                    const reg = getVal('reg_oltc');
+                    const ntap = getVal('ntap_oltc');
+                    if (ntap > 0) oltcs[id] = { reg, ntap };
+
+                    // 👇 CLASSIFICAÇÃO HIERÁRQUICA 👇
                     const sseVal = getVal('SSE');
                     if (sseVal > 0) {
                         sses[id] = sseVal;
+                        // Se tem limite SSE mas NÃO está na lista de Fontes do arquivo, é Alimentador!
+                        if (!sources.includes(id)) {
+                            if (!feeders.includes(id)) feeders.push(id);
+                        }
                     }
 
-                    // 3. Reguladores de Tensão (Tap)
-                    const reg = getVal('reg_oltc');
-                    const ntap = getVal('ntap_oltc');
-                    if (ntap > 0) {
-                        oltcs[id] = { reg, ntap };
-                    }
-
-                    // Lógica de Fontes blindada
-                    let isSource = false;
-                    const typeIdx = nHeaders.indexOf('Type');
-                    
-                    if (typeIdx !== -1) {
-                        if (parseInt(parts[typeIdx + 1]) === 1) isSource = true;
-                    } else {
-                        // Evita que barras apenas de passagem ou capacitores sejam lidas como Fonte
-                        if (pd === 0 && qd === 0 && !shunts[id] && !dgs[id]) isSource = true;
-                    }
-
-                    if (isSource) {
-                        if (!sources.includes(id)) sources.push(id);
-                    } else {
+                    if (!sources.includes(id) && !feeders.includes(id)) {
                         loads[id] = { p: pd, q: qd };
                     }
+                    
+                    // 👇 CRIANDO O DICIONÁRIO DE TIPOS PARA O FUTURO 👇
+                    if (sources.includes(id)) nodeTypes[id] = 'slack';
+                    else if (feeders.includes(id)) nodeTypes[id] = 'feeder';
+                    else if (shunts[id]) nodeTypes[id] = 'shunt';
+                    else if (dgs[id]) nodeTypes[id] = 'gd';
+                    else if (pd === 0 && qd === 0) nodeTypes[id] = 'pass-through';
+                    else nodeTypes[id] = 'load';
+
                     nodes.add(id);
                 }
             }
@@ -159,23 +148,18 @@ export function parseAMPLDat(text) {
 
                     let r = getVal('R', 0.001);
                     let x = getVal('X', 0.001);
+                    if (r === 0 && x === 0) { r = 0.0001; x = 0.0001; }
                     
-                    // TRAVA ANTI-NAN 1
-                    if (r === 0 && x === 0) {
-                        r = 0.0001;
-                        x = 0.0001;
-                    }
                     const cap = getVal('Imax', 1000);
                     const state = getVal('State', 1);
                     const sw = getVal('sw', 1) === 1;
+                    const ntap = getVal('ntap', 0);
+                    const reg = getVal('reg', 0);
 
                     branches.push({ 
                         from, to, r, x, 
-                        capacity: cap, 
-                        limit: cap, 
-                        Imax: cap, 
-                        state: state, 
-                        hasSwitch: sw 
+                        capacity: cap, limit: cap, Imax: cap, state: state, hasSwitch: sw,
+                        isRegulator: ntap > 0, maxTaps: ntap, regMax: reg, currentTap: 0 
                     });
                     nodes.add(from); nodes.add(to);
                 }
@@ -183,9 +167,13 @@ export function parseAMPLDat(text) {
         }
     }
 
-    if (sources.length === 0 && branches.length > 0) {
-        sources = [branches[0].from];
+    // Limpeza de Fictícias (Garante que a SEF 200 não suje a lista)
+    if (sefNode !== null) {
+        sources = sources.filter(id => id !== sefNode);
+        feeders = feeders.filter(id => id !== sefNode);
     }
+
+    if (sources.length === 0 && branches.length > 0) sources = [branches[0].from];
 
     const positions = {};
     const nodeArray = Array.from(nodes);
@@ -198,24 +186,16 @@ export function parseAMPLDat(text) {
 
     const finalBranches = branches.map((b, idx) => ({ ...b, id: idx }));
 
-    console.log("🛠️ Fontes detectadas:", sources);
-    console.log("⚡ Capacitores detectados:", shunts);
-    console.log("☀️ Geração Distribuída:", dgs);
+    console.log("🛠️ Fontes (Slack):", sources);
+    console.log("⚡ Alimentadores:", feeders);
+    console.log("📊 Tipos de Nós:", nodeTypes);
 
-    // Agora o JSON devolve tudo mastigado para o sistema!
     return { 
-        baseKV, 
-        sBase, 
-        sefNode, 
+        baseKV, sBase, sefNode, 
         sources, 
-        loads, 
-        shunts, // <-- NOVO
-        dgs,    // <-- NOVO
-        oltcs,  // <-- NOVO
-        bfSet,  // <-- NOVO
-        sses,
-        branches: finalBranches, 
-        faults: [], 
-        layout: { positions, waypoints: {} } 
+        feeders,     // 👈 Entregando mastigado para o App.jsx
+        nodeTypes,   // 👈 Entregando mastigado para o futuro
+        loads, shunts, dgs, oltcs, bfSet, sses,
+        branches: finalBranches, faults: [], layout: { positions, waypoints: {} } 
     };
 }
