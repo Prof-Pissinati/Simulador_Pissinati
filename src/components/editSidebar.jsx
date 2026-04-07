@@ -171,15 +171,20 @@ export default function EditSidebar({
     // ROTAÇÃO DO SISTEMA AO REDOR DO CENTROIDE
     // =========================================================
     const handleRotate = (angleDegrees) => {
-        // Verifique como as posições atuais estão sendo lidas no seu arquivo
-        // Pode ser 'nodePositions', 'positions', ou extraídas do seu 'allNodes'
-        const currentPos = currentPositions;
+        // 1. SINCRONIA: Pega a posição real e atualizada da tela (BARRAS E JOELHOS)
+        let actualLayout = { positions: currentPositions, waypoints: {} };
+        window.dispatchEvent(new CustomEvent('getLatestLayout', { 
+            detail: { callback: (layout) => { actualLayout = layout; } } 
+        }));
+
+        const currentPos = actualLayout.positions;
+        const currentWps = actualLayout.waypoints;
                
         if (!currentPos) return;
         const keys = Object.keys(currentPos);
         if (keys.length === 0) return;
 
-        // 1. Calcula o centroide
+        // 2. Calcula o centroide (eixo de rotação) baseado nas barras
         let sumX = 0, sumY = 0;
         keys.forEach(id => {
             sumX += currentPos[id].x;
@@ -192,22 +197,38 @@ export default function EditSidebar({
         const cosA = Math.cos(angleRad);
         const sinA = Math.sin(angleRad);
 
+        // 3. Rotaciona as BARRAS
         const newPos = {};
         keys.forEach(id => {
             const nx = currentPos[id].x - cx;
             const ny = currentPos[id].y - cy;
             
-            // 2. Rotaciona e translada
             newPos[id] = {
                 x: nx * cosA - ny * sinA + cx,
                 y: nx * sinA + ny * cosA + cy
             };
         });
+
+        // 4. Rotaciona os JOELHOS acompanhando o mesmo eixo
+        const newWps = {};
+        Object.keys(currentWps).forEach(branchId => {
+            newWps[branchId] = currentWps[branchId].map(wp => {
+                if (!wp) return wp;
+                const nx = wp.x - cx;
+                const ny = wp.y - cy;
+                return {
+                    x: nx * cosA - ny * sinA + cx,
+                    y: nx * sinA + ny * cosA + cy
+                };
+            });
+        });
         
-        // 3. A MÁGICA QUE FALTAVA: Dispara o seu evento customizado!
-        window.dispatchEvent(new CustomEvent('applyOrganicLayout', { detail: { positions: newPos } }));
+        // 5. Salva a foto atual no Histórico (agora com o nome correto do evento!)
+        window.dispatchEvent(new CustomEvent('saveLayoutToHistory'));
         
-        // 4. Centraliza a câmera no novo desenho rotacionado
+        // 6. A MÁGICA: Envia BARRAS e JOELHOS juntos de volta para a tela!
+        window.dispatchEvent(new CustomEvent('applyOrganicLayout', { detail: { positions: newPos, waypoints: newWps } }));
+        
         setTimeout(() => window.dispatchEvent(new CustomEvent('triggerZoomExtents')), 600);
     };
 

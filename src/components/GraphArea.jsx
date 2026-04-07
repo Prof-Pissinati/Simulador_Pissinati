@@ -56,12 +56,6 @@ export default function GraphArea({
         renderWpRef.current = renderWaypoints; // <-- NOVO
     });
 
-    // Mantém as referências sempre atualizadas para a animação ler instantaneamente
-    useEffect(() => {
-        manualPosRef.current = manualPositions;
-        renderPosRef.current = renderPositions;
-    });
-
     // =======================================================================
     // MOTOR DE ANIMAÇÃO UNIFICADO (Barras e Joelhos)
     // =======================================================================
@@ -106,13 +100,20 @@ export default function GraphArea({
                 const endWpArray = safeActiveWps[key] || [];
                 const startWpArray = startWaypoints[key] || [];
                 
-                currentWaypoints[key] = endWpArray.map((endWp, idx) => {
-                    const startWp = startWpArray[idx];
-                    if (startWp) {
-                        return { x: startWp.x + (endWp.x - startWp.x) * ease, y: startWp.y + (endWp.y - startWp.y) * ease };
-                    }
-                    return { ...endWp }; 
-                });
+                // 👇 BLINDAGEM CONTRA TELETRANSPORTE 👇
+                // Se a quantidade de joelhos mudou (criou/apagou), pula a animação!
+                if (startWpArray.length !== endWpArray.length) {
+                    currentWaypoints[key] = endWpArray.map(wp => ({ ...wp })); 
+                } else {
+                    currentWaypoints[key] = endWpArray.map((endWp, idx) => {
+                        const startWp = startWpArray[idx];
+                        if (startWp) {
+                            return { x: startWp.x + (endWp.x - startWp.x) * ease, y: startWp.y + (endWp.y - startWp.y) * ease };
+                        }
+                        return { ...endWp }; 
+                    });
+                }
+                // 👆 ================================ 👆
             }
 
             setRenderPositions(currentPositions);
@@ -255,9 +256,6 @@ export default function GraphArea({
     const hasMoved = useRef(false);
     const dragStart = useRef({ x: 0, y: 0 });
     
-    // CORREÇÃO: Variável de animação de cores restaurada!
-    const colorTransition = 'all 0.3s ease';
-
     const getRawSVGPoint = useCallback((clientX, clientY) => {
         const svg = svgRef.current;
         if (!svg) return { x: clientX, y: clientY };
@@ -281,32 +279,39 @@ export default function GraphArea({
             isEditMode, maintenanceMode, toggleSwitch, toggleFault,
             selectedEditNodes, selectedEditWaypoints,
             manualPositions, renderPositions, manualWaypoints, renderWaypoints,
-            onSaveLayoutToHistory, getCurrentFullLayout, branches, dragInfo
+            onSaveLayoutToHistory, getCurrentFullLayout, branches, dragInfo, setSelectedElement
         };
     });
 
     // =======================================================================
     // FUNÇÕES IMUTÁVEIS (useCallback blindado, só nascem uma vez!)
     // =======================================================================
+    
+    // --- CONTROLE DAS LINHAS ---
     const handleLineMouseDown = useCallback((e, branchId) => {
         e.preventDefault();
-        if (e.shiftKey) {
-            const branchClicado = branches.find(b => b.id === branchId);
-            if (branchClicado) setSelectedElement({ type: 'edge', data: branchClicado });
-            e.stopPropagation();
-            return; // Interrompe tudo, não arrasta nem manobra
-        }
         const ctx = contextRef.current;
 
-        const branchClicado = branches.find(b => b.id === branchId);
-        if (branchClicado) setSelectedElement({ type: 'edge', data: branchClicado });
+        // MODO VISUALIZAÇÃO: Shift trava no painel, sem arrastar nada
+        if (!ctx.isEditMode) {
+            if (e.shiftKey) {
+                const branch = ctx.branches.find(b => b.id === branchId);
+                if (branch) ctx.setSelectedElement({ type: 'edge', data: branch });
+                e.stopPropagation();
+            }
+            return; 
+        }
 
-        if (!ctx.isEditMode) return;
-        e.stopPropagation(); wasDragged.current = false;
+        // MODO EDIÇÃO: Atualiza o painel ao clicar, e permite arrasto/joelho
+        const branch = ctx.branches.find(b => b.id === branchId);
+        if (branch) ctx.setSelectedElement({ type: 'edge', data: branch });
+
+        e.stopPropagation(); 
+        wasDragged.current = false;
+        
         const svgPt = getTransformedPoint(e.clientX, e.clientY);
         if (ctx.onSaveLayoutToHistory) ctx.onSaveLayoutToHistory(ctx.getCurrentFullLayout().positions, ctx.getCurrentFullLayout().waypoints);
         
-        const branch = ctx.branches.find(b => b.id === branchId);
         const p1 = ctx.manualPositions[branch.from] || ctx.renderPositions[branch.from];
         const p2 = ctx.manualPositions[branch.to] || ctx.renderPositions[branch.to];
         const wps = ctx.manualWaypoints[branchId] || ctx.renderWaypoints[branchId] || [];
@@ -319,10 +324,15 @@ export default function GraphArea({
     const handleLineClick = useCallback((e, branchId) => {
         e.stopPropagation();
         const ctx = contextRef.current;
+        if (ctx.isEditMode) return;
+        
+        if (e.shiftKey) return; // Bloqueia a manobra se o Shift foi usado!
+
         const branch = ctx.branches.find(b => b.id === branchId);
-        if (!ctx.isEditMode && (branch.hasSwitch || ctx.maintenanceMode)) ctx.toggleSwitch(branchId);
+        if (branch.hasSwitch || ctx.maintenanceMode) ctx.toggleSwitch(branchId);
     }, []);
 
+    // --- CRIAR JOELHO (Duplo Clique na Linha) ---
     const handleLineDoubleClick = useCallback((e, branchId) => {
         const ctx = contextRef.current;
         if (!ctx.isEditMode) return;
@@ -337,13 +347,46 @@ export default function GraphArea({
         const waypoints = Array.isArray(wps) ? wps : [];
         
         const insertIdx = getClosestSegmentIndex(p1, p2, waypoints, svgPt);
-        setManualWaypoints(prev => {
-            const currentWps = prev[branchId] && Array.isArray(prev[branchId]) ? [...prev[branchId]] : [];
-            currentWps.splice(insertIdx, 0, { x: svgPt.x, y: svgPt.y });
-            return { ...prev, [branchId]: currentWps };
-        });
+        
+        // 1. Calcula a nova lista primeiro (FORA do setState)
+        const baseWps = ctx.manualWaypoints[branchId] ? ctx.manualWaypoints[branchId] : (ctx.renderWaypoints[branchId] || []);
+        const currentWps = Array.isArray(baseWps) ? [...baseWps] : [];
+        currentWps.splice(insertIdx, 0, { x: svgPt.x, y: svgPt.y });
+        
+        // 2. Atualiza a memória local
+        setManualWaypoints(prev => ({ ...prev, [branchId]: currentWps }));
+
+        // 3. Avisa o App.jsx (Totalmente legal no React pois está fora do prev=>)
+        const finalLayout = ctx.getCurrentFullLayout();
+        finalLayout.waypoints[branchId] = currentWps;
+        window.dispatchEvent(new CustomEvent('applyGraphLayout', { 
+            detail: { positions: finalLayout.positions, waypoints: finalLayout.waypoints } 
+        }));
     }, [getTransformedPoint]);
 
+    // --- DELETAR JOELHO (Duplo Clique no Joelho) ---
+    const handleWaypointDoubleClick = useCallback((e, branchId, wpIndex) => {
+        const ctx = contextRef.current;
+        if (!ctx.isEditMode) return;
+        if (ctx.onSaveLayoutToHistory) ctx.onSaveLayoutToHistory(ctx.getCurrentFullLayout().positions, ctx.getCurrentFullLayout().waypoints);
+        e.stopPropagation();
+
+        // 1. Calcula a nova lista primeiro (FORA do setState)
+        const baseWps = ctx.manualWaypoints[branchId] ? ctx.manualWaypoints[branchId] : (ctx.renderWaypoints[branchId] || []);
+        const currentWps = Array.isArray(baseWps) ? [...baseWps] : [];
+        currentWps.splice(wpIndex, 1);
+        
+        // 2. Atualiza a memória local
+        setManualWaypoints(prev => ({ ...prev, [branchId]: currentWps }));
+
+        // 3. Avisa o App.jsx 
+        const finalLayout = ctx.getCurrentFullLayout();
+        finalLayout.waypoints[branchId] = currentWps;
+        window.dispatchEvent(new CustomEvent('applyGraphLayout', { 
+            detail: { positions: finalLayout.positions, waypoints: finalLayout.waypoints } 
+        }));
+    }, []);
+    
     const handleLineMouseEnter = useCallback((branchId) => {
         setHoveredLineId(branchId); setLocalHoveredLine(branchId);
     }, [setHoveredLineId]);
@@ -351,7 +394,9 @@ export default function GraphArea({
     const handleLineMouseLeave = useCallback(() => {
         setHoveredLineId(null); setLocalHoveredLine(null);
     }, [setHoveredLineId]);
+    
 
+    // --- CONTROLE DOS JOELHOS (WAYPOINTS) ---
     const handleWaypointMouseDown = useCallback((e, branchId, wpIndex, wpKey, wp) => {
         e.preventDefault();
         const ctx = contextRef.current;
@@ -370,41 +415,47 @@ export default function GraphArea({
         
         const groupNodes = {}; 
         currentSelection.forEach(id => { const p = ctx.manualPositions[id] || ctx.renderPositions[id]; if (p) groupNodes[id] = { ...p }; });
+        
         const groupWps = {}; 
         currentWps.forEach(key => { 
             const [bId, idxStr] = key.split('-'); const idx = parseInt(idxStr); 
-            if (ctx.manualWaypoints[bId] && ctx.manualWaypoints[bId][idx]) groupWps[key] = { ...ctx.manualWaypoints[bId][idx] }; 
+            let baseWps = ctx.manualWaypoints[bId];
+            if (!baseWps || baseWps.length === 0) baseWps = ctx.renderWaypoints[bId];
+            if (baseWps && baseWps[idx]) groupWps[key] = { ...baseWps[idx] }; 
         });
         
         setDragInfo({ type: 'mixed', leaderType: 'waypoint', leaderId: wpKey, initialX: wp.x, initialY: wp.y, startX: svgPt.x, startY: svgPt.y, groupNodes, groupWps });
     }, [getTransformedPoint]);
 
-    const handleWaypointDoubleClick = useCallback((e, branchId, wpIndex) => {
-        const ctx = contextRef.current;
-        if (!ctx.isEditMode) return;
-        if (ctx.onSaveLayoutToHistory) ctx.onSaveLayoutToHistory(ctx.getCurrentFullLayout().positions, ctx.getCurrentFullLayout().waypoints);
-        e.stopPropagation();
-        setManualWaypoints(prev => {
-            const currentWps = prev[branchId] && Array.isArray(prev[branchId]) ? [...prev[branchId]] : [];
-            currentWps.splice(wpIndex, 1);
-            return { ...prev, [branchId]: currentWps };
-        });
-    }, []);
-
+    // --- CONTROLE DAS BARRAS ---
     const handleNodeMouseDown = useCallback((e, nodeId) => {
         e.preventDefault();
         const ctx = contextRef.current;
-        if (!ctx.isEditMode) return; 
-        e.stopPropagation(); wasDragged.current = false;
+
+        // MODO VISUALIZAÇÃO: Shift trava no painel
+        if (!ctx.isEditMode) {
+            if (e.shiftKey) {
+                ctx.setSelectedElement({ type: 'node', id: nodeId });
+                e.stopPropagation();
+            }
+            return; 
+        }
+
+        // MODO EDIÇÃO: Começa o arrasto e usa o Shift para SELEÇÃO MÚLTIPLA
+        e.stopPropagation(); 
+        wasDragged.current = false;
         if (ctx.onSaveLayoutToHistory) ctx.onSaveLayoutToHistory(ctx.getCurrentFullLayout().positions, ctx.getCurrentFullLayout().waypoints);
+        
         const svgPt = getTransformedPoint(e.clientX, e.clientY);
         
         let currentSelection = new Set(ctx.selectedEditNodes);
         let currentWps = new Set(ctx.selectedEditWaypoints);
+        
         if (!currentSelection.has(nodeId)) {
             if (!e.shiftKey) { currentSelection.clear(); currentWps.clear(); }
             currentSelection.add(nodeId);
-            setSelectedEditNodes(currentSelection); setSelectedEditWaypoints(currentWps);
+            setSelectedEditNodes(currentSelection); 
+            setSelectedEditWaypoints(currentWps);
         }
         
         const groupNodes = {}; 
@@ -412,16 +463,22 @@ export default function GraphArea({
         const groupWps = {}; 
         currentWps.forEach(key => { 
             const [bId, idxStr] = key.split('-'); const idx = parseInt(idxStr); 
-            if (ctx.manualWaypoints[bId] && ctx.manualWaypoints[bId][idx]) groupWps[key] = { ...ctx.manualWaypoints[bId][idx] }; 
+            let baseWps = ctx.manualWaypoints[bId];
+            if (!baseWps || baseWps.length === 0) baseWps = ctx.renderWaypoints[bId];
+            if (baseWps && baseWps[idx]) groupWps[key] = { ...baseWps[idx] }; 
         });
         
         setDragInfo({ type: 'mixed', leaderType: 'node', leaderId: nodeId, startX: svgPt.x, startY: svgPt.y, groupNodes, groupWps });
     }, [getTransformedPoint]);
 
     const handleNodeClick = useCallback((e, nodeId) => {
-        const ctx = contextRef.current;
         e.stopPropagation(); 
-        if (!ctx.isEditMode && !wasDragged.current) ctx.toggleFault(nodeId);
+        const ctx = contextRef.current;
+        if (ctx.isEditMode || wasDragged.current) return;
+        
+        if (e.shiftKey) return; // Bloqueia criar falta se o Shift foi usado!
+
+        ctx.toggleFault(nodeId);
     }, []);
 
     const handleNodeMouseEnter = useCallback((nodeId) => {
@@ -433,6 +490,7 @@ export default function GraphArea({
         const ctx = contextRef.current;
         if(!ctx.dragInfo) { setHoveredNodeId(null); setLocalHoveredNode(null); }
     }, [setHoveredNodeId]);
+
     // =======================================================================
 
     const isPaper = printFrameMode !== 'none';
@@ -593,9 +651,18 @@ export default function GraphArea({
                         Object.keys(dragInfo.groupWps).forEach(key => {
                             const [bId, idxStr] = key.split('-');
                             const idx = parseInt(idxStr);
-                            if (nextWps[bId] && nextWps[bId][idx]) {
+                            
+                            // 👇 BLINDAGEM MÁXIMA: Garante que a memória nunca fique vazia 👇
+                            if (!nextWps[bId] || nextWps[bId].length === 0) {
+                                const ctx = contextRef.current;
+                                nextWps[bId] = ctx.renderWaypoints[bId] ? JSON.parse(JSON.stringify(ctx.renderWaypoints[bId])) : [];
+                            }
+                            
+                            // SEM A TRAVA DE ÍNDICE: Atualiza a posição custe o que custar!
+                            if (nextWps[bId]) {
                                 nextWps[bId][idx] = { x: dragInfo.groupWps[key].x + actualDx, y: dragInfo.groupWps[key].y + actualDy };
                             }
+                            // 👆 ============================================================ 👆
                         });
                         return nextWps;
                     });
@@ -604,7 +671,9 @@ export default function GraphArea({
                 if (Math.abs(rawDx) > 5 || Math.abs(rawDy) > 5) {
                     wasDragged.current = true;
                     setManualWaypoints(prev => {
-                        const currentWps = prev[dragInfo.branchId] && Array.isArray(prev[dragInfo.branchId]) ? [...prev[dragInfo.branchId]] : [];
+                        const ctx = contextRef.current;
+                        const baseWps = prev[dragInfo.branchId] ? prev[dragInfo.branchId] : (ctx.renderWaypoints[dragInfo.branchId] || []);
+                        const currentWps = Array.isArray(baseWps) ? [...baseWps] : [];
                         currentWps.splice(dragInfo.insertIdx, 0, { x: dragInfo.startX, y: dragInfo.startY });
                         return { ...prev, [dragInfo.branchId]: currentWps };
                     });
@@ -635,8 +704,9 @@ export default function GraphArea({
                 if (!pos) return;
                 if (pos && pos.x >= minX && pos.x <= maxX && pos.y >= minY && pos.y <= maxY) newSelection.add(id);
             });
-            Object.keys(manualWaypoints).forEach(branchId => {
-                const wps = manualWaypoints[branchId];
+            const allWpKeysSelection = new Set([...Object.keys(manualWaypoints), ...Object.keys(renderWaypoints)]);
+            allWpKeysSelection.forEach(branchId => {
+                const wps = manualWaypoints[branchId] || renderWaypoints[branchId];
                 if (Array.isArray(wps)) {
                     wps.forEach((wp, index) => {
                         if (wp && wp.x >= minX && wp.x <= maxX && wp.y >= minY && wp.y <= maxY) newWpSelection.add(`${branchId}-${index}`);
@@ -803,8 +873,7 @@ export default function GraphArea({
                                     key={`wrapper-${nodeId}`} 
                                     className={hasViolation ? "voltage-glow-wrapper" : ""}
                                 >
-                                    {/* (O <circle> vermelho exagerado foi apagado!) */}
-
+                                   
                                     <GraphNode
                                         key={nodeId}
                                         nodeId={nodeId}

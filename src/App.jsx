@@ -52,10 +52,12 @@ function App() {
 
     const [projectPositions, setProjectPositions] = useState(SYSTEM_DATA.positionsProject || {});
     const [projectWaypoints, setProjectWaypoints] = useState(SYSTEM_DATA.waypointsProject || {});
+    const [organicWaypoints, setOrganicWaypoints] = useState({});
+
     const [systemLoads, setSystemLoads] = useState(SYSTEM_DATA.loads);
 
     const activePositions = useMemo(() => layoutMode === 'project' ? projectPositions : (organicPositions || projectPositions), [layoutMode, projectPositions, organicPositions]);
-    const activeWaypoints = useMemo(() => layoutMode === 'project' ? projectWaypoints : {}, [layoutMode, projectWaypoints]);
+    const activeWaypoints = useMemo(() => layoutMode === 'project' ? projectWaypoints : (organicWaypoints || projectWaypoints), [layoutMode, projectWaypoints, organicWaypoints]);
     
     const [printFrameMode, setPrintFrameMode] = useState('none'); 
     const [showShortcuts, setShowShortcuts] = useState(false);
@@ -101,6 +103,8 @@ function App() {
         const lastState = layoutHistory[layoutHistory.length - 1];
         if (layoutMode === 'organic') {
             setOrganicPositions(lastState.positions);
+            // 👇 CORREÇÃO: Ensinando o Undo a resgatar os joelhos orgânicos! 👇
+            if (lastState.waypoints) setOrganicWaypoints(lastState.waypoints); 
         } else {
             setProjectPositions(lastState.positions);
             setProjectWaypoints(lastState.waypoints);
@@ -507,7 +511,13 @@ function App() {
                     setProjectPositions(layoutData.positions);
                 }
             }
-            if (layoutData.waypoints) setProjectWaypoints(layoutData.waypoints);
+            if (layoutData.waypoints) {
+                if (layoutMode === 'organic') {
+                    setOrganicWaypoints(layoutData.waypoints);
+                } else {
+                    setProjectWaypoints(layoutData.waypoints);
+                }
+            }
         };
         
         window.addEventListener('applyGraphLayout', handleApplyFullState);
@@ -517,7 +527,14 @@ function App() {
     }, [layoutMode]);
 
     useEffect(() => {
-        const handleApplyOrganic = (e) => { setOrganicPositions(e.detail.positions); setLayoutMode('organic'); };
+        const handleApplyOrganic = (e) => { 
+            setOrganicPositions(e.detail.positions); 
+            // 👇 A MÁGICA: Agora o App.jsx memoriza os joelhos na rotação! 👇
+            if (e.detail.waypoints) {
+                setOrganicWaypoints(e.detail.waypoints);
+            }
+            setLayoutMode('organic'); 
+        };
         window.addEventListener('applyOrganicLayout', handleApplyOrganic);
         return () => window.removeEventListener('applyOrganicLayout', handleApplyOrganic);
     }, []);
@@ -663,10 +680,48 @@ function App() {
             <div className="hide-on-print" style={{ borderRight: '1px solid #333', zIndex: 100 }}>
                 {!isEditMode ? (
                     <Sidebar 
-                        sidebarMode={sidebarMode} darkMode={darkMode} setDarkMode={setDarkMode} resetSystem={resetSystem} maintenanceMode={maintenanceMode} setMaintenanceMode={setMaintenanceMode} showLabels={showLabels} setShowLabels={setShowLabels} selectedElement={displayElement} sources={sources} loads={loads} faultNodes={faultNodes} branches={branches} toggleSwitch={toggleSwitch} setSelectedElement={setSelectedElement} setHoveredLineId={setHoveredLineId} onDownloadReport={handleDownloadReport} onUploadSwitches={handleUploadSwitches} calcMethod={calcMethod} setCalcMethod={setCalcMethod} onExportSVG={handleExportSVG} onExportPDF={handleExportPDF} getNodeColor={getNodeColor} getEdgeColor={getEdgeColor} systemSize={Math.max(0, allNodes.length)} disconnectedStats={disconnectedStats} lineCurrents={lineCurrents} feedersList={SYSTEM_DATA.feeders || []}
+                        sidebarMode={sidebarMode} 
+                        darkMode={darkMode} 
+                        setDarkMode={setDarkMode} 
+                        resetSystem={resetSystem} 
+                        maintenanceMode={maintenanceMode} 
+                        setMaintenanceMode={setMaintenanceMode} 
+                        showLabels={showLabels} 
+                        setShowLabels={setShowLabels} 
+                        selectedElement={displayElement} 
+                        sources={sources} 
+                        loads={loads} 
+                        faultNodes={faultNodes} 
+                        branches={branches} 
+                        toggleSwitch={toggleSwitch} 
+                        setSelectedElement={setSelectedElement} 
+                        setHoveredLineId={setHoveredLineId} 
+                        onDownloadReport={handleDownloadReport} 
+                        onUploadSwitches={handleUploadSwitches} 
+                        calcMethod={calcMethod} 
+                        setCalcMethod={setCalcMethod} 
+                        onExportSVG={handleExportSVG} 
+                        onExportPDF={handleExportPDF} 
+                        getNodeColor={getNodeColor} 
+                        getEdgeColor={getEdgeColor} 
+                        systemSize={Math.max(0, allNodes.length)} 
+                        disconnectedStats={disconnectedStats} 
+                        lineCurrents={lineCurrents} 
+                        feedersList={SYSTEM_DATA.feeders || []}
                     />
                 ) : (
-                    <EditSidebar isEditMode={isEditMode} setIsEditMode={setIsEditMode} darkMode={darkMode} onUndo={handleUndoLayout} canUndo={layoutHistory.length > 0} onReset={handleResetToOriginalLayout} branches={branches} allNodes={allNodes} sources={sources} currentPositions={activePositions}/>
+                    <EditSidebar 
+                        isEditMode={isEditMode} 
+                        setIsEditMode={setIsEditMode} 
+                        darkMode={darkMode} 
+                        onUndo={handleUndoLayout} 
+                        canUndo={layoutHistory.length > 0} 
+                        onReset={handleResetToOriginalLayout} 
+                        branches={branches} 
+                        allNodes={allNodes} 
+                        sources={sources} 
+                        currentPositions={activePositions}
+                    />
                 )}
             </div>
 
@@ -692,7 +747,34 @@ function App() {
                 )}
 
                 <GraphArea 
-                    printFrameMode={printFrameMode} isFaultSidebarOpen={isFaultSidebarOpen} branches={branches} allNodes={allNodes} sources={sources} showLabels={showLabels} getEdgeColor={getEdgeColor} getNodeColor={getNodeColor} toggleSwitch={toggleSwitch} toggleFault={toggleFault} setSelectedElement={setSelectedElement} selectedElement={selectedElement} hoveredLineId={hoveredLineId} setHoveredLineId={setHoveredLineId} hoveredNodeId={hoveredNodeId} setHoveredNodeId={setHoveredNodeId} maintenanceMode={maintenanceMode} activePositions={activePositions} lineCurrents={lineCurrents} nodeData={nodeData} isEditMode={isEditMode} setIsEditMode={setIsEditMode} activeWaypoints={activeWaypoints} darkMode={darkMode} onSaveLayoutToHistory={saveLayoutToHistory} loads={loads} systemLoads={systemLoads} onExportRequest={handleExportFullState} sses={SYSTEM_DATA.sses} feedersList={SYSTEM_DATA.feeders || []} handleTapChange={handleTapChange}
+                    printFrameMode={printFrameMode} 
+                    isFaultSidebarOpen={isFaultSidebarOpen} 
+                    branches={branches} allNodes={allNodes} 
+                    sources={sources} showLabels={showLabels} 
+                    getEdgeColor={getEdgeColor} 
+                    getNodeColor={getNodeColor} 
+                    toggleSwitch={toggleSwitch} 
+                    toggleFault={toggleFault} 
+                    setSelectedElement={setSelectedElement} 
+                    selectedElement={selectedElement} 
+                    hoveredLineId={hoveredLineId} 
+                    setHoveredLineId={setHoveredLineId} 
+                    hoveredNodeId={hoveredNodeId} 
+                    setHoveredNodeId={setHoveredNodeId} 
+                    maintenanceMode={maintenanceMode} 
+                    activePositions={activePositions} 
+                    activeWaypoints={activeWaypoints} 
+                    lineCurrents={lineCurrents} 
+                    nodeData={nodeData} 
+                    isEditMode={isEditMode} 
+                    setIsEditMode={setIsEditMode} 
+                    darkMode={darkMode} 
+                    onSaveLayoutToHistory={saveLayoutToHistory} 
+                    loads={loads} systemLoads={systemLoads} 
+                    onExportRequest={handleExportFullState} 
+                    sses={SYSTEM_DATA.sses} 
+                    feedersList={SYSTEM_DATA.feeders || []} 
+                    handleTapChange={handleTapChange}
                 >
                     {showLegend && (
                         <div className="legend" style={{ position: 'absolute', bottom: '20px', right: '20px', zIndex: 1000, pointerEvents: 'all', background: darkMode ? '#121212' : '#ffffff', border: '1px solid #444', borderRadius: '8px', boxShadow: '0 6px 20px rgba(0,0,0,0.2)' }} onMouseDown={e=>e.stopPropagation()} onMouseUp={e=>e.stopPropagation()} onClick={e=>e.stopPropagation()} onWheel={e=>e.stopPropagation()} onDoubleClick={e=>e.stopPropagation()} >
