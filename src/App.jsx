@@ -340,8 +340,14 @@ function App() {
         showToast('Relatório baixado!', 'success');
     };
 
-    const handleExportSVG = () => { exportSVG('sistema-eletrico-svg', 'diagrama_sistema.svg'); showToast('Diagrama vetorizado baixado!', 'success'); };
-    const handleExportPDF = () => { setSelectedElement(null); setTimeout(() => window.print(), 100); };
+    const handleExportSVG = () => { 
+        exportSVG('sistema-eletrico-svg', 'diagrama_sistema.svg', calcMethod, sources, feedersList, darkMode); 
+        showToast('Diagrama vetorizado baixado!', 'success'); 
+    };
+    
+    const handleExportPDF = () => { 
+        setSelectedElement(null); setTimeout(() => window.print(), 100); 
+    };
 
     useShortcuts({ 
         setShowShortcuts, setPrintFrameMode, setDarkMode, setShowLabels, 

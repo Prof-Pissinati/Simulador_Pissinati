@@ -1,11 +1,9 @@
-//import { SYSTEM_DATA } from '../data/systemData';
 import { solveLinearSystem } from './mathSolver';
 
 // --- GERENCIADOR DE CACHE ---
 export const CacheManager = {
     cache: new Map(),
     getKey: (branches, faultNodes, method) => {
-        // 👇 MUDANÇA: Agora o cache também olha para o currentTap! 👇
         const branchState = branches.map(b => `${b.id}:${b.state}:${b.currentTap || 0}`).join('|');
         const faultState = Array.from(faultNodes).sort().join(',');
         return `${method}-${branchState}-${faultState}`;
@@ -22,7 +20,6 @@ export const CacheManager = {
 
 // --- FUNÇÃO PRINCIPAL DE FLUXO DE POTÊNCIA ---
 export function runPowerFlow(branches, faultNodes, method = 'NR', sysData){
-
     CacheManager.cache.clear();
 
     const { sources = [], loads = {}, Vbase = 13.8, Sbase = 1000, shunts = {} } = sysData || {};
@@ -32,7 +29,6 @@ export function runPowerFlow(branches, faultNodes, method = 'NR', sysData){
         return buildResult([], [], [], 1, branches, new Map(), new Set(), sysData);
     }
 
-    // 2. PROCESSADOR TOPOLÓGICO (Filtro BFS Original e Correto)
     const energizedNodes = new Set();
     const adj = {};
     
@@ -66,7 +62,6 @@ export function runPowerFlow(branches, faultNodes, method = 'NR', sysData){
         }
     }
 
-    // 3. PREPARAÇÃO DO SISTEMA LINEAR (Apenas ilha energizada)
     const nodes = Array.from(energizedNodes).sort((a,b) => a-b);
     const n = nodes.length;
     
@@ -94,16 +89,14 @@ export function runPowerFlow(branches, faultNodes, method = 'NR', sysData){
         const g = r_pu / mag2;
         const b_line = -x_pu / mag2; 
         
-        // 👇 MÁGICA 1: CÁLCULO DO TAP (Relação de Transformação 'a') 👇
+        // CÁLCULO DO TAP (Relação de Transformação 'a')
         let a = 1.0;
         if (branch.isRegulator && branch.maxTaps > 0) {
-            // Se o arquivo informa regMax = 10, é 10%. Transformamos em 0.1 pu.
             const regMaxPu = branch.regMax > 1 ? branch.regMax / 100 : (branch.regMax || 0.1); 
             a = 1.0 + (branch.currentTap * (regMaxPu / branch.maxTaps));
         }
         const a2 = a * a;
         
-        // Aplicação do Modelo Pi Equivalente com Tap
         G[u][v] -= g / a; 
         B[u][v] -= b_line / a;
         G[v][u] -= g / a; 
@@ -115,16 +108,14 @@ export function runPowerFlow(branches, faultNodes, method = 'NR', sysData){
         B[v][v] += b_line;
     });
 
-    // 👇 MÁGICA 2: INJEÇÃO DOS BANCOS DE CAPACITORES (SHUNTS) 👇
+    // INJEÇÃO DOS BANCOS DE CAPACITORES (SHUNTS)
     nodes.forEach((id, i) => {
         if (shunts[id]) {
-            // Capacitores injetam reativos, logo aumentam a Susceptância positiva na diagonal
             const b_shunt_pu = shunts[id] / Sbase;
             B[i][i] += b_shunt_pu;
         }
     });
 
-    // 4. INICIALIZAÇÃO (Flat Start)
     let V = Array(n).fill(1.0);
     let Theta = Array(n).fill(0.0);
     const P_spec = Array(n).fill(0);
@@ -295,7 +286,6 @@ function solveNewtonRaphson(n, busType, P_spec, Q_spec, G, B, V, Theta) {
     }
 }
 
-// --- CONSTRUTOR DE RESULTADOS ---
 function buildResult(nodes, V, Theta, Zbase, branches, nodeMap, energizedNodes, sysData) {
     const { Sbase = 1000, Vbase = 13.8 } = sysData || {}; 
     const nodeResults = {};
@@ -327,7 +317,6 @@ function buildResult(nodes, V, Theta, Zbase, branches, nodeMap, energizedNodes, 
         const g = r_pu / mag2; 
         const bb = -x_pu / mag2;
 
-        // 👇 CÁLCULO DO FLUXO DE LINHA CONSIDERANDO O TAP 👇
         let a = 1.0;
         if (b.isRegulator && b.maxTaps > 0) {
             const regMaxPu = b.regMax > 1 ? b.regMax / 100 : (b.regMax || 0.1); 
@@ -337,7 +326,6 @@ function buildResult(nodes, V, Theta, Zbase, branches, nodeMap, energizedNodes, 
 
         const ang = Theta[u] - Theta[v];
         
-        // Fórmulas de potência ativas e reativas com o modelo Pi-Equivalente do Transformador
         const p_pu = (V[u]**2 * g / a2) - (V[u] * V[v] * (g * Math.cos(ang) + bb * Math.sin(ang)) / a);
         const q_pu = -(V[u]**2 * bb / a2) - (V[u] * V[v] * (g * Math.sin(ang) - bb * Math.cos(ang)) / a);
         
@@ -354,10 +342,7 @@ function buildResult(nodes, V, Theta, Zbase, branches, nodeMap, energizedNodes, 
     return { nodes: nodeResults, lines: lineResults };
 }
 
-// --- FUNÇÕES DE PROPAGAÇÃO VISUAL (BLINDADAS) ---
-
 export function propagateFeeds(branches, faultNodes, sysData) {
-    // 1. Extrai do sysData com segurança
     const { sources = [] } = sysData || {}; 
     const nodes = new Set();
     
@@ -403,7 +388,6 @@ export function propagateFeeds(branches, faultNodes, sysData) {
 
 export function calculateLoads(nodeFeeds, faultNodes, sysData) {
     const subs = {};
-    // 2. Extrai fontes e cargas do sysData
     const { sources = [], loads = {} } = sysData || {};
     
     sources.forEach(s => {
@@ -416,7 +400,7 @@ export function calculateLoads(nodeFeeds, faultNodes, sysData) {
             const feeds = nodeFeeds[id];
             if(feeds && feeds.size >= 1) {
                 const s = Array.from(feeds)[0];
-                const l = loads[id]; // 3. Usa o load real que veio do arquivo
+                const l = loads[id]; 
                 if(l && subs[s]) {
                     subs[s].p += l.p;
                     subs[s].q += l.q;

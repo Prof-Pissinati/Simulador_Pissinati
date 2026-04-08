@@ -85,19 +85,16 @@ export function parseAMPLDat(text) {
                 const from = parseInt(parts[0]); const to = parseInt(parts[1]);
                 if (!isNaN(from) && !isNaN(to) && from !== sefNode && to !== sefNode) {
                     
-                    // 👇 1. A FUNÇÃO ORIGINAL VOLTOU (Para ler R, X, Imax exatos) 👇
                     const getVal = (col, fallback) => {
                         const idx = lHeaders.indexOf(col);
                         return idx !== -1 ? (isNaN(parseFloat(parts[idx + 2])) ? fallback : parseFloat(parts[idx + 2])) : fallback;
                     };
 
-                    // 👇 2. A FUNÇÃO INTELIGENTE (Para achar Taps maiúsculos/minúsculos) 👇
                     const getValMatch = (subStr, fallback) => {
                         const idx = lHeaders.findIndex(h => h.toLowerCase().includes(subStr.toLowerCase()));
                         return idx !== -1 && !isNaN(parseFloat(parts[idx + 2])) ? parseFloat(parts[idx + 2]) : fallback;
                     };
 
-                    // Agora o getVal existe e não vai dar erro!
                     let r = getVal('R', 0.001); 
                     let x = getVal('X', 0.001);
                     if (r === 0 && x === 0) { r = 0.0001; x = 0.0001; }
@@ -106,23 +103,16 @@ export function parseAMPLDat(text) {
                     const state = getVal('State', 1); 
                     const sw = getVal('sw', 1) === 1;
 
-                    // 👇 MÁGICA AQUI: Busca Dupla de TAP (Linha e Barra) 👇
-                    
-                    // 1. Tenta achar o Tap escrito na tabela de Linhas
+                    // Busca Dupla de TAP
                     const lineNtap = getValMatch('tap', 0);
                     const lineReg = getValMatch('reg', 0);
-
-                    // 2. Olha na nossa memória de Barras se o nó de origem ou destino possui OLTC
                     const nodeOltc = oltcs[from] || oltcs[to]; 
 
-                    // 3. Define o valor final: Se a linha tem Tap, usa ela. Se não, herda da Barra!
                     const finalNtap = lineNtap > 0 ? lineNtap : (nodeOltc ? nodeOltc.ntap : 0);
                     const finalReg = lineReg > 0 ? lineReg : (nodeOltc ? nodeOltc.reg : 0);
 
                     branches.push({
                         from, to, r, x, capacity: cap, limit: cap, Imax: cap, state: state, hasSwitch: sw,
-                        
-                        // Agora sim, a linha sabe que é um regulador!
                         isRegulator: finalNtap > 0, 
                         maxTaps: finalNtap, 
                         regMax: finalReg, 
@@ -142,21 +132,6 @@ export function parseAMPLDat(text) {
         const row = Math.floor(index / cols); const col = index % cols;
         positions[node] = { x: col * 120, y: row * 120 };
     });
-
-    const finalBranches = branches.map((b, idx) => ({ ...b, id: idx }));
-
-    // 👇 INÍCIO DO NOSSO ESPIÃO (DEBUG) 👇
-    console.log("=== 🕵️ DEBUG DO PARSER ===");
-    console.log("1. Cabeçalhos lidos na Tabela de BARRAS (N):", nHeaders);
-    console.log("2. Cabeçalhos lidos na Tabela de LINHAS (L):", lHeaders);
-    
-    // Vamos caçar especificamente a linha 1000-1010 para ver como ela foi lida
-    const transformador = finalBranches.find(b => 
-        (b.from === 1000 && b.to === 1010) || (b.from === 1010 && b.to === 1000)
-    );
-    console.log("3. Dados brutos do Transformador (1000-1010):", transformador);
-    console.log("===============================");
-    // 👆 FIM DO ESPIÃO 👆
 
     return {
         baseKV, sBase, sefNode, sources, feeders, nodeTypes, loads, shunts, dgs, oltcs, bfSet, sses,

@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { calculateForceLayout, calculateHierarchicalLayout, calculateRadialLayout, calculateStarburstLayout, calculateOrthogonalLayout } from '../utils/autoLayout';
+import { calculateForceLayout, calculateHierarchicalLayout, calculateRadialLayout, calculateStarburstLayout, calculateOrthogonalLayout, calculateVNSLayout } from '../utils/autoLayout';
 
 export default function EditSidebar({
     isEditMode,
@@ -21,6 +21,11 @@ export default function EditSidebar({
     const [radialStep, setRadialStep] = useState(50);
     const fileInputRef = useRef(null);
     const [openWeight, setOpenWeight] = useState(65); // Começa com 65% de força
+    // Estado do VNS
+    const [vnsRunning, setVnsRunning]     = useState(false);
+    const [vnsProgress, setVnsProgress]   = useState(null); // {iter, cost, crossings}
+    const [vnsGridSize, setVnsGridSize]   = useState(100);
+    const [vnsMaxIter,  setVnsMaxIter]    = useState(120);
     const [usePhysics, setUsePhysics] = useState(false); // Checkbox para alinhar sem usar o D3
 
     const handleApplyGenerator = () => {
@@ -98,6 +103,45 @@ export default function EditSidebar({
 
         // 4. APLICAÇÃO
         window.dispatchEvent(new CustomEvent('applyOrganicLayout', { detail: { positions: newPos } }));
+    };
+
+    /** Executa o VNS em um Web Worker simulado via setTimeout para não travar a UI */
+    const handleApplyVNS = () => {
+        if (vnsRunning) return;
+
+        let actualLayout = { positions: currentPositions, waypoints: {} };
+        window.dispatchEvent(new CustomEvent('getLatestLayout', {
+            detail: { callback: (layout) => { actualLayout = layout; } }
+        }));
+        window.dispatchEvent(new CustomEvent('saveToHistory', { detail: actualLayout }));
+
+        setVnsRunning(true);
+        setVnsProgress({ iter: 0, cost: '...', crossings: '...' });
+
+        // setTimeout devolve o controle para o React renderizar o estado de loading
+        // antes de iniciar o cálculo pesado (single-threaded JS)
+        setTimeout(() => {
+            try {
+                const result = calculateVNSLayout(
+                    allNodes,
+                    branches,
+                    sources,
+                    {
+                        gridSize:   vnsGridSize,
+                        maxIter:    vnsMaxIter,
+                        currentPos: actualLayout.positions,
+                        onProgress: (iter, cost, crossings) => {
+                            setVnsProgress({ iter, cost: cost.toFixed(0), crossings });
+                        },
+                    }
+                );
+                window.dispatchEvent(new CustomEvent('applyOrganicLayout', {
+                    detail: { positions: result }
+                }));
+            } finally {
+                setVnsRunning(false);
+            }
+        }, 30);
         setTimeout(() => window.dispatchEvent(new CustomEvent('triggerZoomExtents')), 600);
     };
 
@@ -293,6 +337,7 @@ export default function EditSidebar({
                         <option value="starburst">Estelar (Dagre Rotacionado)</option>
                         <option value="radial">Radial (Anéis Concêntricos)</option>
                         <option value="orthogonal">Ortogonal (Malha / Grid)</option>
+                        <option value="vns">VNS — Minimização de Cruzamentos</option>
                     </select>
 
                     {/* Parâmetros Dinâmicos baseados na escolha */}
@@ -371,9 +416,44 @@ export default function EditSidebar({
                         </div>
                     )}
 
+                    {/* Painel de parâmetros VNS */}
+                    {algoMode === 'vns' && (
+                        <div style={{ fontSize: '12px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                            <label>Tamanho da célula (grid): {vnsGridSize}px
+                                <input type="range" min="60" max="200" step="10" value={vnsGridSize}
+                                    onChange={e => setVnsGridSize(Number(e.target.value))} style={{width:'100%'}}/>
+                            </label>
+                            <label>Iterações VNS: {vnsMaxIter}
+                                <input type="range" min="20" max="300" step="10" value={vnsMaxIter}
+                                    onChange={e => setVnsMaxIter(Number(e.target.value))} style={{width:'100%'}}/>
+                            </label>
+                            <div style={{ fontSize: '11px', color: '#aaa', lineHeight: 1.5 }}>
+                                FO = 1000 × cruzamentos + 1 × dist. média vizinhos<br/>
+                                4 vizinhanças: swap aleatório · move livre · troca pior nó · embaralha subgrafo
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Botão VNS com feedback de progresso */}
+                    {algoMode === 'vns' ? (
+                        <button
+                            onClick={handleApplyVNS}
+                            disabled={vnsRunning}
+                            style={{ width: '100%', padding: '8px', marginTop: '12px',
+                                     background: vnsRunning ? '#555' : '#7c4dff',
+                                     color: '#fff', border: 'none', borderRadius: '4px',
+                                     fontWeight: 'bold', cursor: vnsRunning ? 'wait' : 'pointer',
+                                     transition: 'background 0.2s' }}
+                        >
+                            {vnsRunning
+                                ? `⏳ Iter ${vnsProgress?.iter ?? 0} | ✂️ ${vnsProgress?.crossings ?? '?'} cruzamentos`
+                                : '🧬 Executar VNS'}
+                        </button>
+                    ) : (
                     <button onClick={handleApplyGenerator} style={{ width: '100%', padding: '8px', marginTop: '12px', background: '#00bcd4', color: '#000', border: 'none', borderRadius: '4px', fontWeight: 'bold', cursor: 'pointer' }}>
                         Aplicar Layout
                     </button>
+                    )}
                 </div>
                 
                 <div style={{ background: darkMode ? 'rgba(0,0,0,0.2)' : 'rgba(255,255,255,0.4)', border: `1px solid ${darkMode ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.05)'}`, borderRadius: '10px', padding: '15px', marginTop: '20px' }}>
