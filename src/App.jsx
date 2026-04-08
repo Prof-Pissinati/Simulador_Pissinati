@@ -8,24 +8,11 @@ import GraphArea from './components/GraphArea';
 import EditSidebar from './components/EditSidebar'; 
 import { exportSVG } from './utils/exportUtils';
 import './index.css';
-import { parseAMPLDat } from './utils/amplParser';
+import { useFileImport } from './hooks/useFileImport';
 import { calculateForceLayout } from './utils/autoLayout';
 import { useShortcuts } from './hooks/useShortcuts';
+import { useColorIntelligence, getBaseColor } from './hooks/useColorIntelligence';
 
-// 👇 ADICIONEI A COR DA SUBESTAÇÃO 1000 AQUI (Vermelho Intenso) 👇
-const SOURCE_COLORS = { 1000: '#00bcd4', 101: '#2e7d32', 102: '#e65100', 104: '#7b1fa2', 1: '#2962ff' };
-
-const hexToRgb = (hex) => {
-        const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
-    return result ? { r: parseInt(result[1], 16), g: parseInt(result[2], 16), b: parseInt(result[3], 16) } : { r: 128, g: 128, b: 128 };
-};
-
-const getSafeHue = (id) => {
-    let h = (id * 137) % 360;
-    // Se a cor cair no vermelho/laranja escuro (0-25 ou 335-360), joga para o Azul/Verde
-    if (h < 25 || h > 335) h = (h + 45) % 360; 
-    return h;
-};
 
 function App() {
     const [activeSources, setActiveSources] = useState([101, 102, 104]);
@@ -142,89 +129,6 @@ function App() {
     const nodeFeeds = useMemo(() => propagateFeeds(branches, faultNodes, sysData), [branches, faultNodes, sysData]);
     const loads = useMemo(() => calculateLoads(nodeFeeds, faultNodes, sysData), [nodeFeeds, faultNodes, sysData]);
     
-    // 👇👇👇 A NOVA INTELIGÊNCIA DE PROPAGAÇÃO DE CORES DA ENGENHARIA 👇👇👇
-    // 👇 NOVO CÉREBRO VISUAL DE CORES E LOOPS 👇
-    const { nodeZones, edgeZones, loopNodes, loopEdges, feedersList } = useMemo(() => {
-        const feeders = SYSTEM_DATA.feeders || [];
-        const mainSources = activeSources; 
-        
-        const nZ = {}; const eZ = {};
-        const loopN = new Set(); const loopE = new Set();
-        
-        // As raízes de cor são a 1000 e os alimentadores.
-        const colorRoots = [...mainSources, ...feeders];
-        const tracker = {}; 
-        
-        let queue = [...colorRoots];
-        colorRoots.forEach(r => {
-            tracker[r] = new Set([r]);
-            nZ[r] = r;
-        });
-        
-        while(queue.length > 0) {
-            const curr = queue.shift();
-            
-            // O segredo do prisma: Se passou por um alimentador, a cor que propaga é SÓ a dele!
-            const zonesToPropagate = feeders.includes(curr) ? new Set([curr]) : tracker[curr];
-
-            branches.forEach(b => {
-                if (b.state === 1 && !faultNodes.has(b.from) && !faultNodes.has(b.to)) {
-                    const neighbor = (b.from === curr) ? b.to : ((b.to === curr) ? b.from : null);
-                    
-                    if (neighbor !== null) {
-                        // Não deixa a cor "subir" de volta para a subestação principal
-                        if (mainSources.includes(neighbor)) return;
-
-                        if (!tracker[neighbor]) {
-                            tracker[neighbor] = new Set(zonesToPropagate);
-                            nZ[neighbor] = Array.from(zonesToPropagate)[0];
-                            eZ[b.id] = nZ[neighbor];
-                            queue.push(neighbor);
-                        } else {
-                            let isNewConflict = false;
-                            zonesToPropagate.forEach(z => {
-                                if (!tracker[neighbor].has(z)) {
-                                    tracker[neighbor].add(z);
-                                    isNewConflict = true;
-                                }
-                            });
-                            if (isNewConflict) queue.push(neighbor);
-                        }
-                    }
-                }
-            });
-        }
-        
-        // Pós-processamento: Define quem está em Loop (Amarelo)
-        Object.keys(tracker).forEach(nStr => {
-            const node = Number(nStr);
-            // Ignora a 1000 da contagem de loop para não dar conflito na alta tensão
-            const validZones = Array.from(tracker[node]).filter(z => !mainSources.includes(z));
-            // Se o nó foi atingido por mais de um alimentador, ele fica amarelo!
-            if (validZones.length > 1) loopN.add(node);
-        });
-
-        branches.forEach(b => {
-            if (b.state === 1) {
-                // Se a linha liga dois nós em loop, ela também fica amarela
-                if (loopN.has(b.from) && loopN.has(b.to)) loopE.add(b.id);
-                else {
-                    // Se a linha for exatamente a chave divisória entre duas cores
-                    const zF = Array.from(tracker[b.from] || []).filter(z => !mainSources.includes(z));
-                    const zT = Array.from(tracker[b.to] || []).filter(z => !mainSources.includes(z));
-                    if (zF.length > 0 && zT.length > 0 && zF[0] !== zT[0]) {
-                        loopE.add(b.id);
-                        loopN.add(b.from); loopN.add(b.to);
-                    }
-                }
-            }
-        });
-
-        return { nodeZones: nZ, edgeZones: eZ, loopNodes: loopN, loopEdges: loopE, feedersList: feeders };
-    }, [branches, faultNodes, activeSources]);
-    // 👆 ======================================== 👆
-    // 👆👆👆 ========================================================== 👆👆👆
-
     const disconnectedStats = useMemo(() => {
         let totalP = 0, totalQ = 0, count = 0;
         loadNodes.forEach(nodeId => {
@@ -250,6 +154,11 @@ function App() {
     const lineCurrents = powerFlowResults.lines;
     const nodeData = powerFlowResults.nodes;
 
+    const feedersList = SYSTEM_DATA.feeders || [];
+    const { getNodeColor, getEdgeColor } = useColorIntelligence({
+        branches, faultNodes, activeSources, nodeFeeds, lineCurrents, darkMode, feedersList
+    });
+
     const displayElement = useMemo(() => {
         if (hoveredNodeId !== null) return { type: 'node', id: hoveredNodeId };
         if (hoveredLineId !== null) return { type: 'edge', data: branches.find(b => b.id === hoveredLineId) };
@@ -258,62 +167,17 @@ function App() {
 
     const showToast = (message, type = 'success') => { setToast({ message, type }); setTimeout(() => setToast(null), 3000); };
     
-    const handleUploadSwitches = (file) => {
-        const reader = new FileReader();
-        reader.onload = (e) => {
-            const content = e.target.result;
-            const lines = content.split(/\r\n|\n/);
-            const updates = new Map(); 
-            const newFaults = new Set();
-            let currentMode = null; 
-            let switchCount = 0;
-            let faultCount = 0;
-
-            lines.forEach(line => {
-                const l = line.trim();
-                if (!l) return;
-                if (/^set\s+BF\s*:=/.test(l)) {
-                    const match = l.match(/set\s+BF\s*:=\s*([\d\s]+);?/);
-                    if (match && match[1]) {
-                        const faults = match[1].trim().split(/\s+/);
-                        faults.forEach(f => {
-                            const id = parseInt(f);
-                            if (!isNaN(id)) { newFaults.add(id); faultCount++; }
-                        });
-                    }
-                    return; 
-                }
-                if (l.includes('Circuitos Ativos')) { currentMode = 1; return; }
-                if (l.includes('Circuitos Desconectados')) { currentMode = 0; return; }
-                if (l.startsWith('i') || l.startsWith('set') || isNaN(parseInt(l[0]))) return;
-                const parts = l.split(/\s+/).filter(p => p !== '');
-                if (parts.length >= 2) {
-                    const from = parseInt(parts[0]);
-                    const to = parseInt(parts[1]);
-                    if (!isNaN(from) && !isNaN(to) && currentMode !== null) {
-                        updates.set(`${from}-${to}`, currentMode);
-                        updates.set(`${to}-${from}`, currentMode);
-                        switchCount++;
-                    }
-                }
-            });
-
-            if (updates.size > 0 || faultCount > 0 || newFaults.size === 0) {
-                if (updates.size > 0) {
-                    setBranches(prev => prev.map(b => {
-                        const key = `${b.from}-${b.to}`;
-                        if (updates.has(key)) return { ...b, state: updates.get(key) };
-                        return b;
-                    }));
-                }
-                setFaultNodes(newFaults);
-                showToast(`Importado: ${switchCount} chaves, ${faultCount} faltas.`, 'success');
-            } else {
-                showToast('Arquivo lido, mas nenhum dado compatível encontrado.', 'warning');
-            }
-        };
-        reader.readAsText(file);
-    };
+    const { handleUploadSwitches, handleWelcomeFileUpload, handleDatFileUpload } = useFileImport({
+        setSystemLoads,
+        setBranches,
+        setFaultNodes,
+        setActiveSources,
+        setIsProjectLoaded,
+        setProjectPositions,
+        setProjectWaypoints,
+        showToast,
+        initialBranchesRef
+    });
 
     const toggleSwitch = (branchId) => {
         setBranches(prev => prev.map(b => b.id === branchId ? { ...b, state: b.state === 1 ? 0 : 1 } : b));
@@ -390,84 +254,6 @@ function App() {
         setFaultNodes(new Set());
         window.dispatchEvent(new CustomEvent('resetGraphLayout'));
         setIsProjectLoaded(true);
-    };
-
-    const handleWelcomeFileUpload = (e) => {
-        const file = e.target.files[0];
-        if (!file) return;
-        const reader = new FileReader();
-        reader.onload = (event) => {
-            try {
-                const data = JSON.parse(event.target.result);
-                if (data.layout || data.positions) {
-                    if (data.loads) setSystemLoads(data.loads);
-                    if (data.baseKV) SYSTEM_DATA.Vbase = data.baseKV;
-                    if (data.sBase) SYSTEM_DATA.Sbase = data.sBase;
-                    if (data.sources) SYSTEM_DATA.sources = data.sources;
-                    if (data.sses) SYSTEM_DATA.sses = data.sses;
-                    if (data.shunts) SYSTEM_DATA.shunts = data.shunts;
-
-                    if (data.branches) {
-                        setBranches(data.branches);
-                        initialBranchesRef.current = JSON.parse(JSON.stringify(data.branches));
-                    }
-                    if (data.faults) setFaultNodes(new Set(data.faults));
-
-                    setTimeout(() => { window.dispatchEvent(new CustomEvent('applyGraphLayout', { detail: data })); }, 100);
-
-                    setActiveSources(data.sources || [101, 102, 104]);
-                    setIsProjectLoaded(true);
-                    showToast("Projeto carregado com sucesso!", "success");
-                } else {
-                    alert("❌ Arquivo inválido. O arquivo não contém o formato esperado.");
-                }
-            } catch (err) {
-                alert("❌ Erro ao ler o arquivo. Certifique-se de que é um JSON válido.");
-            }
-        };
-        reader.readAsText(file);
-        e.target.value = ''; 
-    };
-
-    const handleDatFileUpload = (e) => {
-        const file = e.target.files[0];
-        if (!file) return;
-        const reader = new FileReader();
-        reader.onload = (event) => {
-            try {
-                const text = event.target.result;
-                const parsedData = parseAMPLDat(text);
-                
-                setProjectPositions(parsedData.positions || {});
-                setProjectWaypoints(parsedData.waypoints || {});
- 
-                setSystemLoads(parsedData.loads);
-                SYSTEM_DATA.Vbase = parsedData.baseKV;
-                SYSTEM_DATA.Sbase = parsedData.sBase;
-                SYSTEM_DATA.sources = parsedData.sources;
-
-                SYSTEM_DATA.feeders = parsedData.feeders || [];
-                SYSTEM_DATA.nodeTypes = parsedData.nodeTypes || {}; 
-
-                SYSTEM_DATA.sses = parsedData.sses || {};
-                SYSTEM_DATA.shunts = parsedData.shunts || {};
-
-                setActiveSources(parsedData.sources);
-                setBranches(parsedData.branches);
-                initialBranchesRef.current = JSON.parse(JSON.stringify(parsedData.branches));
-                setFaultNodes(new Set());
-                
-                setTimeout(() => { window.dispatchEvent(new CustomEvent('applyGraphLayout', { detail: parsedData })); }, 100);
-                
-                setIsProjectLoaded(true);
-                showToast("Sistema AMPL importado com sucesso!", "success");
-            } catch (err) {
-                alert("❌ Erro ao processar o ficheiro .dat.");
-                console.error(err);
-            }
-        };
-        reader.readAsText(file);
-        e.target.value = ''; 
     };
 
     const handleDownloadTemplate = () => {
@@ -556,58 +342,6 @@ function App() {
 
     const handleExportSVG = () => { exportSVG('sistema-eletrico-svg', 'diagrama_sistema.svg'); showToast('Diagrama vetorizado baixado!', 'success'); };
     const handleExportPDF = () => { setSelectedElement(null); setTimeout(() => window.print(), 100); };
-
-    // 👇👇👇 A NOVA LÓGICA DE DEFINIÇÃO DE CORES DA ENGENHARIA 👇👇👇
-   const getNodeColor = (nodeId) => {
-        const colors = darkMode ? THEME.dark : THEME.light;
-        if (faultNodes.has(nodeId)) return colors.fault;
-        
-        // NOVA REGRA: Se foi pego no rastreador de Loop, é Amarelo!
-        if (loopNodes.has(nodeId)) return colors.loop;
-        
-        let sourceToUse = null;
-        if (sources.includes(nodeId)) {
-            sourceToUse = nodeId;
-        } else {
-            const feeds = nodeFeeds[nodeId];
-            if (!feeds || feeds.size === 0) return colors.de;
-            sourceToUse = Array.from(feeds)[0];
-        }
-        
-        // Puxa a cor do rastreador inteligente
-        const zone = nodeZones[nodeId] || sourceToUse;
-        if (SOURCE_COLORS[zone]) return SOURCE_COLORS[zone];
-        
-        const h = getSafeHue(zone);
-        return `hsl(${h}, 70%, ${darkMode ? 65 : 45}%)`;
-    };
-
-    const getEdgeColor = (branch) => {
-        const colors = darkMode ? THEME.dark : THEME.light;
-        if (branch.state === 0) return colors.de;
-        
-        const current = lineCurrents[branch.id];
-        if (!current || current.current < 0.01) return colors.de;
-        if (current.percentage >= 100) return '#d50000'; 
-        
-        // NOVA REGRA: Se a linha é um Loop, brilha em Amarelo!
-        if (loopEdges.has(branch.id)) return colors.loop; 
-        
-        const zone = edgeZones[branch.id];
-        if (!zone) return colors.de; 
-        
-        const p = Math.min((current.percentage || 0) / 100, 1.0);
-        const alpha = 0.1 + (0.9 * Math.sqrt(p)); 
-        
-        if (SOURCE_COLORS[zone]) {
-            const rgb = hexToRgb(SOURCE_COLORS[zone]);
-            return `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${alpha.toFixed(3)})`; 
-        } else {
-            const hue = getSafeHue(zone);
-            return `hsla(${hue}, 70%, ${darkMode ? 65 : 45}%, ${alpha.toFixed(3)})`; 
-        }
-    };
-    // 👆👆👆 ========================================================= 👆👆👆
 
     useShortcuts({ 
         setShowShortcuts, setPrintFrameMode, setDarkMode, setShowLabels, 
@@ -788,10 +522,22 @@ function App() {
                             </div>
                             
                             {/* 1. SUBESTAÇÕES PRINCIPAIS */}
-                            {sources.map(s => (<div key={s} className="legend-item"><div className="legend-dot" style={{ background: SOURCE_COLORS[s] || `hsl(${(s * 137) % 360}, 70%, 45%)` }}></div> SUB {s}</div>))}
+                            {sources.map(s => (
+                                <div key={s} className="legend-item">
+                                    {/* 👇 Passando o array unificado para garantir a mesma cor 👇 */}
+                                    <div className="legend-dot" style={{ background: getBaseColor(s, [...sources, ...feedersList], darkMode) }}></div> 
+                                    SUB {s}
+                                </div>
+                            ))}
                             
                             {/* 2. ALIMENTADORES */}
-                            {feedersList.map(f => (<div key={f} className="legend-item"><div className="legend-dot" style={{ background: SOURCE_COLORS[f] || `hsl(${(f * 137) % 360}, 70%, 45%)` }}></div> ALIM {f}</div>))}
+                            {feedersList.map(f => (
+                                <div key={f} className="legend-item">
+                                    {/* 👇 Passando o array unificado para garantir a mesma cor 👇 */}
+                                    <div className="legend-dot" style={{ background: getBaseColor(f, [...sources, ...feedersList], darkMode) }}></div> 
+                                    ALIM {f}
+                                </div>
+                            ))}
 
                             {/* 3. OUTROS STATUS */}
                             <div className="legend-item"><div className="legend-dot" style={{ background: THEME.light.fault }}></div> Falta/Sobrecarga</div>

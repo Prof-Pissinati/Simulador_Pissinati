@@ -751,14 +751,6 @@ export default function GraphArea({
     const hoveredLineData = localHoveredLine !== null ? lineCurrents[localHoveredLine] : null;
     const hoveredNodeInfo = localHoveredNode !== null && nodeData[localHoveredNode] ? nodeData[localHoveredNode] : null;
 
-    // Bounds visíveis em coordenadas de mundo SVG (usado pelos tooltips para não sair da tela)
-    const svgWorldBounds = {
-        left:   (-transform.x) / transform.scale,
-        right:  (containerSize.w - transform.x) / transform.scale,
-        top:    (-transform.y) / transform.scale,
-        bottom: (containerSize.h - transform.y) / transform.scale,
-    };
-
     const svgCursor = isPanning.current ? 'grabbing' : (isEditMode ? 'default' : 'pointer');
     
     const paperRatio = isLandscape ? 297 / 210 : 210 / 297;
@@ -832,11 +824,6 @@ export default function GraphArea({
                             const isHovered = hoveredLineId === b.id || localHoveredLine === b.id;
                             const isSelected = selectedElement && selectedElement.type === 'edge' && selectedElement.data.id === b.id;
 
-                            // Direção de fluxo: +1 (from→to) | -1 (to→from) | 0 (sem fluxo)
-                            const lineData = lineCurrents[b.id];
-                            const flowDir = (!lineData || lineData.current < 0.01) ? 0
-                                : (lineData.pFlow >= 0 ? 1 : -1);
-
                             return (
                                 <GraphEdge 
                                     key={b.id}
@@ -849,9 +836,7 @@ export default function GraphArea({
                                     waypoints={waypoints}
                                     selectedEditWaypoints={selectedEditWaypoints}
                                     dragInfoType={dragInfo?.type}
-                                    flowDir={flowDir}
-                                    p1={p1}
-                                    p2={p2}
+                                    
                                     onLineMouseDown={handleLineMouseDown}
                                     onLineClick={handleLineClick}
                                     onLineDoubleClick={handleLineDoubleClick}
@@ -868,9 +853,7 @@ export default function GraphArea({
                             const pos = manualPositions[nodeId] || renderPositions[nodeId];
                             if (!pos) return null;
                             
-                            // isSource e isFeeder são separados para renderizar formas distintas
-                            const isSource = sources.includes(nodeId);
-                            const isFeeder = feedersList.includes(nodeId);
+                            const isSource = sources.includes(nodeId) || feedersList.includes(nodeId);
                             const color = getNodeColor(nodeId);
                             const isSelectedEdit = selectedEditNodes.has(nodeId);
                             const isHighlighted = hoveredNodeId === nodeId || localHoveredNode === nodeId || isSelectedEdit || (!isEditMode && selectedElement?.id === nodeId);
@@ -896,7 +879,6 @@ export default function GraphArea({
                                         nodeId={nodeId}
                                         pos={pos}
                                         isSource={isSource}
-                                        isFeeder={isFeeder}
                                         color={color}
                                         isHighlighted={isHighlighted}
                                         darkMode={darkMode}
@@ -935,7 +917,6 @@ export default function GraphArea({
                                 systemLoads={systemLoads}
                                 sses={sses}
                                 feedersList={feedersList}
-                                svgWorldBounds={svgWorldBounds}
                             />
                         )}
                     </g>
