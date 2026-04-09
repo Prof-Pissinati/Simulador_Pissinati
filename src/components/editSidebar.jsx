@@ -1,5 +1,10 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { calculateForceLayout, calculateHierarchicalLayout, calculateRadialLayout, calculateStarburstLayout, calculateOrthogonalLayout, calculateVNSLayout } from '../utils/autoLayout';
+import { 
+    calculateForceLayout, 
+    calculateOrthogonalLayout, 
+    calculateVNSLayout,
+    calculateAStarRouting
+} from '../utils/autoLayout';
 
 export default function EditSidebar({
     isEditMode,
@@ -7,106 +12,88 @@ export default function EditSidebar({
     darkMode,
     onUndo = () => {},
     canUndo = false,
-    onReset = () => {},
     branches, allNodes, sources, currentPositions
 }) {
 
     const [algoMode, setAlgoMode] = useState('force');
     const [forceDist, setForceDist] = useState(10);
-    const [forceCharge, setForceCharge] = useState(40); // Mostraremos positivo na UI e passaremos negativo pro D3
-    const [hierDir, setHierDir] = useState('LR');
-    const [hierRanker, setHierRanker] = useState('network-simplex');
-    const [hierRankSep, setHierRankSep] = useState(50);
-    const [hierNodeSep, setHierNodeSep] = useState(60);
+    const [forceCharge, setForceCharge] = useState(40); 
     const [radialStep, setRadialStep] = useState(50);
+    const [openWeight, setOpenWeight] = useState(65); 
     const fileInputRef = useRef(null);
-    const [openWeight, setOpenWeight] = useState(65); // Começa com 65% de força
-    // Estado do VNS
+    
+    // Estado do VNS e dos Novos Algoritmos
     const [vnsRunning, setVnsRunning]     = useState(false);
-    const [vnsProgress, setVnsProgress]   = useState(null); // {iter, cost, crossings}
+    const [vnsProgress, setVnsProgress]   = useState(null); 
     const [vnsGridSize, setVnsGridSize]   = useState(100);
-    const [vnsMaxIter,  setVnsMaxIter]    = useState(120);
-    const [usePhysics, setUsePhysics] = useState(false); // Checkbox para alinhar sem usar o D3
+    const [vnsMaxIter,  setVnsMaxIter]    = useState(30);
+    const [usePhysics, setUsePhysics]     = useState(false); 
 
-    const handleApplyGenerator = () => {
+    // Adicione logo abaixo dos seus useState...
+    const pendingRotationRef = useRef(0);
+    const rotationTimeoutRef = useRef(null);
+
+    const handleApplyGenerator = async () => {
         // 1. SINCRONIA: Extrai a posição real visual da tela
         let actualLayout = { positions: currentPositions, waypoints: {} };
         window.dispatchEvent(new CustomEvent('getLatestLayout', { 
             detail: { callback: (layout) => { actualLayout = layout; } } 
         }));
 
-        // 2. HISTÓRICO: Salva essa posição real no botão Voltar ANTES de bagunçar tudo
+        // 2. HISTÓRICO: Salva essa posição real no botão Voltar
         window.dispatchEvent(new CustomEvent('saveToHistory', { detail: actualLayout }));
 
         let actualPositions = actualLayout.positions;
         let newPos = {};
+        let newWps = null; // Preparado para receber os waypoints do A*
 
         // 3. GERAÇÃO
-        if (algoMode === 'force') newPos = calculateForceLayout(allNodes, branches, sources, { distance: forceDist, charge: -forceCharge, openWeight: openWeight / 100, currentPos: actualPositions });
-        if (algoMode === 'hier') newPos = calculateHierarchicalLayout(allNodes, branches, sources, { rankdir: hierDir, ranker: hierRanker, ranksep: hierRankSep, nodesep: hierNodeSep });
-        if (algoMode === 'radial') newPos = calculateRadialLayout(allNodes, branches, sources, { radius: radialStep });
-        if (algoMode === 'starburst') newPos = calculateStarburstLayout(allNodes, branches, sources, { ranksep: hierRankSep, nodesep: hierNodeSep });
+        if (algoMode === 'force') {
+            newPos = calculateForceLayout(allNodes, branches, sources, { distance: forceDist, charge: -forceCharge, openWeight: openWeight / 100, currentPos: actualPositions });
+        }
         
         if (algoMode === 'orthogonal') {
-            if (!usePhysics && actualPositions) {
-                const occupied = new Set();
-                const nodeIds = Object.keys(actualPositions);
-                
-                // 1. Calcula o "Centro de Gravidade" (Centroide) de todas as barras
-                let cx = 0, cy = 0;
-                nodeIds.forEach(id => {
-                    cx += actualPositions[id].x;
-                    cy += actualPositions[id].y;
-                });
-                cx /= nodeIds.length || 1;
-                cy /= nodeIds.length || 1;
-
-                // 2. Ordena a fila: Quem está mais perto do centro escolhe a vaga primeiro!
-                const sortedIds = nodeIds.sort((a, b) => {
-                    const distA = Math.pow(actualPositions[a].x - cx, 2) + Math.pow(actualPositions[a].y - cy, 2);
-                    const distB = Math.pow(actualPositions[b].x - cx, 2) + Math.pow(actualPositions[b].y - cy, 2);
-                    return distA - distB; // Ordem crescente de distância
-                });
-
-                // 3. Aplica a grade respeitando a nova fila VIP
-                sortedIds.forEach(id => {
-                    let baseX = Math.round(actualPositions[id].x / radialStep) * radialStep;
-                    let baseY = Math.round(actualPositions[id].y / radialStep) * radialStep;
-                    
-                    // ALGORITMO ANTI-COLISÃO (Busca em Espiral)
-                    let ring = 0;
-                    let found = false;
-                    while (!found) {
-                        for (let dx = -ring; dx <= ring && !found; dx++) {
-                            for (let dy = -ring; dy <= ring && !found; dy++) {
-                                if (Math.abs(dx) === ring || Math.abs(dy) === ring) {
-                                    let checkX = baseX + (dx * radialStep);
-                                    let checkY = baseY + (dy * radialStep);
-                                    let key = `${checkX},${checkY}`;
-                                    
-                                    if (!occupied.has(key)) {
-                                        occupied.add(key);
-                                        newPos[id] = { x: checkX, y: checkY };
-                                        found = true;
-                                    }
-                                }
-                            }
-                        }
-                        ring++;
-                    }
-                });
+            if (usePhysics) {
+                newPos = await calculateForceLayout(allNodes, branches, sources, { distance: forceDist, charge: -forceCharge, openWeight: openWeight / 100, currentPos: actualPositions });
             } else {
-                // Motor D3 com Física Ativada
-                newPos = calculateOrthogonalLayout(allNodes, branches, sources, { gridSize: radialStep, charge: -forceCharge, distance: forceDist, openWeight: openWeight / 100, currentPos: actualPositions });
+                newPos = await calculateOrthogonalLayout(allNodes, branches, sources, { gridSize: radialStep, currentPos: actualPositions });
             }
         }
 
+        // ==========================================
+        // OS 3 NOVOS ALGORITMOS (ESPAÇO RESERVADO)
+        // ==========================================
+        if (algoMode === 'astar') {
+            // O A* vai criar joelhos (waypoints) e não mover barras!
+            newWps = calculateAStarRouting(allNodes, branches, actualPositions, { gridSize: radialStep });
+            newPos = actualPositions; // Mantém as barras onde estão
+        }
+
+        if (algoMode === 'tsm') {
+            newPos = calculateTSMLayout(allNodes, branches, sources, { gridSize: radialStep, currentPos: actualPositions });
+        }
+
+        if (algoMode === 'symmetry') {
+            newPos = calculateSymmetryLayout(allNodes, branches, sources, { gridSize: radialStep, currentPos: actualPositions });
+        }
+
+        if (algoMode === 'balloon') {
+            newPos = calculateInflateDeflateLayout(allNodes, branches, sources, { gridSize: radialStep, currentPos: actualPositions });
+        }
+
         // 4. APLICAÇÃO
-        window.dispatchEvent(new CustomEvent('applyOrganicLayout', { detail: { positions: newPos } }));
+        // Se o algoritmo gerou waypoints (como o A* fará), envia junto!
+        if (newWps) {
+            // Se o A* gerou as quinas, envia positions E waypoints!
+            window.dispatchEvent(new CustomEvent('applyOrganicLayout', { detail: { positions: newPos, waypoints: newWps } }));
+        } else {
+            // Se for os outros algoritmos, envia só positions
+            window.dispatchEvent(new CustomEvent('applyOrganicLayout', { detail: { positions: newPos } }));
+        }
     };
 
-    /** Executa o VNS em um Web Worker simulado via setTimeout para não travar a UI */
-    const handleApplyVNS = () => {
+    /** Executa algoritmos pesados (como o VNS) sem travar a UI */
+    const handleApplyVNS = async () => {
         if (vnsRunning) return;
 
         let actualLayout = { positions: currentPositions, waypoints: {} };
@@ -118,42 +105,34 @@ export default function EditSidebar({
         setVnsRunning(true);
         setVnsProgress({ iter: 0, cost: '...', crossings: '...' });
 
-        // setTimeout devolve o controle para o React renderizar o estado de loading
-        // antes de iniciar o cálculo pesado (single-threaded JS)
-        setTimeout(() => {
-            try {
-                const result = calculateVNSLayout(
-                    allNodes,
-                    branches,
-                    sources,
-                    {
-                        gridSize:   vnsGridSize,
-                        maxIter:    vnsMaxIter,
-                        currentPos: actualLayout.positions,
-                        onProgress: (iter, cost, crossings) => {
-                            setVnsProgress({ iter, cost: cost.toFixed(0), crossings });
-                        },
-                    }
-                );
-                window.dispatchEvent(new CustomEvent('applyOrganicLayout', {
-                    detail: { positions: result }
-                }));
-            } finally {
-                setVnsRunning(false);
-            }
-        }, 30);
-        setTimeout(() => window.dispatchEvent(new CustomEvent('triggerZoomExtents')), 600);
+        try {
+            const resultPos = await calculateVNSLayout( // <-- Adicione await!
+                allNodes, branches, sources,
+                {
+                    gridSize: vnsGridSize,
+                    maxIter: vnsMaxIter,
+                    currentPos: actualLayout.positions,
+                    onProgress: (iter, cost, crossings) => {
+                        setVnsProgress({ iter, cost: cost, crossings });
+                    },
+                }
+            );
+            
+            window.dispatchEvent(new CustomEvent('applyOrganicLayout', {
+                detail: { positions: resultPos, waypoints: {} }
+            }));
+            window.dispatchEvent(new CustomEvent('triggerZoomExtents'));
+        } finally {
+            setVnsRunning(false);
+        }
     };
 
+    // --- Atalhos e Rotação continuam intactos abaixo ---
     useEffect(() => {
-        const handleRotateShortcut = (e) => {
-            const angle = e.detail; // Recebe o -10 ou 10 que o App.jsx enviou
-            handleRotate(angle);
-        };
-
+        const handleRotateShortcut = (e) => handleRotate(e.detail);
         window.addEventListener('triggerRotate', handleRotateShortcut);
         return () => window.removeEventListener('triggerRotate', handleRotateShortcut);
-    }, [currentPositions]); // A dependência garante que a rotação use as posições mais recentes!
+    }, [currentPositions]);
 
     const handleFileUpload = (e) => {
         const file = e.target.files[0];
@@ -162,121 +141,83 @@ export default function EditSidebar({
         reader.onload = (event) => {
             try {
                 const data = JSON.parse(event.target.result);
-                // Verifica se é o formato antigo (positions direto) ou o novo projeto completo (layout)
                 if (data.positions || data.layout) {
                     window.dispatchEvent(new CustomEvent('applyGraphLayout', { detail: data }));
                     alert("✅ Projeto importado com sucesso!");
                 } else {
-                    alert("❌ Arquivo inválido. O arquivo não contém informações de layout.");
+                    alert("❌ Arquivo inválido.");
                 }
             } catch (err) {
-                alert("❌ Erro ao ler o arquivo. Certifique-se de que é um JSON válido.");
+                alert("❌ Erro ao ler o arquivo JSON.");
             }
         };
         reader.readAsText(file);
         e.target.value = ''; 
     };
 
-    const glassContainerStyle = {
-        background: darkMode ? 'rgba(30, 30, 30, 0.65)' : 'rgba(255, 255, 255, 0.85)',
-        backdropFilter: 'blur(15px)', WebkitBackdropFilter: 'blur(15px)',
-        borderLeft: `1px solid ${darkMode ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.1)'}`,
-        display: 'flex', flexDirection: 'column', width: '230px', height: '100%', boxSizing: 'border-box', overflow: 'hidden',
-        boxShadow: darkMode ? '-5px 0 20px rgba(0,0,0,0.4)' : '-5px 0 15px rgba(0,0,0,0.05)', transition: 'background 0.3s, border 0.3s'
-    };
-
-    const ghostBtnOrangeStyle = {
-        background: 'transparent', border: '1.5px solid #ff9800', color: '#ff9800', borderRadius: '8px',
-        fontWeight: 'bold', fontSize: '13px', padding: '10px 4px', cursor: 'pointer', display: 'flex',
-        alignItems: 'center', justifyContent: 'center', gap: '6px', transition: 'all 0.2s ease-in-out', width: '100%', marginBottom: '10px'
-    };
-
-    const shortcutBadgeStyle = {
-        display: 'inline-block', background: darkMode ? 'rgba(255,152,0,0.2)' : '#FFE0B2',
-        color: darkMode ? '#ffb74d' : '#E65100', borderRadius: '5px', padding: '2px 6px',
-        fontWeight: 'bold', fontFamily: 'monospace', fontSize: '11px', margin: '0 2px'
-    };
-
-    const shortcuts = [
-        { keys: ['P'], desc: 'Alternar Tela Cheia/Folha A4' },
-        { keys: ['Ctrl', 'P'], desc: 'Imprimir PDF' },
-        { keys: ['E'], desc: 'Entrar/Sair da Edição' },
-        { keys: ['Z'], desc: 'Centralizar Sistema' },
-        { keys: ['Ctrl', 'Z'], desc: 'Desfazer' },
-        { keys: ['D'], desc: 'Alternar Tema Escuro' },
-        { keys: ['L'], desc: 'Mostrar/Ocultar Labels' },
-        { keys: ['Shift', 'Arrastar'], desc: 'Seleção Múltipla' },
-        { keys: ['M'], desc: 'Mudar Método de Cálculo' },
-        { keys: ['R'], desc: 'Redefinir Sistema' },
-        { keys: ['H'], desc: 'Mostrar Atalhos' }
-    ];
-
-    // =========================================================
-    // ROTAÇÃO DO SISTEMA AO REDOR DO CENTROIDE
-    // =========================================================
     const handleRotate = (angleDegrees) => {
-        // 1. SINCRONIA: Pega a posição real e atualizada da tela (BARRAS E JOELHOS)
+        // 1. Soma o ângulo atual ao acumulador (ex: 10 + 10 + 10 = 30)
+        pendingRotationRef.current += angleDegrees;
+
+        // 2. Cancela o cronômetro anterior se o usuário clicou de novo rápido
+        if (rotationTimeoutRef.current) {
+            clearTimeout(rotationTimeoutRef.current);
+        }
+
+        // 3. Define um novo cronômetro de 250 milissegundos
+        rotationTimeoutRef.current = setTimeout(() => {
+            const totalAngle = pendingRotationRef.current;
+            pendingRotationRef.current = 0; // Zera o acumulador para a próxima rajada de cliques
+            
+            if (totalAngle !== 0) {
+                executeRotation(totalAngle);
+            }
+        }, 250); // Tempo de espera para saber se você parou de clicar
+    };
+
+    const executeRotation = (angleDegrees) => {
         let actualLayout = { positions: currentPositions, waypoints: {} };
-        window.dispatchEvent(new CustomEvent('getLatestLayout', { 
-            detail: { callback: (layout) => { actualLayout = layout; } } 
-        }));
+        window.dispatchEvent(new CustomEvent('getLatestLayout', { detail: { callback: (layout) => { actualLayout = layout; } } }));
 
         const currentPos = actualLayout.positions;
         const currentWps = actualLayout.waypoints;
-               
-        if (!currentPos) return;
-        const keys = Object.keys(currentPos);
-        if (keys.length === 0) return;
+        if (!currentPos || Object.keys(currentPos).length === 0) return;
 
-        // 2. Calcula o centroide (eixo de rotação) baseado nas barras
         let sumX = 0, sumY = 0;
-        keys.forEach(id => {
-            sumX += currentPos[id].x;
-            sumY += currentPos[id].y;
-        });
-        const cx = sumX / keys.length;
-        const cy = sumY / keys.length;
+        const keys = Object.keys(currentPos);
+        keys.forEach(id => { sumX += currentPos[id].x; sumY += currentPos[id].y; });
+        const cx = sumX / keys.length; const cy = sumY / keys.length;
 
         const angleRad = angleDegrees * (Math.PI / 180);
-        const cosA = Math.cos(angleRad);
-        const sinA = Math.sin(angleRad);
+        const cosA = Math.cos(angleRad); const sinA = Math.sin(angleRad);
 
-        // 3. Rotaciona as BARRAS
         const newPos = {};
         keys.forEach(id => {
-            const nx = currentPos[id].x - cx;
-            const ny = currentPos[id].y - cy;
-            
-            newPos[id] = {
-                x: nx * cosA - ny * sinA + cx,
-                y: nx * sinA + ny * cosA + cy
-            };
+            const nx = currentPos[id].x - cx; const ny = currentPos[id].y - cy;
+            newPos[id] = { x: nx * cosA - ny * sinA + cx, y: nx * sinA + ny * cosA + cy };
         });
 
-        // 4. Rotaciona os JOELHOS acompanhando o mesmo eixo
         const newWps = {};
         Object.keys(currentWps).forEach(branchId => {
             newWps[branchId] = currentWps[branchId].map(wp => {
                 if (!wp) return wp;
-                const nx = wp.x - cx;
-                const ny = wp.y - cy;
-                return {
-                    x: nx * cosA - ny * sinA + cx,
-                    y: nx * sinA + ny * cosA + cy
-                };
+                const nx = wp.x - cx; const ny = wp.y - cy;
+                return { x: nx * cosA - ny * sinA + cx, y: nx * sinA + ny * cosA + cy };
             });
         });
         
-        // 5. Salva a foto atual no Histórico (agora com o nome correto do evento!)
         window.dispatchEvent(new CustomEvent('saveLayoutToHistory'));
-        
-        // 6. A MÁGICA: Envia BARRAS e JOELHOS juntos de volta para a tela!
         window.dispatchEvent(new CustomEvent('applyOrganicLayout', { detail: { positions: newPos, waypoints: newWps } }));
-        
         setTimeout(() => window.dispatchEvent(new CustomEvent('triggerZoomExtents')), 600);
     };
-
+    
     if (!isEditMode) return null;
+
+    // --- ESTILOS NATIVOS ---
+    const glassContainerStyle = { background: darkMode ? 'rgba(30, 30, 30, 0.65)' : 'rgba(255, 255, 255, 0.85)', backdropFilter: 'blur(15px)', WebkitBackdropFilter: 'blur(15px)', borderLeft: `1px solid ${darkMode ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.1)'}`, display: 'flex', flexDirection: 'column', width: '230px', height: '100%', boxSizing: 'border-box', overflow: 'hidden', boxShadow: darkMode ? '-5px 0 20px rgba(0,0,0,0.4)' : '-5px 0 15px rgba(0,0,0,0.05)', transition: 'background 0.3s, border 0.3s' };
+    const ghostBtnOrangeStyle = { background: 'transparent', border: '1.5px solid #ff9800', color: '#ff9800', borderRadius: '8px', fontWeight: 'bold', fontSize: '13px', padding: '10px 4px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', transition: 'all 0.2s ease-in-out', width: '100%', marginBottom: '10px' };
+    const shortcutBadgeStyle = { display: 'inline-block', background: darkMode ? 'rgba(255,152,0,0.2)' : '#FFE0B2', color: darkMode ? '#ffb74d' : '#E65100', borderRadius: '5px', padding: '2px 6px', fontWeight: 'bold', fontFamily: 'monospace', fontSize: '11px', margin: '0 2px' };
+    const shortcuts = [ { keys: ['P'], desc: 'Tela Cheia/A4' }, { keys: ['Ctrl', 'P'], desc: 'Imprimir PDF' }, { keys: ['E'], desc: 'Sair da Edição' }, { keys: ['Z'], desc: 'Centralizar' }, { keys: ['Ctrl', 'Z'], desc: 'Desfazer' }, { keys: ['D'], desc: 'Tema Escuro' }, { keys: ['Shift', 'Arrastar'], desc: 'Seleção Múltipla' } ];
 
     return (
         <div className="edit-sidebar" style={glassContainerStyle}>
@@ -290,7 +231,6 @@ export default function EditSidebar({
 
             <div style={{ padding: '20px', borderBottom: `1px solid ${darkMode ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.08)'}`, background: darkMode ? 'rgba(0,0,0,0.2)' : 'rgba(0,0,0,0.02)' }}>
                 <h2 style={{ color: '#ff9800', margin: 0, fontSize: '18px', display: 'flex', alignItems: 'center', gap: '8px' }}>✏️ Modo Edição</h2>
-                <div style={{ fontSize: '11px', color: darkMode ? '#888' : '#666', marginTop: '5px' }}>Arraste barras e linhas para ajustar o layout.</div>
             </div>
 
             <div style={{ padding: '15px', flex: 1, overflowY: 'auto' }}>
@@ -303,24 +243,9 @@ export default function EditSidebar({
                 <div style={{ height: '1px', background: darkMode ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.08)', margin: '15px 0' }}></div>
 
                 <button className="edit-ghost-btn" style={{...ghostBtnOrangeStyle, '--hover-color': '#ff9800'}} onClick={onUndo} disabled={!canUndo}>↩️ Desfazer Move</button>
-                {/* BOTÕES DE ROTAÇÃO MODERNOS E CORRIGIDOS */}
                 <div style={{ display: 'flex', gap: '10px', width: '100%', marginBottom: '15px' }}>
-                    <button 
-                        onClick={() => handleRotate(-10)}
-                        style={{ flex: 1, padding: '10px', border: '2px solid #00bcd4', borderRadius: '8px', cursor: 'pointer', background: 'transparent', color: '#00bcd4', fontWeight: 'bold', fontSize: '14px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', transition: 'all 0.2s ease-in-out' }}
-                        onMouseOver={e => { e.currentTarget.style.background = '#00bcd4'; e.currentTarget.style.color = '#fff'; }}
-                        onMouseOut={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = '#00bcd4'; }}
-                    >
-                        <span style={{ fontSize: '18px', pointerEvents: 'none' }}>↺</span> -10°
-                    </button>
-                    <button 
-                        onClick={() => handleRotate(10)}
-                        style={{ flex: 1, padding: '10px', border: '2px solid #00bcd4', borderRadius: '8px', cursor: 'pointer', background: 'transparent', color: '#00bcd4', fontWeight: 'bold', fontSize: '14px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', transition: 'all 0.2s ease-in-out' }}
-                        onMouseOver={e => { e.currentTarget.style.background = '#00bcd4'; e.currentTarget.style.color = '#fff'; }}
-                        onMouseOut={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = '#00bcd4'; }}
-                    >
-                        +10° <span style={{ fontSize: '18px', pointerEvents: 'none' }}>↻</span>
-                    </button>
+                    <button onClick={() => handleRotate(-10)} style={{ flex: 1, padding: '10px', border: '2px solid #00bcd4', borderRadius: '8px', cursor: 'pointer', background: 'transparent', color: '#00bcd4', fontWeight: 'bold', fontSize: '14px', transition: 'all 0.2s' }} onMouseOver={e => { e.currentTarget.style.background = '#00bcd4'; e.currentTarget.style.color = '#fff'; }} onMouseOut={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = '#00bcd4'; }}>↺ -10°</button>
+                    <button onClick={() => handleRotate(10)} style={{ flex: 1, padding: '10px', border: '2px solid #00bcd4', borderRadius: '8px', cursor: 'pointer', background: 'transparent', color: '#00bcd4', fontWeight: 'bold', fontSize: '14px', transition: 'all 0.2s' }} onMouseOver={e => { e.currentTarget.style.background = '#00bcd4'; e.currentTarget.style.color = '#fff'; }} onMouseOut={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = '#00bcd4'; }}>+10° ↻</button>
                 </div>
             
                 <div style={{ height: '1px', background: darkMode ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.08)', margin: '15px 0' }}></div>
@@ -333,14 +258,13 @@ export default function EditSidebar({
                     
                     <select value={algoMode} onChange={(e) => setAlgoMode(e.target.value)} style={{ width: '100%', padding: '8px', marginBottom: '10px', borderRadius: '4px', background: darkMode ? '#111' : '#fff', color: darkMode ? '#fff' : '#000', border: '1px solid #555' }}>
                         <option value="force">Orgânico (D3 Force)</option>
-                        <option value="hier">Hierárquico (Árvore/Dagre)</option>
-                        <option value="starburst">Estelar (Dagre Rotacionado)</option>
-                        <option value="radial">Radial (Anéis Concêntricos)</option>
-                        <option value="orthogonal">Ortogonal (Malha / Grid)</option>
-                        <option value="vns">VNS — Minimização de Cruzamentos</option>
+                        <option value="orthogonal">Ortogonal (Grid Expansion)</option>
+                        <option value="vns">Compactador VNS</option>
+                        <option disabled>──────────</option>
+                        <option value="astar">Roteamento de Cabos (A* Waypoints)</option>
                     </select>
 
-                    {/* Parâmetros Dinâmicos baseados na escolha */}
+                    {/* Controles Dinâmicos */}
                     {algoMode === 'force' && (
                         <div style={{ fontSize: '12px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
                             <label>Distância das Linhas: {forceDist}px
@@ -354,106 +278,44 @@ export default function EditSidebar({
                             </label>
                         </div>
                     )}
-                    {algoMode === 'hier' && (
-                    <div style={{ fontSize: '12px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                        <label>Direção do Fluxo:
-                            <select value={hierDir} onChange={e=>setHierDir(e.target.value)} style={{ width: '100%', padding: '4px', marginTop:'4px' }}>
-                                <option value="LR">Esquerda ➔ Direita</option>
-                                <option value="TB">Cima ➔ Baixo</option>
-                            </select>
-                        </label>
-                        <label>Algoritmo Matemático:
-                            <select value={hierRanker} onChange={e=>setHierRanker(e.target.value)} style={{ width: '100%', padding: '4px', marginTop:'4px' }}>
-                                <option value="network-simplex">Network Simplex (Clássico)</option>
-                                <option value="tight-tree">Tight Tree (Árvore Estrita)</option>
-                                <option value="longest-path">Longest Path (Caminho Longo)</option>
-                            </select>
-                        </label>
-                        <label>Afastamento de Nível: {hierRankSep}px
-                            <input type="range" min="50" max="300" value={hierRankSep} onChange={e=>setHierRankSep(Number(e.target.value))} style={{width:'100%'}}/>
-                        </label>
-                        <label>Afastamento Lateral: {hierNodeSep}px
-                            <input type="range" min="30" max="200" value={hierNodeSep} onChange={e=>setHierNodeSep(Number(e.target.value))} style={{width:'100%'}}/>
-                        </label>
-                    </div>
-                    )}
 
-                    {algoMode === 'radial' && (
-                        <div style={{ fontSize: '12px' }}>
-                            <label>Distância dos Anéis: {radialStep}px
-                                <input type="range" min="20" max="200" value={radialStep} onChange={e=>setRadialStep(Number(e.target.value))} style={{width:'100%'}}/>
-                            </label>
-                        </div>
-                    )}
-
-                    {algoMode === 'orthogonal' && (
+                    {(algoMode === 'orthogonal' || algoMode === 'tsm' || algoMode === 'symmetry' || algoMode === 'astar') && (
                         <div style={{ fontSize: '12px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                            {/* O NOVO CHECKBOX */}
-                            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', color: '#ff9800', fontWeight: 'bold' }}>
-                                <input type="checkbox" checked={usePhysics} onChange={e => setUsePhysics(e.target.checked)} />
-                                Usar repulsão física (Motor D3)
-                            </label>
+                            {algoMode === 'orthogonal' && (
+                                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', color: '#ff9800', fontWeight: 'bold' }}>
+                                    <input type="checkbox" checked={usePhysics} onChange={e => setUsePhysics(e.target.checked)} />
+                                    Usar repulsão física prévia
+                                </label>
+                            )}
 
                             <label style={{ color: '#00bcd4', fontWeight: 'bold' }}>Tamanho da Malha (Grid): {radialStep}px
                                 <input type="range" min="10" max="150" step="5" value={radialStep} onChange={e=>setRadialStep(Number(e.target.value))} style={{width:'100%'}}/>
                             </label>
-                            
-                            {/* SÓ MOSTRA OS SLIDERS DE FÍSICA SE O CHECKBOX ESTIVER MARCADO */}
-                            {usePhysics && (
-                                <>
-                                    <hr style={{ border: 'none', borderTop: `1px solid ${darkMode ? '#444' : '#ccc'}`, margin: '4px 0' }} />
-                                    <label>Distância das Linhas: {forceDist}px
-                                        <input type="range" min="1" max="250" value={forceDist} onChange={e=>setForceDist(Number(e.target.value))} style={{width:'100%'}}/>
-                                    </label>
-                                    <label>Repulsão Prévia (Ímã): {forceCharge}
-                                        <input type="range" min="5" max="300" value={forceCharge} onChange={e=>setForceCharge(Number(e.target.value))} style={{width:'100%'}}/>
-                                    </label>
-                                    <label>Força das Chaves Abertas: {openWeight}%
-                                        <input type="range" min="0" max="100" value={openWeight} onChange={e=>setOpenWeight(Number(e.target.value))} style={{width:'100%'}}/>
-                                    </label>
-                                </>
-                            )}
                         </div>
                     )}
 
-                    {/* Painel de parâmetros VNS */}
                     {algoMode === 'vns' && (
                         <div style={{ fontSize: '12px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                            <label>Tamanho da célula (grid): {vnsGridSize}px
-                                <input type="range" min="60" max="200" step="10" value={vnsGridSize}
-                                    onChange={e => setVnsGridSize(Number(e.target.value))} style={{width:'100%'}}/>
+                            <label>Tam. da célula (grid): {vnsGridSize}px
+                                <input type="range" min="40" max="200" step="10" value={vnsGridSize} onChange={e => setVnsGridSize(Number(e.target.value))} style={{width:'100%'}}/>
                             </label>
                             <label>Iterações VNS: {vnsMaxIter}
-                                <input type="range" min="20" max="300" step="10" value={vnsMaxIter}
-                                    onChange={e => setVnsMaxIter(Number(e.target.value))} style={{width:'100%'}}/>
+                                <input type="range" min="10" max="100" step="5" value={vnsMaxIter} onChange={e => setVnsMaxIter(Number(e.target.value))} style={{width:'100%'}}/>
                             </label>
-                            <div style={{ fontSize: '11px', color: '#aaa', lineHeight: 1.5 }}>
-                                FO = 1000 × cruzamentos + 1 × dist. média vizinhos<br/>
-                                4 vizinhanças: swap aleatório · move livre · troca pior nó · embaralha subgrafo
-                            </div>
                         </div>
                     )}
 
-                    {/* Botão VNS com feedback de progresso */}
+                    {/* Botões de Ação */}
                     {algoMode === 'vns' ? (
-                        <button
-                            onClick={handleApplyVNS}
-                            disabled={vnsRunning}
-                            style={{ width: '100%', padding: '8px', marginTop: '12px',
-                                     background: vnsRunning ? '#555' : '#7c4dff',
-                                     color: '#fff', border: 'none', borderRadius: '4px',
-                                     fontWeight: 'bold', cursor: vnsRunning ? 'wait' : 'pointer',
-                                     transition: 'background 0.2s' }}
-                        >
-                            {vnsRunning
-                                ? `⏳ Iter ${vnsProgress?.iter ?? 0} | ✂️ ${vnsProgress?.crossings ?? '?'} cruzamentos`
-                                : '🧬 Executar VNS'}
+                        <button onClick={handleApplyVNS} disabled={vnsRunning} style={{ width: '100%', padding: '8px', marginTop: '12px', background: vnsRunning ? '#555' : '#7c4dff', color: '#fff', border: 'none', borderRadius: '4px', fontWeight: 'bold', cursor: vnsRunning ? 'wait' : 'pointer' }}>
+                            {vnsRunning ? `⏳ Iter ${vnsProgress?.iter ?? 0} | ✂️ ${vnsProgress?.crossings ?? '?'} cruzamentos` : '🧬 Executar VNS'}
                         </button>
                     ) : (
-                    <button onClick={handleApplyGenerator} style={{ width: '100%', padding: '8px', marginTop: '12px', background: '#00bcd4', color: '#000', border: 'none', borderRadius: '4px', fontWeight: 'bold', cursor: 'pointer' }}>
-                        Aplicar Layout
-                    </button>
+                        <button onClick={handleApplyGenerator} style={{ width: '100%', padding: '8px', marginTop: '12px', background: '#00bcd4', color: '#000', border: 'none', borderRadius: '4px', fontWeight: 'bold', cursor: 'pointer' }}>
+                            Aplicar Layout
+                        </button>
                     )}
+                    
                 </div>
                 
                 <div style={{ background: darkMode ? 'rgba(0,0,0,0.2)' : 'rgba(255,255,255,0.4)', border: `1px solid ${darkMode ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.05)'}`, borderRadius: '10px', padding: '15px', marginTop: '20px' }}>
