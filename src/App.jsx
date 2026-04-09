@@ -13,6 +13,8 @@ import { calculateForceLayout } from './utils/autoLayout';
 import { useShortcuts } from './hooks/useShortcuts';
 import { useColorIntelligence, getBaseColor } from './hooks/useColorIntelligence';
 
+import { parseSequenceFile, generateSequence, buildSnapshots } from './utils/switchSequencer';
+import SequenceOverlay from './components/SequenceOverlay';
 
 function App() {
     const [activeSources, setActiveSources] = useState([101, 102, 104]);
@@ -26,6 +28,12 @@ function App() {
     })));
     
     const [faultNodes, setFaultNodes] = useState(new Set());
+    
+    const [sequenceData, setSequenceData] = useState(null);
+    const [seqOverlayOpen, setSeqOverlayOpen] = useState(false);
+    const [hoveredSeqBranch, setHoveredSeqBranch] = useState(null);
+    const [isRecordingSeq, setIsRecordingSeq] = useState(false);
+
     const [selectedElement, setSelectedElement] = useState(null);
     const [showLabels, setShowLabels] = useState(false);
     const [showLegend, setShowLegend] = useState(true); 
@@ -62,6 +70,9 @@ function App() {
     const sources = activeSources;
     const loadNodes = allNodes.filter(n => !sources.includes(n));
 
+    // 👇 IMPORTANTE: Esta lista mista blinda os barramentos para o Sequenciador 👇
+    const allBoundaryNodes = useMemo(() => [...sources, ...(SYSTEM_DATA.feeders || [])], [sources]);
+
     useEffect(() => {
         if (layoutMode === 'organic' && !organicPositions && allNodes.length > 0) {
             const newLayout = calculateForceLayout(allNodes, branches, sources, { distance: 80, charge: -400 });
@@ -90,7 +101,6 @@ function App() {
         const lastState = layoutHistory[layoutHistory.length - 1];
         if (layoutMode === 'organic') {
             setOrganicPositions(lastState.positions);
-            // 👇 CORREÇÃO: Ensinando o Undo a resgatar os joelhos orgânicos! 👇
             if (lastState.waypoints) setOrganicWaypoints(lastState.waypoints); 
         } else {
             setProjectPositions(lastState.positions);
@@ -117,6 +127,24 @@ function App() {
         }
     }, []);
 
+    // 👇 CORREÇÃO: Abre o sequenciador a partir do estado EXATO atual da tela 👇
+    const handleOpenEmptySequencer = () => {
+        if (!sequenceData) {
+            // Pega as chaves atuais (branches) e as faltas atuais (faultNodes)
+            const initialSnapshot = { 
+                branches: branches, 
+                faults: new Set(faultNodes) 
+            };
+            
+            setSequenceData({
+                steps: [],
+                snapshots: buildSnapshots(initialSnapshot, [], allBoundaryNodes, systemLoads),
+                method: 'Iniciado Manualmente'
+            });
+        }
+        setSeqOverlayOpen(true);
+    };
+
     const sysData = useMemo(() => ({
         sources: activeSources, 
         loads: systemLoads, 
@@ -124,7 +152,7 @@ function App() {
         Sbase: SYSTEM_DATA.Sbase || 1000,
         shunts: SYSTEM_DATA.shunts || {}, 
         sses: SYSTEM_DATA.sses || {}      
-    }), [activeSources, branches]);
+    }), [activeSources, branches, systemLoads]);
 
     const nodeFeeds = useMemo(() => propagateFeeds(branches, faultNodes, sysData), [branches, faultNodes, sysData]);
     const loads = useMemo(() => calculateLoads(nodeFeeds, faultNodes, sysData), [nodeFeeds, faultNodes, sysData]);
@@ -159,15 +187,20 @@ function App() {
         branches, faultNodes, activeSources, nodeFeeds, lineCurrents, darkMode, feedersList
     });
 
+    const effectiveHoveredLineId = hoveredSeqBranch !== null ? hoveredSeqBranch : hoveredLineId;
+
     const displayElement = useMemo(() => {
         if (hoveredNodeId !== null) return { type: 'node', id: hoveredNodeId };
-        if (hoveredLineId !== null) return { type: 'edge', data: branches.find(b => b.id === hoveredLineId) };
+        if (effectiveHoveredLineId !== null) return { type: 'edge', data: branches.find(b => b.id === effectiveHoveredLineId) };
+        if (selectedElement?.type === 'edge' && selectedElement.data) {
+            return { type: 'edge', data: branches.find(b => b.id === selectedElement.data.id) || selectedElement.data };
+        }
         return selectedElement;
-    }, [hoveredNodeId, hoveredLineId, selectedElement, branches]);
+    }, [hoveredNodeId, effectiveHoveredLineId, selectedElement, branches]);
 
     const showToast = (message, type = 'success') => { setToast({ message, type }); setTimeout(() => setToast(null), 3000); };
     
-    const { handleUploadSwitches, handleWelcomeFileUpload, handleDatFileUpload } = useFileImport({
+    const { handleWelcomeFileUpload, handleDatFileUpload } = useFileImport({
         setSystemLoads,
         setBranches,
         setFaultNodes,
@@ -179,7 +212,56 @@ function App() {
         initialBranchesRef
     });
 
+    const handleUploadSwitches = (file) => {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            const { updates, newFaults, providedSteps } = parseSequenceFile(e.target.result, branches);
+            if (updates.size === 0 && newFaults.size === 0 && (!providedSteps || providedSteps.length === 0)) { 
+                showToast('Arquivo lido, mas nenhum dado compatível encontrado.', 'warning'); return; 
+            }
+
+            const targetBranches = branches.map(b => {
+                const key = `${b.from}-${b.to}`;
+                return updates.has(key) ? { ...b, state: updates.get(key) } : { ...b };
+            });
+
+            const result = generateSequence(branches, faultNodes, targetBranches, newFaults, allBoundaryNodes, systemLoads, providedSteps);
+            setSequenceData(result); 
+            setSeqOverlayOpen(true);
+            showToast(`Sequenciamento gerado: ${result.steps.length} manobras.`, 'success');
+        };
+        reader.readAsText(file);
+    };
+
     const toggleSwitch = (branchId) => {
+        if (seqOverlayOpen && sequenceData && isRecordingSeq) {
+            const lastSnapshot = sequenceData.snapshots[sequenceData.snapshots.length - 1];
+            const branchInSnap = lastSnapshot.branches.find(b => b.id === branchId);
+            if (!branchInSnap) return;
+            
+            const actionType = branchInSnap.state === 1 ? 'open' : 'close';
+            
+            const newStep = {
+                type: actionType,
+                branchId: branchInSnap.id,
+                fromNode: branchInSnap.from,
+                toNode: branchInSnap.to,
+                description: `${actionType === 'open' ? 'Abrir' : 'Fechar'} chave ${branchInSnap.from}–${branchInSnap.to} (Inserido)`
+            };
+            
+            const newSteps = [...sequenceData.steps, newStep];
+            const baseSnapshot = sequenceData.snapshots[0]; 
+            
+            setSequenceData({
+                ...sequenceData,
+                steps: newSteps,
+                snapshots: buildSnapshots(baseSnapshot, newSteps, allBoundaryNodes, systemLoads),
+                method: sequenceData.method.includes('Interativa') ? sequenceData.method : 'Edição Manual Interativa'
+            });
+            showToast('Manobra inserida no sequenciador!', 'success');
+            return;
+        }
+
         setBranches(prev => prev.map(b => b.id === branchId ? { ...b, state: b.state === 1 ? 0 : 1 } : b));
         showToast('Chave alterada', 'success');
     };
@@ -197,6 +279,31 @@ function App() {
     };
     
     const toggleFault = (nodeId) => {
+        if (seqOverlayOpen && sequenceData && isRecordingSeq) {
+            const lastSnapshot = sequenceData.snapshots[sequenceData.snapshots.length - 1];
+            const hasFault = lastSnapshot.faults.has(nodeId);
+            
+            let newStep;
+            if (hasFault) {
+                newStep = { type: 'fault_remove', nodeId, description: `Restaurar barra ${nodeId} (Inserido)` };
+            } else {
+                // Modo Sequenciador: As chaves abrirão sozinhas graças à atualização do switchSequencer.js
+                newStep = { type: 'fault_add', nodeId, description: `Falta na barra ${nodeId} e Proteção (Inserido)` };
+            }
+
+            const newSteps = [...sequenceData.steps, newStep];
+            const baseSnapshot = sequenceData.snapshots[0];
+            
+            setSequenceData({
+                ...sequenceData,
+                steps: newSteps,
+                snapshots: buildSnapshots(baseSnapshot, newSteps, allBoundaryNodes, systemLoads),
+                method: sequenceData.method.includes('Interativa') ? sequenceData.method : 'Edição Manual Interativa'
+            });
+            showToast('Falta inserida no sequenciador!', 'success');
+            return;
+        }
+
         if (faultNodes.has(nodeId)) {
             setFaultNodes(prev => { const newSet = new Set(prev); newSet.delete(nodeId); return newSet; });
             showToast(`Falta removida da barra ${nodeId}`, 'success');
@@ -214,8 +321,15 @@ function App() {
                     connected.forEach(b => {
                         const neighbor = b.from === curr ? b.to : b.from;
                         if (!visitedNodes.has(neighbor)) {
-                            if (b.hasSwitch) { branchesToOpen.add(b.id); } 
-                            else { visitedNodes.add(neighbor); queue.push(neighbor); }
+                            if (b.hasSwitch) { 
+                                branchesToOpen.add(b.id); 
+                            } else if (allBoundaryNodes.includes(neighbor)) {
+                                // 👇 BARREIRA INTRANSPONÍVEL (AO VIVO): O barramento da Subestação não permite a falta passar! 👇
+                                visitedNodes.add(neighbor);
+                            } else { 
+                                visitedNodes.add(neighbor); 
+                                queue.push(neighbor); 
+                            }
                         }
                     });
                 }
@@ -257,7 +371,7 @@ function App() {
     };
 
     const handleDownloadTemplate = () => {
-        const templateContent = `# Modelo de Arquivo...`; // Simplificado para economizar espaço
+        const templateContent = `# Modelo de Arquivo...`; 
         const blob = new Blob([templateContent], { type: 'text/plain;charset=utf-8' });
         const url = URL.createObjectURL(blob);
         const link = document.createElement('a');
@@ -268,7 +382,13 @@ function App() {
     const handleExportFullState = useCallback((positions, waypoints) => {
         const exportData = {
             version: "1.0", systemName: "Sistema Salvo", baseKV: SYSTEM_DATA.Vbase || 13.8, sBase: SYSTEM_DATA.Sbase || 1000, 
-            sources: sources, loads: SYSTEM_DATA.loads, branches: branches, faults: Array.from(faultNodes), 
+            sources: sources, 
+            feeders: SYSTEM_DATA.feeders || [],
+            sses: SYSTEM_DATA.sses || {},
+            shunts: SYSTEM_DATA.shunts || {},
+            loads: SYSTEM_DATA.loads, 
+            branches: branches, 
+            faults: Array.from(faultNodes), 
             layout: { positions: positions, waypoints: waypoints }
         };
         const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(exportData, null, 2));
@@ -278,47 +398,38 @@ function App() {
         showToast("Projeto exportado com sucesso!", "success");
     }, [branches, faultNodes, sources]);
 
-    // --- LÓGICA DE IMPORTAÇÃO DE ESTADOS E SALVAMENTO DE ARRASTO ---
     useEffect(() => {
         const handleApplyFullState = (e) => {
             const data = e.detail;
             
+            if (data.feeders) SYSTEM_DATA.feeders = data.feeders;
+            if (data.sses) SYSTEM_DATA.sses = data.sses;
+            if (data.shunts) SYSTEM_DATA.shunts = data.shunts;
+
             if (data.branches) setBranches(data.branches);
             if (data.faults) setFaultNodes(new Set(data.faults));
             
             const layoutData = data.layout || data;
             
             if (layoutData.positions) {
-                // 👇 A CORREÇÃO DE MEMÓRIA ENTRA AQUI 👇
-                // Agora ele sabe em qual aba você está e salva no lugar certo!
-                if (layoutMode === 'organic') {
-                    setOrganicPositions(layoutData.positions);
-                } else {
-                    setProjectPositions(layoutData.positions);
-                }
+                if (layoutMode === 'organic') setOrganicPositions(layoutData.positions);
+                else setProjectPositions(layoutData.positions);
             }
             if (layoutData.waypoints) {
-                if (layoutMode === 'organic') {
-                    setOrganicWaypoints(layoutData.waypoints);
-                } else {
-                    setProjectWaypoints(layoutData.waypoints);
-                }
+                if (layoutMode === 'organic') setOrganicWaypoints(layoutData.waypoints);
+                else setProjectWaypoints(layoutData.waypoints);
             }
         };
         
         window.addEventListener('applyGraphLayout', handleApplyFullState);
         return () => window.removeEventListener('applyGraphLayout', handleApplyFullState);
         
-    // 👇 MUDANÇA CRÍTICA: Adicionamos layoutMode na lista de dependências 👇
     }, [layoutMode]);
 
     useEffect(() => {
         const handleApplyOrganic = (e) => { 
             setOrganicPositions(e.detail.positions); 
-            // 👇 A MÁGICA: Agora o App.jsx memoriza os joelhos na rotação! 👇
-            if (e.detail.waypoints) {
-                setOrganicWaypoints(e.detail.waypoints);
-            }
+            if (e.detail.waypoints) setOrganicWaypoints(e.detail.waypoints);
             setLayoutMode('organic'); 
         };
         window.addEventListener('applyOrganicLayout', handleApplyOrganic);
@@ -396,24 +507,7 @@ function App() {
                     .paper-container { position: absolute !important; top: 0 !important; left: 0 !important; width: 100vw !important; height: 100vh !important; max-width: none !important; max-height: none !important; margin: 0 !important; border: none !important; box-shadow: none !important; aspect-ratio: auto !important; background-color: ${darkMode ? '#121212' : '#ffffff'} !important;}
                     .graph-svg { width: 100% !important; height: 100% !important; }
                 }
-
-                /* 👇 ALARME GLOW SCADA (SOMBRA FIXA) 👇 */
-                .voltage-glow-wrapper {
-                    filter: drop-shadow(0 0 8px rgba(255, 0, 0, 0.9));
-                    transition: filter 0.4s ease-in-out;
-                }
-                /* 👆 ===================================== 👆 */
-
-                /* 👇 ALARME GLOW SCADA (SOMBRA PULSANTE) 👇 COMENTADO
-                @keyframes voltage-glow {
-                    0% { filter: drop-shadow(0 0 3px rgba(255, 0, 0, 0.5)); }
-                    50% { filter: drop-shadow(0 0 12px rgba(255, 0, 0, 1)); }
-                    100% { filter: drop-shadow(0 0 3px rgba(255, 0, 0, 0.5)); }
-                }
-                .voltage-glow-wrapper {
-                    animation: voltage-glow 1.5s infinite ease-in-out;
-                }
-                 */
+                .voltage-glow-wrapper { filter: drop-shadow(0 0 8px rgba(255, 0, 0, 0.9)); transition: filter 0.4s ease-in-out; }
                 `}
             </style>
 
@@ -471,14 +565,19 @@ function App() {
                     <div style={{ height: '1px', width: '70%', margin: '2px auto', background: darkMode ? '#555' : '#e0e0e0' }}></div>
                     <button className="tool-btn" style={{ background: 'transparent', border: 'none', cursor: 'pointer', fontSize: '18px', padding: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: '8px', color: isEditMode ? '#ff9800' : (darkMode ? '#fff' : '#333'), transition: 'all 0.2s ease', minWidth: '40px', minHeight: '40px' }} title="Modo Edição" onClick={() => setIsEditMode(!isEditMode)}>✏️</button>
                     <button className="tool-btn" style={{ background: 'transparent', border: 'none', cursor: 'pointer', fontSize: '18px', padding: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: '8px', color: darkMode ? '#fff' : '#333', transition: 'all 0.2s ease', minWidth: '40px', minHeight: '40px' }} title="Atalhos" onClick={() => setShowShortcuts(true)}>⌨️</button>
+                    
+                    <div style={{ height: '1px', width: '70%', margin: '2px auto', background: darkMode ? '#555' : '#e0e0e0' }}></div>
+                    <button className="tool-btn" style={{ background: 'transparent', border: 'none', cursor: 'pointer', fontSize: '18px', padding: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: '8px', color: seqOverlayOpen ? '#00bcd4' : (darkMode ? '#fff' : '#333'), transition: 'all 0.2s ease', minWidth: '40px', minHeight: '40px' }} title="Abrir Sequenciador (Planejamento)" onClick={handleOpenEmptySequencer}>🎬</button>
                 </div>
 
-                <div className="hide-on-print" style={{ background: darkMode ? 'rgba(30, 30, 30, 0.65)' : 'rgba(255, 255, 255, 0.75)', backdropFilter: 'blur(12px)', WebkitBackdropFilter: 'blur(12px)', border: `1px solid ${darkMode ? '#444' : '#ddd'}`, boxShadow: '0 8px 32px rgba(0,0,0,0.15)', position: 'absolute', bottom: '20px', left: '20px', zIndex: 1000, display: 'flex', flexDirection: 'row', gap: '4px', padding: '6px 12px', borderRadius: '20px' }}>
+                <div className="hide-on-print" style={{ background: darkMode ? 'rgba(30, 30, 30, 0.65)' : 'rgba(255, 255, 255, 0.75)', backdropFilter: 'blur(12px)', WebkitBackdropFilter: 'blur(12px)', border: `1px solid ${darkMode ? '#444' : '#ddd'}`, boxShadow: '0 8px 32px rgba(0,0,0,0.15)', position: 'absolute', bottom: '20px', left: '20px', zIndex: 1000, display: 'flex', flexDirection: 'column', gap: '4px', padding: '12px 6px', borderRadius: '20px' }}>
                     <button className="tool-btn" style={{ background: 'transparent', border: 'none', cursor: 'pointer', fontSize: '18px', padding: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: '8px', color: darkMode ? '#fff' : '#333', transition: 'all 0.2s ease', minWidth: '40px', minHeight: '40px' }} title="Centralizar Gráfico" onClick={() => window.dispatchEvent(new CustomEvent('triggerZoomExtents'))}>🎯</button>
-                    <div style={{ width: '1px', height: '60%', margin: 'auto 6px', background: darkMode ? '#555' : '#e0e0e0' }}></div>
-                    <button className="tool-btn" style={{ background: 'transparent', border: 'none', cursor: 'pointer', fontSize: '18px', padding: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: '8px', color: darkMode ? '#fff' : '#333', transition: 'all 0.2s ease', minWidth: '40px', minHeight: '40px' }} title="Alternar Folha / Tela Cheia" onClick={() => setPrintFrameMode(prev => prev === 'none' ? 'landscape' : (prev === 'landscape' ? 'portrait' : 'none'))}>
-                        <span style={{ fontSize: '14px', fontWeight: 'bold', color: printFrameMode !== 'none' ? '#ff9800' : 'inherit' }}>A4 <span style={{ opacity: 0.8, fontSize: '12px' }}>{printFrameMode === 'none' ? '🔲' : (printFrameMode === 'landscape' ? '↔' : '↕')}</span></span>
+                    <div style={{ height: '1px', width: '60%', margin: '4px auto', background: darkMode ? '#555' : '#e0e0e0' }}></div>
+                    <button className="tool-btn" style={{ background: 'transparent', border: 'none', cursor: 'pointer', fontSize: '18px', padding: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: '8px', color: darkMode ? '#fff' : '#333', transition: 'all 0.2s ease', minWidth: '40px', minHeight: '40px', flexDirection: 'column' }} title="Alternar Folha / Tela Cheia" onClick={() => setPrintFrameMode(prev => prev === 'none' ? 'landscape' : (prev === 'landscape' ? 'portrait' : 'none'))}>
+                        <span style={{ fontSize: '12px', fontWeight: 'bold', color: printFrameMode !== 'none' ? '#ff9800' : 'inherit' }}>A4</span>
+                        <span style={{ opacity: 0.8, fontSize: '10px' }}>{printFrameMode === 'none' ? '🔲' : (printFrameMode === 'landscape' ? '↔' : '↕')}</span>
                     </button>
+                    <div style={{ height: '1px', width: '60%', margin: '4px auto', background: darkMode ? '#555' : '#e0e0e0' }}></div>
                     <button className="tool-btn" style={{ background: 'transparent', border: 'none', cursor: 'pointer', fontSize: '18px', padding: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: '8px', color: darkMode ? '#fff' : '#333', transition: 'all 0.2s ease', minWidth: '40px', minHeight: '40px', opacity: showLegend ? 1 : 0.4 }} title="Mostrar/Ocultar Legenda" onClick={() => setShowLegend(!showLegend)}>👁️</button>
                 </div>
 
@@ -497,7 +596,7 @@ function App() {
                     toggleFault={toggleFault} 
                     setSelectedElement={setSelectedElement} 
                     selectedElement={selectedElement} 
-                    hoveredLineId={hoveredLineId} 
+                    hoveredLineId={effectiveHoveredLineId} 
                     setHoveredLineId={setHoveredLineId} 
                     hoveredNodeId={hoveredNodeId} 
                     setHoveredNodeId={setHoveredNodeId} 
@@ -524,28 +623,22 @@ function App() {
                                     <button onClick={() => setLayoutMode('project')} style={{ flex:1, border:'none', borderRadius:'2px', padding:'4px', cursor:'pointer', fontSize:'10px', fontWeight:'bold', background: layoutMode === 'project' ? '#00bcd4' : 'transparent', color: layoutMode === 'project' ? '#000' : '#666', transition: 'all 0.2s' }}> PROJETO </button>
                                     <button onClick={() => setLayoutMode('organic')} style={{ flex:1, border:'none', borderRadius:'2px', padding:'4px', cursor:'pointer', fontSize:'10px', fontWeight:'bold', background: layoutMode === 'organic' ? '#00bcd4' : 'transparent', color: layoutMode === 'organic' ? '#000' : '#666', transition: 'all 0.2s' }}> ORGÂNICO </button>
                                 </div>
-                            {/* ... (botões de PROJETO e ORGÂNICO) ... */}
                             </div>
                             
-                            {/* 1. SUBESTAÇÕES PRINCIPAIS */}
                             {sources.map(s => (
                                 <div key={s} className="legend-item">
-                                    {/* 👇 Passando o array unificado para garantir a mesma cor 👇 */}
                                     <div className="legend-dot" style={{ background: getBaseColor(s, [...sources, ...feedersList], darkMode) }}></div> 
                                     SUB {s}
                                 </div>
                             ))}
                             
-                            {/* 2. ALIMENTADORES */}
                             {feedersList.map(f => (
                                 <div key={f} className="legend-item">
-                                    {/* 👇 Passando o array unificado para garantir a mesma cor 👇 */}
                                     <div className="legend-dot" style={{ background: getBaseColor(f, [...sources, ...feedersList], darkMode) }}></div> 
                                     ALIM {f}
                                 </div>
                             ))}
 
-                            {/* 3. OUTROS STATUS */}
                             <div className="legend-item"><div className="legend-dot" style={{ background: THEME.light.fault }}></div> Falta/Sobrecarga</div>
                             <div className="legend-item"><div className="legend-dot" style={{ background: THEME.light.loop }}></div> Loop</div>
                             <div className="legend-item"><div className="legend-dot" style={{ background: THEME.light.de }}></div> Desenergizado</div>
@@ -558,7 +651,7 @@ function App() {
                 <div onClick={() => setFaultSidebarOpen(!isFaultSidebarOpen)} title={isFaultSidebarOpen ? "Ocultar Painel" : "Painel de Faltas"} style={{ position: 'absolute', left: '-28px', top: 'calc(50% - 35px)', width: '28px', height: '70px', background: darkMode ? '#1e1e1e' : '#fff', borderTop: `1px solid ${darkMode ? '#333' : '#ccc'}`, borderBottom: `1px solid ${darkMode ? '#333' : '#ccc'}`, borderLeft: `1px solid ${darkMode ? '#333' : '#ccc'}`, borderRadius: '12px 0 0 12px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', boxShadow: '-4px 0 15px rgba(0,0,0,0.1)', color: '#ff9800', zIndex: 101, transition: 'background-color 0.2s' }}> {isFaultSidebarOpen ? '▶' : '⚡'} </div>
                 <div className="panel-content">
                     <FaultPanel 
-                        isFaultSidebarOpen={isFaultSidebarOpen} setFaultSidebarOpen={setFaultSidebarOpen} sources={sources} loadNodes={loadNodes} faultNodes={faultNodes} nodeFeeds={nodeFeeds} toggleFault={toggleFault} setSelectedElement={setSelectedElement} selectedElement={displayElement} setHoveredNodeId={setHoveredNodeId} getNodeColor={getNodeColor} darkMode={darkMode} THEME={THEME} nodeData={nodeData} lineCurrents={lineCurrents} loads={loads} branches={branches} sses={SYSTEM_DATA.sses || {}} feedersList={feedersList} handleTapChange={handleTapChange}
+                        isFaultSidebarOpen={isFaultSidebarOpen} setFaultSidebarOpen={setFaultSidebarOpen} sources={sources} loadNodes={loadNodes} faultNodes={faultNodes} nodeFeeds={nodeFeeds} toggleFault={toggleFault} setSelectedElement={setSelectedElement} selectedElement={displayElement} setHoveredNodeId={setHoveredNodeId} getNodeColor={getNodeColor} darkMode={darkMode} THEME={THEME} nodeData={nodeData} lineCurrents={lineCurrents} loads={loads} branches={branches} sses={SYSTEM_DATA.sses || {}} feedersList={SYSTEM_DATA.feeders || []} handleTapChange={handleTapChange}
                     />
                 </div>
             </div>
@@ -583,6 +676,81 @@ function App() {
                     </div>
                 </div>
             )}
+            
+            {seqOverlayOpen && sequenceData && (
+                <SequenceOverlay
+                    steps={sequenceData.steps}
+                    snapshots={sequenceData.snapshots}
+                    method={sequenceData.method}
+                    darkMode={darkMode}
+                    isRecording={isRecordingSeq}
+                    onToggleRecording={() => setIsRecordingSeq(!isRecordingSeq)}
+                    onClose={() => { setSeqOverlayOpen(false); setIsRecordingSeq(false); }}
+                    onHoverBranch={setHoveredSeqBranch}
+                    onApplySnapshot={(snapshot) => {
+                        setBranches(snapshot.branches);
+                        setFaultNodes(snapshot.faults);
+                    }}
+                    onReorderSteps={(newSteps) => {
+                        const baseSnapshot = sequenceData.snapshots[0];
+                        setSequenceData({
+                            ...sequenceData,
+                            steps: newSteps,
+                            snapshots: buildSnapshots(baseSnapshot, newSteps, allBoundaryNodes, systemLoads),
+                            method: sequenceData.method.replace(' (Reordenado)', '') + ' (Reordenado)'
+                        });
+                    }}
+                    onDeleteStep={(indexToRemove) => {
+                        const newSteps = [...sequenceData.steps];
+                        newSteps.splice(indexToRemove, 1);
+                        const baseSnapshot = sequenceData.snapshots[0];
+                        setSequenceData({
+                            ...sequenceData,
+                            steps: newSteps,
+                            snapshots: buildSnapshots(baseSnapshot, newSteps, allBoundaryNodes, systemLoads),
+                            method: sequenceData.method.replace(' (Editado)', '') + ' (Editado)'
+                        });
+                    }}
+                    onToggleStepAction={(idx) => {
+                        const newSteps = [...sequenceData.steps];
+                        const step = newSteps[idx];
+                        
+                        if (step.type === 'open') {
+                            step.type = 'close';
+                            step.description = `Fechar chave ${step.fromNode}–${step.toNode} (Alterado)`;
+                        } else if (step.type === 'close') {
+                            step.type = 'open';
+                            step.description = `Abrir chave ${step.fromNode}–${step.toNode} (Alterado)`;
+                        } else if (step.type === 'fault_add') {
+                            step.type = 'fault_remove';
+                            step.description = `Restaurar barra ${step.nodeId} (Alterado)`;
+                        } else if (step.type === 'fault_remove') {
+                            step.type = 'fault_add';
+                            step.description = `Falta na barra ${step.nodeId} e Proteção (Alterado)`;
+                        } else {
+                            return; 
+                        }
+                        
+                        const baseSnapshot = sequenceData.snapshots[0];
+                        setSequenceData({
+                            ...sequenceData,
+                            steps: newSteps,
+                            snapshots: buildSnapshots(baseSnapshot, newSteps, allBoundaryNodes, systemLoads),
+                            method: sequenceData.method.includes('Editado') ? sequenceData.method : sequenceData.method + ' (Editado)'
+                        });
+                    }}
+                    onActiveStepChange={(step) => {
+                        if (!step) {
+                            setSelectedElement(null); 
+                        } else if (step.branchId !== undefined) {
+                            setSelectedElement({ type: 'edge', data: { id: step.branchId } });
+                        } else if (step.nodeId !== undefined) {
+                            setSelectedElement({ type: 'node', id: step.nodeId });
+                        }
+                    }}
+                />
+            )}
+            
             {toast && <div className="toast">{toast.message}</div>}
         </div>
     );

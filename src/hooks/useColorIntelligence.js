@@ -123,26 +123,49 @@ export function useColorIntelligence({ branches, faultNodes, activeSources, node
 
     const getEdgeColor = useCallback((branch) => {
         const colors = darkMode ? THEME.dark : THEME.light;
+        
         if (branch.state === 0) return colors.de;
         
         const current = lineCurrents[branch.id];
-        if (!current || current.current < 0.01) return colors.de;
+        
+        if (!current || current.current < 0.001) return colors.de; 
         if (current.percentage >= 100) return '#d50000'; 
         if (loopEdges.has(branch.id)) return colors.loop; 
         
-        const zone = edgeZones[branch.id];
-        if (!zone) return colors.de; 
+        let zone = edgeZones[branch.id];
+        
+        // 👇 INTELIGÊNCIA DE DIREÇÃO DE FLUXO DE POTÊNCIA 👇
+        if (!zone && colorRoots) {
+            // 1. Descobre para onde a energia está indo (Potência P > 0 significa from -> to)
+            const pVal = current.p !== undefined ? current.p : (current.pFlow || 0);
+            const isReverse = pVal < 0; 
+            
+            // 2. Identifica quem é o nó transmissor (Upstream)
+            const sendingNode = isReverse ? branch.to : branch.from;
+            
+            // 3. Puxa a cor do alimentador raiz que fornece energia para esse nó transmissor
+            if (colorRoots.includes(sendingNode)) {
+                zone = sendingNode;
+            } else if (nodeFeeds && nodeFeeds[sendingNode] && nodeFeeds[sendingNode].size > 0) {
+                zone = Array.from(nodeFeeds[sendingNode])[0]; // Pega a raiz real (ex: 1000)
+            } else {
+                // Último caso de fallback
+                const receivingNode = isReverse ? branch.from : branch.to;
+                zone = colorRoots.includes(receivingNode) ? receivingNode : colorRoots[0];
+            }
+        }
         
         const p = Math.min((current.percentage || 0) / 100, 1.0);
-        const alpha = 0.1 + (0.9 * Math.sqrt(p)); 
+        const alpha = 0.45 + (0.55 * Math.sqrt(p)); 
         
-        const sortedRoots = [...colorRoots].sort((a, b) => a - b);
+        const sortedRoots = [...(colorRoots || [])].sort((a, b) => a - b);
         let idx = sortedRoots.indexOf(zone);
-        if (idx === -1) idx = 0;
+        if (idx === -1) idx = 0; 
         
-        const hue = PALETTE_HUES[idx % PALETTE_HUES.length];
-        return `hsla(${hue}, 95%, ${darkMode ? 50 : 35}%, ${alpha.toFixed(3)})`; 
-    }, [darkMode, lineCurrents, loopEdges, edgeZones, colorRoots]);
+        const hue = PALETTE_HUES[idx % PALETTE_HUES.length] || 0;
+        
+        return `hsla(${hue}, 95%, ${darkMode ? 55 : 35}%, ${alpha.toFixed(3)})`; 
+    }, [darkMode, lineCurrents, loopEdges, edgeZones, colorRoots, nodeFeeds]); // <-- Importante: nodeFeeds adicionado às dependências
 
     return { getNodeColor, getEdgeColor, loopNodes, loopEdges };
 }

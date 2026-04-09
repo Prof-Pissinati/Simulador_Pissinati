@@ -29,10 +29,6 @@ export default function EditSidebar({
     const [vnsMaxIter,  setVnsMaxIter]    = useState(30);
     const [usePhysics, setUsePhysics]     = useState(false); 
 
-    // Adicione logo abaixo dos seus useState...
-    const pendingRotationRef = useRef(0);
-    const rotationTimeoutRef = useRef(null);
-
     const handleApplyGenerator = async () => {
         // 1. SINCRONIA: Extrai a posição real visual da tela
         let actualLayout = { positions: currentPositions, waypoints: {} };
@@ -156,26 +152,6 @@ export default function EditSidebar({
     };
 
     const handleRotate = (angleDegrees) => {
-        // 1. Soma o ângulo atual ao acumulador (ex: 10 + 10 + 10 = 30)
-        pendingRotationRef.current += angleDegrees;
-
-        // 2. Cancela o cronômetro anterior se o usuário clicou de novo rápido
-        if (rotationTimeoutRef.current) {
-            clearTimeout(rotationTimeoutRef.current);
-        }
-
-        // 3. Define um novo cronômetro de 250 milissegundos
-        rotationTimeoutRef.current = setTimeout(() => {
-            const totalAngle = pendingRotationRef.current;
-            pendingRotationRef.current = 0; // Zera o acumulador para a próxima rajada de cliques
-            
-            if (totalAngle !== 0) {
-                executeRotation(totalAngle);
-            }
-        }, 250); // Tempo de espera para saber se você parou de clicar
-    };
-
-    const executeRotation = (angleDegrees) => {
         let actualLayout = { positions: currentPositions, waypoints: {} };
         window.dispatchEvent(new CustomEvent('getLatestLayout', { detail: { callback: (layout) => { actualLayout = layout; } } }));
 
@@ -210,7 +186,7 @@ export default function EditSidebar({
         window.dispatchEvent(new CustomEvent('applyOrganicLayout', { detail: { positions: newPos, waypoints: newWps } }));
         setTimeout(() => window.dispatchEvent(new CustomEvent('triggerZoomExtents')), 600);
     };
-    
+
     if (!isEditMode) return null;
 
     // --- ESTILOS NATIVOS ---
