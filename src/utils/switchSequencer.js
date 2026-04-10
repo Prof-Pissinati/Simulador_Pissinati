@@ -321,6 +321,20 @@ export function parseSequenceFile(content, currentBranches) {
                 if (b && !isNaN(value)) { providedSteps.push({ type: 'tap', branchId: b.id, tapValue: value, fromNode: b.from, toNode: b.to, description: `Ajustar TAP ${from}–${to} → ${value > 0 ? '+' : ''}${value}` }); }
                 continue;
             }
+            // 👇 ADICIONE ESTE BLOCO LOGO ABAIXO DO CÓDIGO DO "TAP" 👇
+            if (cmd === 'SHUNT_STEP' && parts.length >= 3) {
+                const nodeId = parseInt(parts[1]); 
+                const steps = parseInt(parts[2]);
+                if (!isNaN(nodeId) && !isNaN(steps)) { 
+                    providedSteps.push({ 
+                        type: 'shunt_step', 
+                        nodeId, 
+                        steps, 
+                        description: `Ajustar Capacitor ${nodeId} → Estágio ${steps}` 
+                    }); 
+                }
+                continue;
+            }
             if (cmd === 'FALTA_RESTAURAR' && parts.length >= 2) { const nodeId = parseInt(parts[1]); if (!isNaN(nodeId)) { providedSteps.push({ type: 'fault_remove', nodeId, description: `Restaurar barra ${nodeId}` }); } continue; }
             if (cmd === 'FALTA_ADICIONAR' && parts.length >= 2) { const nodeId = parseInt(parts[1]); if (!isNaN(nodeId)) { providedSteps.push({ type: 'fault_add', nodeId, description: `Aplicar falta na barra ${nodeId}` }); } continue; }
         }

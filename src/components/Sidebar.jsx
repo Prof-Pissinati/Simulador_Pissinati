@@ -1,6 +1,13 @@
 import React, { useRef, useState } from 'react';
 import { SYSTEM_DATA } from '../data/systemData';
 
+// Função para converter grandezas de potência automaticamente
+const formatPower = (kw) => {
+    if (kw >= 1000000) return (kw / 1000000).toFixed(1) + ' GW';
+    if (kw >= 1000) return (kw / 1000).toFixed(1) + ' MW';
+    return kw.toFixed(0) + ' kW';
+};
+
 
 export default function Sidebar({
     sidebarMode,
@@ -138,8 +145,8 @@ export default function Sidebar({
                                 <div className="load-card-title" style={{ color: cardColor }}>
                                     {isFeeder ? `ALIM. ${subId}` : `SUB ${subId}`}
                                 </div>
-                                <span className="load-card-value">{inFault ? '—' : I.toFixed(0)} A</span>
-                                <div className="load-card-subtitle">{inFault ? '—' : totalP.toFixed(0)} kW</div>
+                                <span className="load-card-value">{inFault ? '—' : formatPower(totalP)}</span>
+                                <div className="load-card-subtitle">{inFault ? '—' : I.toFixed(0)} A</div>
                                 <div className="load-card-subtitle">
                                     {inFault ? '—' : (isFeeder ? 'Alimentador' : `${loads[subId]?.nodes || 0} barras`)}
                                 </div>
@@ -160,8 +167,8 @@ export default function Sidebar({
                                     transition: 'opacity 0.3s ease'
                                 }}>
                                     <div className="load-card-title" style={{ color: '#757575' }}>SUB (Off)</div>
-                                    <span className="load-card-value">{disconnectedStats.current.toFixed(0)} A</span>
-                                    <div className="load-card-subtitle">{disconnectedStats.p.toFixed(0)} kW</div>
+                                    <span className="load-card-value">{formatPower(disconnectedStats.p)}</span>
+                                    <div className="load-card-subtitle">{disconnectedStats.current.toFixed(0)} A</div>
                                     <div className="load-card-subtitle">{disconnectedStats.count} barras</div>
                                 </div>
                             )}

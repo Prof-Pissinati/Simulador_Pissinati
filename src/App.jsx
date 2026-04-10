@@ -237,6 +237,36 @@ function App() {
         reader.readAsText(file);
     };
 
+    // 👇 NOVA FUNÇÃO PARA EXPORTAR A SEQUÊNCIA 👇
+    const handleExportSequence = useCallback(() => {
+        if (!sequenceData || !sequenceData.steps || sequenceData.steps.length === 0) {
+            showToast('Não há passos no sequenciador para exportar.', 'warning');
+            return;
+        }
+
+        let content = "Sequenciamento\n";
+        sequenceData.steps.forEach(step => {
+            if (step.type === 'open') content += `ABRIR ${step.fromNode} ${step.toNode}\n`;
+            else if (step.type === 'close') content += `FECHAR ${step.fromNode} ${step.toNode}\n`;
+            else if (step.type === 'tap') content += `TAP ${step.fromNode} ${step.toNode} ${step.tapValue}\n`;
+            else if (step.type === 'shunt_step') content += `SHUNT_STEP ${step.nodeId} ${step.steps}\n`;
+            else if (step.type === 'fault_add') content += `FALTA_ADICIONAR ${step.nodeId}\n`;
+            else if (step.type === 'fault_remove') content += `FALTA_RESTAURAR ${step.nodeId}\n`;
+        });
+
+        const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url; 
+        link.download = 'sequenciamento_exportado.txt';
+        document.body.appendChild(link); 
+        link.click(); 
+        document.body.removeChild(link); 
+        URL.revokeObjectURL(url);
+
+        showToast("Sequência exportada com sucesso!", "success");
+    }, [sequenceData]);
+
     const toggleSwitch = (branchId) => {
         if (seqOverlayOpen && sequenceData && isRecordingSeq) {
             const lastSnapshot = sequenceData.snapshots[sequenceData.snapshots.length - 1];
@@ -869,6 +899,7 @@ const handleShuntChange = useCallback((nodeId, increment) => {
                             method: sequenceData.method.replace(' (Editado)', '') + ' (Editado)'
                         });
                     }}
+                    onExportSequence={handleExportSequence}
                     onToggleStepAction={(idx) => {
                         const newSteps = [...sequenceData.steps];
                         const step = newSteps[idx];
