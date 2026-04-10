@@ -1,5 +1,4 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { SYSTEM_DATA } from './data/systemData';
 import { propagateFeeds, calculateLoads, runPowerFlow, CacheManager } from './utils/powerCalculations';
 import { THEME } from './utils/theme';
 import Sidebar from './components/Sidebar';
@@ -12,6 +11,8 @@ import { useFileImport } from './hooks/useFileImport';
 import { calculateForceLayout } from './utils/autoLayout';
 import { useShortcuts } from './hooks/useShortcuts';
 import { useColorIntelligence, getBaseColor } from './hooks/useColorIntelligence';
+import { SYSTEM_DATA} from './data/systemData';
+import { SYSTEM_DATA_SHUNT } from './data/systemData54';
 
 import { parseSequenceFile, generateSequence, buildSnapshots } from './utils/switchSequencer';
 import SequenceOverlay from './components/SequenceOverlay';
@@ -28,6 +29,8 @@ function App() {
     })));
     
     const [faultNodes, setFaultNodes] = useState(new Set());
+
+    const [systemShunts, setSystemShunts] = useState(SYSTEM_DATA.shunts || {});
     
     const [sequenceData, setSequenceData] = useState(null);
     const [seqOverlayOpen, setSeqOverlayOpen] = useState(false);
@@ -133,7 +136,8 @@ function App() {
             // Pega as chaves atuais (branches) e as faltas atuais (faultNodes)
             const initialSnapshot = { 
                 branches: branches, 
-                faults: new Set(faultNodes) 
+                faults: new Set(faultNodes), 
+                shunts: JSON.parse(JSON.stringify(systemShunts))
             };
             
             setSequenceData({
@@ -150,9 +154,9 @@ function App() {
         loads: systemLoads, 
         Vbase: SYSTEM_DATA.Vbase || 13.8,
         Sbase: SYSTEM_DATA.Sbase || 1000,
-        shunts: SYSTEM_DATA.shunts || {}, 
+        shunts: systemShunts || {}, 
         sses: SYSTEM_DATA.sses || {}      
-    }), [activeSources, branches, systemLoads]);
+    }), [activeSources, branches, systemLoads, systemShunts]);
 
     const nodeFeeds = useMemo(() => propagateFeeds(branches, faultNodes, sysData), [branches, faultNodes, sysData]);
     const loads = useMemo(() => calculateLoads(nodeFeeds, faultNodes, sysData), [nodeFeeds, faultNodes, sysData]);
@@ -172,12 +176,12 @@ function App() {
     }, [loadNodes, nodeFeeds, faultNodes]);
 
     const powerFlowResults = useMemo(() => {
-        const cached = CacheManager.get(branches, faultNodes, calcMethod);
+        const cached = CacheManager.get(branches, faultNodes, calcMethod, sysData);
         if (cached) return cached;
         const result = runPowerFlow(branches, faultNodes, calcMethod, sysData); 
-        CacheManager.set(branches, faultNodes, calcMethod, result);
+        CacheManager.set(branches, faultNodes, calcMethod, sysData, result);
         return result;
-    }, [branches, faultNodes, calcMethod, sysData]); 
+    }, [branches, faultNodes, calcMethod, sysData]);
 
     const lineCurrents = powerFlowResults.lines;
     const nodeData = powerFlowResults.nodes;
@@ -266,7 +270,47 @@ function App() {
         showToast('Chave alterada', 'success');
     };
 
-    const handleTapChange = (branchId, increment) => {
+    const handleTapChange = useCallback((branchId, increment) => {
+        // 👇 MODO GRAVAÇÃO DO SEQUENCIADOR 👇
+        if (seqOverlayOpen && sequenceData && isRecordingSeq) {
+            const lastSnapshot = sequenceData.snapshots[sequenceData.snapshots.length - 1];
+            const branchInSnap = lastSnapshot.branches.find(b => b.id === branchId);
+            
+            if (!branchInSnap || !branchInSnap.isRegulator) return;
+
+            let newTap = branchInSnap.currentTap + increment;
+            if (newTap > branchInSnap.maxTaps) newTap = branchInSnap.maxTaps;
+            if (newTap < -branchInSnap.maxTaps) newTap = -branchInSnap.maxTaps;
+
+            if (newTap === branchInSnap.currentTap) return; // Nada mudou
+
+            const newStep = {
+                type: 'tap',
+                branchId: branchId,
+                tapValue: newTap,
+                fromNode: branchInSnap.from,
+                toNode: branchInSnap.to,
+                description: `Ajustar TAP ${branchInSnap.from}–${branchInSnap.to} → ${newTap > 0 ? '+' : ''}${newTap} (Inserido)`
+            };
+
+            const newStepsArray = [...sequenceData.steps, newStep];
+            const baseSnapshot = sequenceData.snapshots[0]; 
+            
+            setSequenceData({
+                ...sequenceData,
+                steps: newStepsArray,
+                snapshots: buildSnapshots(baseSnapshot, newStepsArray, allBoundaryNodes, systemLoads),
+                method: sequenceData.method.includes('Interativa') ? sequenceData.method : 'Edição Manual Interativa'
+            });
+            
+            // Força a atualização na tela imediatamente durante a gravação
+            setBranches(prev => prev.map(b => b.id === branchId ? { ...b, currentTap: newTap } : b));
+            
+            showToast('Ajuste de TAP inserido no sequenciador!', 'success');
+            return;
+        }
+
+        // 👇 MODO AO VIVO 👇
         setBranches(prev => prev.map(b => {
             if (b.id === branchId && b.isRegulator) {
                 let newTap = b.currentTap + increment;
@@ -276,7 +320,66 @@ function App() {
             }
             return b;
         }));
-    };
+    }, [seqOverlayOpen, sequenceData, isRecordingSeq, allBoundaryNodes, systemLoads]);
+
+const handleShuntChange = useCallback((nodeId, increment) => {
+        // MODO GRAVAÇÃO DO SEQUENCIADOR
+        if (seqOverlayOpen && sequenceData && isRecordingSeq) {
+            const lastSnapshot = sequenceData.snapshots[sequenceData.snapshots.length - 1];
+            
+            // Pega o estado do capacitor no último snapshot (ou do sistema atual se não existir no snap)
+            const shuntInSnap = lastSnapshot?.shunts ? lastSnapshot.shunts[nodeId] : systemShunts[nodeId];
+            if (!shuntInSnap) return;
+
+            let newStepsValue = shuntInSnap.steps + increment;
+            if (newStepsValue < 0) newStepsValue = 0;
+            if (newStepsValue > shuntInSnap.maxSteps) newStepsValue = shuntInSnap.maxSteps;
+
+            if (newStepsValue === shuntInSnap.steps) return; // Nada mudou
+
+            const newStep = {
+                type: 'shunt_step',
+                nodeId: nodeId,
+                steps: newStepsValue,
+                description: `Ajustar Capacitor ${nodeId} → Estágio ${newStepsValue} (Inserido)`
+            };
+
+            const newStepsArray = [...sequenceData.steps, newStep];
+            const baseSnapshot = sequenceData.snapshots[0]; 
+            
+            setSequenceData({
+                ...sequenceData,
+                steps: newStepsArray,
+                snapshots: buildSnapshots(baseSnapshot, newStepsArray, allBoundaryNodes, systemLoads),
+                method: sequenceData.method.includes('Interativa') ? sequenceData.method : 'Edição Manual Interativa'
+            });
+
+            setSystemShunts(prev => ({
+                ...prev,
+                [nodeId]: { ...prev[nodeId], steps: newStepsValue }
+            }));
+
+            showToast('Manobra de capacitor inserida no sequenciador!', 'success');
+            return;
+        }
+
+        // MODO AO VIVO
+        setSystemShunts(prev => {
+            const shunt = prev[nodeId];
+            if (!shunt) return prev;
+            
+            let newSteps = shunt.steps + increment;
+            if (newSteps < 0) newSteps = 0;
+            if (newSteps > shunt.maxSteps) newSteps = shunt.maxSteps;
+            
+            if (newSteps === shunt.steps) return prev; // Nada mudou
+            
+            return {
+                ...prev,
+                [nodeId]: { ...shunt, steps: newSteps }
+            };
+        });
+    }, [seqOverlayOpen, sequenceData, isRecordingSeq, systemShunts, allBoundaryNodes, systemLoads]);
     
     const toggleFault = (nodeId) => {
         if (seqOverlayOpen && sequenceData && isRecordingSeq) {
@@ -365,6 +468,35 @@ function App() {
         setBranches(defaultBranches);
         initialBranchesRef.current = JSON.parse(JSON.stringify(defaultBranches)); 
         setSystemLoads(SYSTEM_DATA.loads); 
+        setSystemShunts(SYSTEM_DATA.shunts || {});
+        setActiveSources(SYSTEM_DATA.sources || [101, 102, 104]); 
+        
+        // 👇 AQUI ESTÁ O SEGREDO: Resetar as posições para o mapa do 53! 👇
+        setProjectPositions(SYSTEM_DATA.positionsProject || {});
+        setProjectWaypoints(SYSTEM_DATA.waypointsProject || {});
+
+        setFaultNodes(new Set());
+        window.dispatchEvent(new CustomEvent('resetGraphLayout'));
+        setIsProjectLoaded(true);
+    };
+
+    const handleLoadSystem54 = () => {
+        const defaultBranches = SYSTEM_DATA_SHUNT.branches.map((b, idx) => ({
+            ...b, id: idx, state: (b.initialState !== undefined ? b.initialState : (b.state !== undefined ? b.state : 1)) 
+        }));
+        
+        setBranches(defaultBranches);
+        initialBranchesRef.current = JSON.parse(JSON.stringify(defaultBranches)); 
+        setSystemLoads(SYSTEM_DATA_SHUNT.loads); 
+        setSystemShunts(SYSTEM_DATA_SHUNT.shunts || {});
+        setActiveSources(SYSTEM_DATA_SHUNT.sources || [1000]);
+        SYSTEM_DATA.feeders = SYSTEM_DATA_SHUNT.feeders;
+        SYSTEM_DATA.sses = SYSTEM_DATA_SHUNT.sses;
+        
+        // 👇 AQUI ESTÁ O SEGREDO: Puxar as posições do mapa do 54! 👇
+        setProjectPositions(SYSTEM_DATA_SHUNT.positionsProject || {});
+        setProjectWaypoints(SYSTEM_DATA_SHUNT.waypointsProject || {});
+
         setFaultNodes(new Set());
         window.dispatchEvent(new CustomEvent('resetGraphLayout'));
         setIsProjectLoaded(true);
@@ -478,6 +610,7 @@ function App() {
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                         <button onClick={() => welcomeFileInputRef.current.click()} style={{ width: '100%', padding: '14px', border: 'none', borderRadius: '8px', fontSize: '14px', fontWeight: 'bold', cursor: 'pointer', background: '#00bcd4', color: '#000', transition: 'transform 0.2s', boxShadow: '0 4px 10px rgba(0, 188, 212, 0.3)' }} onMouseOver={e => e.target.style.transform = 'translateY(-2px)'} onMouseOut={e => e.target.style.transform = 'translateY(0)'}> 📂 Carregar Projeto Salvo (.json) </button>
                         <button onClick={handleLoadExample} style={{ width: '100%', padding: '14px', border: `1px solid ${darkMode ? '#444' : '#ccc'}`, borderRadius: '8px', fontSize: '14px', fontWeight: 'bold', cursor: 'pointer', background: 'transparent', color: darkMode ? '#fff' : '#333', transition: 'background 0.2s' }} onMouseOver={e => e.target.style.background = darkMode ? '#333' : '#e0e0e0'} onMouseOut={e => e.target.style.background = 'transparent'}> 🚀 Iniciar Sistema Exemplo (IEEE 53) </button>
+                        <button onClick={handleLoadSystem54} style={{ width: '100%', padding: '14px', border: `1px solid ${darkMode ? '#444' : '#ccc'}`, borderRadius: '8px', fontSize: '14px', fontWeight: 'bold', cursor: 'pointer', background: 'transparent', color: darkMode ? '#00bcd4' : '#00bcd4', transition: 'background 0.2s' }} onMouseOver={e => e.target.style.background = darkMode ? '#333' : '#e0e0e0'} onMouseOut={e => e.target.style.background = 'transparent'}> 🚀 Iniciar Sistema 54 (com Capacitores) </button>
                         <div style={{ margin: '15px 0', display: 'flex', alignItems: 'center', color: darkMode ? '#555' : '#aaa' }}><div style={{ flex: 1, height: '1px', background: darkMode ? '#444' : '#ddd' }}></div><span style={{ padding: '0 10px', fontSize: '12px' }}> OU </span><div style={{ flex: 1, height: '1px', background: darkMode ? '#444' : '#ddd' }}></div></div>
                         <input type="file" ref={datFileInputRef} accept=".dat,.txt" style={{ display: 'none' }} onChange={handleDatFileUpload} />
                         <button onClick={() => datFileInputRef.current.click()} style={{ width: '100%', padding: '14px', border: 'none', borderRadius: '8px', fontSize: '14px', fontWeight: 'bold', cursor: 'pointer', background: darkMode ? '#ff9800' : '#ff9800', color: '#000', transition: 'transform 0.2s', boxShadow: '0 4px 10px rgba(255, 152, 0, 0.3)' }} onMouseOver={e => e.target.style.transform = 'translateY(-2px)'} onMouseOut={e => e.target.style.transform = 'translateY(0)'}> 📥 Importar Novo Sistema (.dat AMPL) </button>
@@ -614,6 +747,8 @@ function App() {
                     sses={SYSTEM_DATA.sses} 
                     feedersList={SYSTEM_DATA.feeders || []} 
                     handleTapChange={handleTapChange}
+                    systemShunts={systemShunts} 
+                    handleShuntChange={handleShuntChange}
                 >
                     {showLegend && (
                         <div className="legend" style={{ position: 'absolute', bottom: '20px', right: '20px', zIndex: 1000, pointerEvents: 'all', background: darkMode ? '#121212' : '#ffffff', border: '1px solid #444', borderRadius: '8px', boxShadow: '0 6px 20px rgba(0,0,0,0.2)' }} onMouseDown={e=>e.stopPropagation()} onMouseUp={e=>e.stopPropagation()} onClick={e=>e.stopPropagation()} onWheel={e=>e.stopPropagation()} onDoubleClick={e=>e.stopPropagation()} >
@@ -651,7 +786,29 @@ function App() {
                 <div onClick={() => setFaultSidebarOpen(!isFaultSidebarOpen)} title={isFaultSidebarOpen ? "Ocultar Painel" : "Painel de Faltas"} style={{ position: 'absolute', left: '-28px', top: 'calc(50% - 35px)', width: '28px', height: '70px', background: darkMode ? '#1e1e1e' : '#fff', borderTop: `1px solid ${darkMode ? '#333' : '#ccc'}`, borderBottom: `1px solid ${darkMode ? '#333' : '#ccc'}`, borderLeft: `1px solid ${darkMode ? '#333' : '#ccc'}`, borderRadius: '12px 0 0 12px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', boxShadow: '-4px 0 15px rgba(0,0,0,0.1)', color: '#ff9800', zIndex: 101, transition: 'background-color 0.2s' }}> {isFaultSidebarOpen ? '▶' : '⚡'} </div>
                 <div className="panel-content">
                     <FaultPanel 
-                        isFaultSidebarOpen={isFaultSidebarOpen} setFaultSidebarOpen={setFaultSidebarOpen} sources={sources} loadNodes={loadNodes} faultNodes={faultNodes} nodeFeeds={nodeFeeds} toggleFault={toggleFault} setSelectedElement={setSelectedElement} selectedElement={displayElement} setHoveredNodeId={setHoveredNodeId} getNodeColor={getNodeColor} darkMode={darkMode} THEME={THEME} nodeData={nodeData} lineCurrents={lineCurrents} loads={loads} branches={branches} sses={SYSTEM_DATA.sses || {}} feedersList={SYSTEM_DATA.feeders || []} handleTapChange={handleTapChange}
+                        isFaultSidebarOpen={isFaultSidebarOpen} 
+                        setFaultSidebarOpen={setFaultSidebarOpen} 
+                        sources={sources} 
+                        loadNodes={loadNodes} 
+                        faultNodes={faultNodes} 
+                        nodeFeeds={nodeFeeds} 
+                        toggleFault={toggleFault} 
+                        setSelectedElement={setSelectedElement} 
+                        selectedElement={displayElement} 
+                        setHoveredNodeId={setHoveredNodeId} 
+                        getNodeColor={getNodeColor} 
+                        darkMode={darkMode} 
+                        THEME={THEME} 
+                        nodeData={nodeData} 
+                        lineCurrents={lineCurrents} 
+                        loads={loads} 
+                        branches={branches} 
+                        sses={SYSTEM_DATA.sses || {}} 
+                        feedersList={SYSTEM_DATA.feeders || []} 
+                        handleTapChange={handleTapChange}
+                        systemShunts={systemShunts}
+                        handleShuntChange={handleShuntChange}
+                        systemLoads={systemLoads}
                     />
                 </div>
             </div>
@@ -690,6 +847,7 @@ function App() {
                     onApplySnapshot={(snapshot) => {
                         setBranches(snapshot.branches);
                         setFaultNodes(snapshot.faults);
+                        if (snapshot.shunts) setSystemShunts(snapshot.shunts); // 👈 ADICIONAR ESTA LINHA
                     }}
                     onReorderSteps={(newSteps) => {
                         const baseSnapshot = sequenceData.snapshots[0];
@@ -731,6 +889,40 @@ function App() {
                             return; 
                         }
                         
+                        const baseSnapshot = sequenceData.snapshots[0];
+                        setSequenceData({
+                            ...sequenceData,
+                            steps: newSteps,
+                            snapshots: buildSnapshots(baseSnapshot, newSteps, allBoundaryNodes, systemLoads),
+                            method: sequenceData.method.includes('Editado') ? sequenceData.method : sequenceData.method + ' (Editado)'
+                        });
+                    }}
+                    onUpdateStepValue={(idx, newValue) => {
+                        const newSteps = [...sequenceData.steps];
+                        const step = newSteps[idx];
+                        
+                        if (step.type === 'tap') {
+                            const b = branches.find(br => br.id === step.branchId);
+                            let clamped = newValue;
+                            if (b) {
+                                if (clamped < -b.maxTaps) clamped = -b.maxTaps;
+                                if (clamped > b.maxTaps) clamped = b.maxTaps;
+                            }
+                            if (clamped === step.tapValue) return;
+                            step.tapValue = clamped;
+                            step.description = `Ajustar TAP ${step.fromNode}–${step.toNode} → ${clamped > 0 ? '+' : ''}${clamped} (Alterado)`;
+                        } else if (step.type === 'shunt_step') {
+                            const shunt = systemShunts[step.nodeId];
+                            let clamped = newValue;
+                            if (shunt) {
+                                if (clamped < 0) clamped = 0;
+                                if (clamped > shunt.maxSteps) clamped = shunt.maxSteps;
+                            }
+                            if (clamped === step.steps) return;
+                            step.steps = clamped;
+                            step.description = `Ajustar Capacitor ${step.nodeId} → Estágio ${clamped} (Alterado)`;
+                        }
+
                         const baseSnapshot = sequenceData.snapshots[0];
                         setSequenceData({
                             ...sequenceData,

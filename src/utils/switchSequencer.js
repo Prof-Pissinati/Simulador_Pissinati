@@ -55,11 +55,13 @@ function calculateDisconnectedP(branches, faults, sources, systemLoads) {
 }
 
 export function applyStepToSnapshot(step, snapshot) {
-    const { branches, faults } = snapshot;
+    // 👇 1. Agora extraímos os shunts do snapshot
+    const { branches, faults, shunts = {} } = snapshot;
 
-    if (step.type === 'open') return { branches: branches.map(b => b.id === step.branchId ? { ...b, state: 0 } : b), faults };
-    if (step.type === 'close') return { branches: branches.map(b => b.id === step.branchId ? { ...b, state: 1 } : b), faults };
-    if (step.type === 'tap') return { branches: branches.map(b => b.id === step.branchId ? { ...b, currentTap: step.tapValue } : b), faults };
+    // Em todos os retornos, passamos o 'shunts' adiante para ele não se perder na linha do tempo
+    if (step.type === 'open') return { branches: branches.map(b => b.id === step.branchId ? { ...b, state: 0 } : b), faults, shunts };
+    if (step.type === 'close') return { branches: branches.map(b => b.id === step.branchId ? { ...b, state: 1 } : b), faults, shunts };
+    if (step.type === 'tap') return { branches: branches.map(b => b.id === step.branchId ? { ...b, currentTap: step.tapValue } : b), faults, shunts };
     
     if (step.type === 'fault_add') {
         const newFaults = new Set(faults);
@@ -70,14 +72,24 @@ export function applyStepToSnapshot(step, snapshot) {
             const toOpen = new Set(step.openedBranches);
             newBranches = newBranches.map(b => toOpen.has(b.id) ? { ...b, state: 0 } : b);
         }
-        return { branches: newBranches, faults: newFaults };
+        return { branches: newBranches, faults: newFaults, shunts };
     }
     
     if (step.type === 'fault_remove') {
         const newFaults = new Set(faults);
         newFaults.delete(step.nodeId);
-        return { branches, faults: newFaults };
+        return { branches, faults: newFaults, shunts };
     }
+
+    // 👇 2. O NOVO COMANDO DOS CAPACITORES 👇
+    if (step.type === 'shunt_step') {
+        const newShunts = JSON.parse(JSON.stringify(shunts)); // Cópia profunda segura
+        if (newShunts[step.nodeId]) {
+            newShunts[step.nodeId].steps = step.steps;
+        }
+        return { branches, faults, shunts: newShunts };
+    }
+
     return snapshot;
 }
 
@@ -117,6 +129,8 @@ function describeStep(step, branches) {
     }
     if (step.type === 'fault_add')    return `Falta na barra ${step.nodeId} e Proteção`;
     if (step.type === 'fault_remove') return `Restaurar barra ${step.nodeId}`;
+    // 👇 O TEXTO PARA A MANOBRA DO CAPACITOR 👇
+    if (step.type === 'shunt_step')   return `Ajustar Capacitor ${step.nodeId} → Estágio ${step.steps}`;
     return 'Passo desconhecido';
 }
 

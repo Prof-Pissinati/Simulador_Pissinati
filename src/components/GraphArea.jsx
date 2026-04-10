@@ -28,7 +28,7 @@ export default function GraphArea({
     selectedElement, hoveredLineId, setHoveredLineId, hoveredNodeId, setHoveredNodeId, maintenanceMode,
     activePositions = {}, activeWaypoints = {}, lineCurrents = {}, nodeData = {}, isEditMode, setIsEditMode, darkMode,
     printFrameMode, isFaultSidebarOpen, onSaveLayoutToHistory, children, onExportRequest, loads,
-    systemLoads, sses, feedersList = []
+    systemLoads, sses, feedersList = [], systemShunts
 }) {
     const svgRef = useRef(null);
     const measureRef = useRef(null); 
@@ -789,6 +789,8 @@ export default function GraphArea({
         overflow: 'hidden'
     };
 
+    
+
     return (
         <div className="graph-container" style={{ position: 'relative', width: '100%', height: '100%', display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
             <div ref={measureRef} style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, pointerEvents: 'none', zIndex: -1 }}></div>
@@ -876,20 +878,18 @@ export default function GraphArea({
                             const isHighlighted = hoveredNodeId === nodeId || localHoveredNode === nodeId || isSelectedEdit || (!isEditMode && selectedElement?.id === nodeId);
                             const nodeLoad = systemLoads && systemLoads[nodeId] ? (systemLoads[nodeId].p / 1000).toFixed(1) : null;
 
-                            // 👇 NOVA VERIFICAÇÃO MATEMÁTICA DO CAPACITOR 👇
-                            const hasShunt = SYSTEM_DATA.shunts && SYSTEM_DATA.shunts[nodeId] !== undefined && SYSTEM_DATA.shunts[nodeId] !== 0;
-
-                            // LÓGICA DA AURA DE VIOLAÇÃO DE TENSÃO  
+                            // LÓGICA DA AURA DE VIOLAÇÃO DE TENSÃO (A que eu tinha apagado sem querer)
                             const v_pu = nodeData[nodeId]?.v;
-                            // Consideramos violação se a tensão cair abaixo de 0.93 ou subir acima de 1.05
                             const hasViolation = v_pu && (v_pu < 0.93 || v_pu > 1.05);
 
+                            // LÓGICA DO CAPACITOR (SHUNTS)
+                            const shuntData = systemShunts && systemShunts[nodeId];
+                            const hasShunt = !!shuntData;
+                            const isShuntOn = hasShunt && shuntData.steps > 0;
+                            const injectedQ = hasShunt ? shuntData.steps * shuntData.stepSize : 0;
+
                             return (
-                                // 👇 A MÁGICA ESTÁ AQUI: A classe entra no grupo pai! 👇
-                                <g 
-                                    key={`wrapper-${nodeId}`} 
-                                    className={hasViolation ? "voltage-glow-wrapper" : ""}
-                                >
+                                <g key={`wrapper-${nodeId}`} className={hasViolation ? "voltage-glow-wrapper" : ""}>
                                    
                                     <GraphNode
                                         key={nodeId}
@@ -910,6 +910,25 @@ export default function GraphArea({
                                         onMouseEnter={handleNodeMouseEnter}
                                         onMouseLeave={handleNodeMouseLeave}
                                     />
+
+                                    {/* ÍCONE DO CAPACITOR */}
+                                    {hasShunt && (
+                                        <g 
+                                            transform={`translate(${pos.x + 18}, ${pos.y - 18})`} 
+                                            style={{ cursor: isEditMode ? 'default' : 'pointer', pointerEvents: 'all' }}
+                                        >
+                                            <title>{`Banco de Capacitores (${injectedQ} kVAr)\nPassos LIGADOS: ${shuntData.steps} de ${shuntData.maxSteps}`}</title>
+                                            <circle 
+                                                cx="0" cy="0" r="12" 
+                                                fill={isShuntOn ? (darkMode ? 'rgba(0, 188, 212, 0.2)' : 'rgba(0, 188, 212, 0.15)') : (darkMode ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)')} 
+                                                stroke={isShuntOn ? '#00bcd4' : (darkMode ? '#555' : '#aaa')} 
+                                                strokeWidth="1.5" 
+                                            />
+                                            <text x="0" y="3" textAnchor="middle" fontSize="9" fontWeight="bold" fill={isShuntOn ? '#00bcd4' : (darkMode ? '#888' : '#aaa')} pointerEvents="none">
+                                                {shuntData.steps}
+                                            </text>
+                                        </g>
+                                    )}
                                 </g>
                             );
                         })}

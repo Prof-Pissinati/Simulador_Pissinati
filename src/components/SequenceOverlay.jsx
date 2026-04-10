@@ -11,7 +11,8 @@ export default function SequenceOverlay({
     onReorderSteps, 
     onDeleteStep,
     onToggleStepAction,
-    onActiveStepChange, // 👇 NOVO: Callback para avisar o App sobre qual manobra rodou
+    onUpdateStepValue,  // 👇 NOVO: Callback para manobras de incremento
+    onActiveStepChange, 
     onClose,
     darkMode    = true,
 }) {
@@ -30,8 +31,9 @@ export default function SequenceOverlay({
     const text    = darkMode ? '#eee' : '#222';
     const muted   = darkMode ? '#aaa' : '#666';
 
-    const STEP_COLORS = { open: '#f44336', close: '#4caf50', tap: '#ff9800', fault_add: '#d50000', fault_remove: '#00bcd4' };
-    const STEP_ICONS  = { open: '🔓', close: '🔒', tap: '⚙️', fault_add: '⚡', fault_remove: '✅' };
+    // Adicionado cores e ícones para o Shunt (Capacitor)
+    const STEP_COLORS = { open: '#f44336', close: '#4caf50', tap: '#ff9800', fault_add: '#d50000', fault_remove: '#00bcd4', shunt_step: '#00bcd4' };
+    const STEP_ICONS  = { open: '🔓', close: '🔒', tap: '⚙️', fault_add: '⚡', fault_remove: '✅', shunt_step: '⟛' };
 
     const goToStep = useCallback((idx) => {
         const clamped = Math.max(0, Math.min(steps.length, idx));
@@ -51,7 +53,6 @@ export default function SequenceOverlay({
             onApplySnapshot(snapshots[currentStep]);
         }
         
-        // 👇 A MÁGICA ACONTECE AQUI: Avisa o App para focar no elemento 👇
         if (onActiveStepChange) {
             const stepData = currentStep > 0 && currentStep <= steps.length ? steps[currentStep - 1] : null;
             onActiveStepChange(stepData);
@@ -109,12 +110,11 @@ export default function SequenceOverlay({
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 20px', gap: '20px' }}>
                     <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                            {/* <span style={{ fontWeight: 'bold', fontSize: 14, color: text }}>⚡ Sequenciador</span> */}
                             <span style={{ fontSize: 11, color: muted, background: surface, padding: '2px 8px', borderRadius: '12px' }}>Passo {currentStep} de {steps.length}</span>
                             <span style={{ fontSize: 10, color: '#ff9800', background: 'rgba(255, 152, 0, 0.1)', padding: '2px 6px', borderRadius: '4px', border: '1px solid rgba(255,152,0,0.3)' }}>{method}</span>
                         </div>
                         <div style={{ fontSize: 13, color: '#00bcd4', marginTop: 4, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                            {currentStep === 0 ? (<span style={{ color: muted }}>Pronto para iniciar...</span>) : currentStep === steps.length && !isPlaying ? (<span style={{ color: '#4caf50' }}>✅ Sequenciamento concluído!</span>) : currentStepData ? (<span>{STEP_ICONS[currentStepData.type]} {currentStepData.description}</span>) : null}
+                            {currentStep === 0 ? (<span style={{ color: muted }}>Pronto para iniciar...</span>) : currentStep === steps.length && !isPlaying ? (<span style={{ color: '#4caf50' }}>✅ Sequenciamento concluído!</span>) : currentStepData ? (<span>{STEP_ICONS[currentStepData.type]} {currentStepData.description.split('→')[0]}</span>) : null}
                         </div>
                     </div>
 
@@ -130,7 +130,6 @@ export default function SequenceOverlay({
                     </div>
 
                     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '2px', borderLeft: `1px solid ${border}`, paddingLeft: '15px' }}>
-                        {/* <div style={{ fontSize: '10px', color: muted }}>Corte Atual: <span style={{ color: '#f44336', fontWeight: 'bold' }}>{currentSnapshot.disconnectedP.toFixed(0)} kW</span></div>*/}
                         <div style={{ fontSize: '12px', color: muted }}>Penalidade ENS: <span style={{ color: '#ff9800', fontWeight: 'bold' }}>{currentSnapshot.accumulatedENS.toFixed(0)} kW</span></div>
                     </div>
 
@@ -155,34 +154,54 @@ export default function SequenceOverlay({
                         <div style={{ padding: 20, color: muted, textAlign: 'center', fontSize: 13 }}>Lista vazia. Ative a gravação e clique no diagrama para injetar manobras.</div>
                     ) : steps.map((step, idx) => {
                         const stepNum = idx + 1; const isDone = stepNum <= currentStep; const isCurrent = stepNum === currentStep; const color = STEP_COLORS[step.type] ?? '#888';
+                        
                         const canToggle = step.type === 'open' || step.type === 'close' || step.type === 'fault_add' || step.type === 'fault_remove';
+                        const isTap = step.type === 'tap';
+                        const isShunt = step.type === 'shunt_step';
 
                         return (
                             <div key={idx} data-active={isCurrent} draggable onDragStart={(e) => handleDragStart(e, idx)} onDragOver={handleDragOver} onDrop={(e) => handleDrop(e, idx)} onClick={() => goToStep(stepNum)} onMouseEnter={() => step.branchId !== undefined && onHoverBranch?.(step.branchId)} onMouseLeave={() => onHoverBranch?.(null)} style={{ display: 'flex', alignItems: 'center', gap: 15, padding: '10px 20px', cursor: 'grab', background: isCurrent ? (darkMode ? 'rgba(0, 188, 212, 0.15)' : 'rgba(0, 188, 212, 0.1)') : (draggedIdx === idx ? surface : 'transparent'), borderLeft: isCurrent ? `4px solid #00bcd4` : '4px solid transparent', borderBottom: `1px solid ${darkMode ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.03)'}`, opacity: isDone ? 1 : 0.45, transition: 'all 0.15s ease' }}>
                                 <div style={{ fontSize: '14px', color: muted, cursor: 'grab' }}>☰</div>
                                 <div style={{ minWidth: 28, height: 28, borderRadius: '50%', background: isDone ? color : surface, border: `2px solid ${isDone ? color : border}`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 'bold', color: isDone ? '#fff' : muted }}>{isDone ? (isCurrent ? stepNum : '✓') : stepNum}</div>
-                                <div style={{ flex: 1, minWidth: 0 }}>
-                                    <div style={{ fontSize: 13, color: isDone ? text : muted, fontWeight: isCurrent ? 'bold' : 'normal' }}>{STEP_ICONS[step.type]} {step.description}</div>
+                                
+                                <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: '15px' }}>
+                                    {/* DESCRIÇÃO TRUNCADA PARA TAPs E SHUNTs */}
+                                    <div style={{ fontSize: 13, color: isDone ? text : muted, fontWeight: isCurrent ? 'bold' : 'normal' }}>
+                                        {STEP_ICONS[step.type]} {step.description.split('→')[0]}
+                                    </div>
+                                    
+                                    {/* 👇 MINI-CONTROLES EMBUTIDOS PARA TAP 👇 */}
+                                    {isTap && (
+                                        <div style={{ display: 'flex', alignItems: 'center', background: surface, borderRadius: '4px', border: `1px solid ${border}`, overflow: 'hidden' }}>
+                                            <button onClick={(e) => { e.stopPropagation(); onUpdateStepValue?.(idx, step.tapValue - 1); }} style={{ background: 'transparent', border: 'none', color: text, padding: '2px 8px', cursor: 'pointer' }}>-</button>
+                                            <div style={{ fontSize: '11px', width: '35px', textAlign: 'center', fontWeight: 'bold', color: color, borderLeft: `1px solid ${border}`, borderRight: `1px solid ${border}` }}>
+                                                {step.tapValue > 0 ? `+${step.tapValue}` : step.tapValue}
+                                            </div>
+                                            <button onClick={(e) => { e.stopPropagation(); onUpdateStepValue?.(idx, step.tapValue + 1); }} style={{ background: 'transparent', border: 'none', color: text, padding: '2px 8px', cursor: 'pointer' }}>+</button>
+                                        </div>
+                                    )}
+
+                                    {/* 👇 MINI-CONTROLES EMBUTIDOS PARA CAPACITOR 👇 */}
+                                    {isShunt && (
+                                        <div style={{ display: 'flex', alignItems: 'center', background: surface, borderRadius: '4px', border: `1px solid ${border}`, overflow: 'hidden' }}>
+                                            <button onClick={(e) => { e.stopPropagation(); onUpdateStepValue?.(idx, step.steps - 1); }} style={{ background: 'transparent', border: 'none', color: text, padding: '2px 8px', cursor: 'pointer' }}>-</button>
+                                            <div style={{ fontSize: '11px', width: '35px', textAlign: 'center', fontWeight: 'bold', color: color, borderLeft: `1px solid ${border}`, borderRight: `1px solid ${border}` }}>
+                                                Est {step.steps}
+                                            </div>
+                                            <button onClick={(e) => { e.stopPropagation(); onUpdateStepValue?.(idx, step.steps + 1); }} style={{ background: 'transparent', border: 'none', color: text, padding: '2px 8px', cursor: 'pointer' }}>+</button>
+                                        </div>
+                                    )}
                                 </div>
 
-                                <div 
-                                    onClick={(e) => {
-                                        if (canToggle && onToggleStepAction) {
-                                            e.stopPropagation();
-                                            onToggleStepAction(idx);
-                                        }
-                                    }}
-                                    title={canToggle ? "Clique para alternar a manobra" : ""}
-                                    style={{ 
-                                        fontSize: 10, fontWeight: 'bold', color: color, background: `${color}18`, 
-                                        padding: '3px 8px', borderRadius: 6, textTransform: 'uppercase', letterSpacing: 0.5,
-                                        cursor: canToggle ? 'pointer' : 'default',
-                                        border: canToggle ? `1px solid ${color}50` : '1px solid transparent',
-                                        transition: 'all 0.2s'
-                                    }}
-                                >
-                                    {step.type.replace('_', ' ')}
-                                </div>
+                                {canToggle && (
+                                    <div 
+                                        onClick={(e) => { e.stopPropagation(); onToggleStepAction?.(idx); }}
+                                        title="Clique para alternar a manobra"
+                                        style={{ fontSize: 10, fontWeight: 'bold', color: color, background: `${color}18`, padding: '3px 8px', borderRadius: 6, textTransform: 'uppercase', letterSpacing: 0.5, cursor: 'pointer', border: `1px solid ${color}50`, transition: 'all 0.2s' }}
+                                    >
+                                        {step.type.replace('_', ' ')}
+                                    </div>
+                                )}
                                 
                                 {onDeleteStep && (
                                     <button 

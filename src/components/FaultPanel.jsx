@@ -21,7 +21,10 @@ export default function FaultPanel({
     branches,
     sses,
     feedersList = [], // 👈 Recebendo a lista de alimentadores
-    handleTapChange
+    handleTapChange,
+    systemShunts = {},       // 👈 NOVO: Recebe os estados dos capacitores
+    handleShuntChange,        // 👈 NOVO: Recebe a função de alterar os passos
+    systemLoads = {}
 }) {
     const getStatusText = (id) => {
         if (faultNodes.has(id)) return 'EM FALTA';
@@ -47,7 +50,7 @@ export default function FaultPanel({
              
              {/* ================= INSPETOR ================= */}
              <div className="inspector" style={{ 
-                 height: '340px', minHeight: '340px', borderBottom: '2px solid var(--border-color)',
+                 height: '360px', minHeight: '360px', borderBottom: '2px solid var(--border-color)',
                  background: 'var(--card-bg)', padding: '20px', overflow: 'hidden', display: 'flex', flexDirection: 'column'
              }}>
                 {selectedElement ? (
@@ -55,19 +58,18 @@ export default function FaultPanel({
                     (() => {
                         const { v, angle } = getVoltage(selectedElement.id);
                         const puVal = v.toFixed(3);
-                        const vColor = v < 0.93 ? '#d50000' : (v < 0.95 ? '#ffd600' : '#2e7d32');
                         
-                        // 👇 IDENTIFICAÇÃO DO TIPO 👇
+                        // Lógica de cores da tensão (Violado = Vermelho, Atenção = Amarelo, Seguro = Verde)
+                        const vColor = v < 0.93 ? '#d50000' : (v < 0.95 ? '#ffd600' : (v > 1.05 ? '#d50000' : '#4caf50'));
+                        
                         const isMainSource = sources.includes(selectedElement.id);
                         const isFeeder = feedersList.includes(selectedElement.id);
-                        const isSource = isMainSource || isFeeder; // Ambos se comportam como fonte visualmente
+                        const isSource = isMainSource || isFeeder; 
                         
-                        // 👇 CÁLCULO INTELIGENTE DE ENERGIA 👇
                         let totalP = 0, totalQ = 0, totalS = 0;
                         
                         if (isSource && lineCurrents) {
                             if (isMainSource) {
-                                // GERAÇÃO (Subestação Principal): Calcula saldo líquido
                                 branches.forEach(b => {
                                     if (b.state === 1 && lineCurrents[b.id]) {
                                         if (b.from === selectedElement.id) {
@@ -82,7 +84,6 @@ export default function FaultPanel({
                                 totalP = Math.abs(totalP);
                                 totalQ = Math.abs(totalQ);
                             } else if (isFeeder) {
-                                // DEMANDA DE PASSAGEM (Alimentador): Soma o módulo de tudo e divide por 2
                                 let sumP = 0, sumQ = 0;
                                 branches.forEach(b => {
                                     if (b.state === 1 && lineCurrents[b.id]) {
@@ -98,24 +99,23 @@ export default function FaultPanel({
                             totalS = Math.sqrt(Math.pow(totalP, 2) + Math.pow(totalQ, 2));
                         }
 
-                        // 👇 CÁLCULO DE CARREGAMENTO (SSE) 👇
                         let sLimit = 1000, loadingPercent = 0, loadColor = vColor;
-                        
                         if (isSource) {
                             sLimit = (SYSTEM_DATA.sses && SYSTEM_DATA.sses[selectedElement.id]) ? SYSTEM_DATA.sses[selectedElement.id] : 1000;
                             loadingPercent = (totalS / sLimit) * 100;
-                            loadColor = loadingPercent > 100 ? '#d50000' : (loadingPercent > 75 ? '#ff9800' : '#2e7d32');
+                            loadColor = loadingPercent > 100 ? '#d50000' : (loadingPercent > 75 ? '#ff9800' : '#4caf50');
                         }
                         
                         return (
                             <>
                                 <div className="inspector-title">{isMainSource ? 'Subestação' : (isFeeder ? 'Alimentador' : 'Barra')} {selectedElement.id}</div>
-                                <div className="inspector-row"><span>Tipo:</span><b>{isMainSource ? 'Subest. Principal' : (isFeeder ? 'Alimentador' : 'Carga')}</b></div>
-                                
-                                {!isSource && SYSTEM_DATA.loads[selectedElement.id] && (
+                                <div className="inspector-row"><span>Tipo:</span><b>{isMainSource ? 'Subest. Principal' : (isFeeder ? 'Alimentador' : (systemShunts && systemShunts[selectedElement.id] ? 'Carga Shunt' : 'Carga'))}</b></div>
+
+                                {/* CARGAS (P e Q) */}
+                                {!isSource && systemLoads[selectedElement.id] && (
                                     <>
-                                        <div className="inspector-row"><span>Carga P:</span><b>{SYSTEM_DATA.loads[selectedElement.id].p.toFixed(1)} kW</b></div>
-                                        <div className="inspector-row"><span>Carga Q:</span><b>{SYSTEM_DATA.loads[selectedElement.id].q.toFixed(1)} kVAr</b></div>
+                                        <div className="inspector-row"><span>Carga P:</span><b>{systemLoads[selectedElement.id].p.toFixed(1)} kW</b></div>
+                                        <div className="inspector-row"><span>Carga Q:</span><b>{systemLoads[selectedElement.id].q.toFixed(1)} kVAr</b></div>
                                     </>
                                 )}
 
@@ -128,65 +128,91 @@ export default function FaultPanel({
                                     </>
                                 )}
 
-                                <div className="inspector-row" style={{marginTop:'auto', paddingTop:'10px', borderTop:'1px dashed #444'}}>
-                                    <span>{'Tensão:'}</span>
-                                    <b style={{color: vColor}}>{`${puVal} pu`}</b>
-                                </div>
-                                <div className="inspector-row"><span>Ângulo:</span><b>{angle.toFixed(2)}°</b></div>
-                                
-                                {/* 👇 BARRA DE PROGRESSO OU AGULHA DE TENSÃO 👇 */}
-                                {isSource ? (
-                                    /* Se for Subestação/Alimentador, mostra o % de Carregamento */
-                                    <div className="current-bar-container" style={{marginTop:'12px', height:'24px', borderRadius:'12px'}}>
-                                        <div className="current-bar" 
-                                                style={{
-                                                    width: `${Math.min(loadingPercent, 100)}%`, 
-                                                    background: loadColor,
-                                                    transition: 'width 0.4s ease, background 0.4s ease',
-                                                    fontSize: '12px'
-                                                }}>
-                                            {loadingPercent.toFixed(1)}%
-                                        </div>
-                                    </div>
-                                ) : (
-                                    /* 💎 NOVO MEDIDOR HORIZONTAL "BULLET GAUGE" (0.90 a 1.10) 💎 */
-                                    <div style={{ marginTop: '15px', padding: '0 10px' }}>
-                                        {/* Régua de Valores */}
-                                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: '#888', marginBottom: '6px', fontFamily: 'monospace', fontWeight: 'bold' }}>
-                                            <span>0.90</span>
-                                            <span style={{ color: '#ccc' }}>1.00</span>
-                                            <span>1.10</span>
-                                        </div>
+                                {/* 👇 O NOVO SLIDER DO CAPACITOR (Minimalista) 👇 */}
+                                {systemShunts && systemShunts[selectedElement.id] && (
+                                    (() => {
+                                        const shunt = systemShunts[selectedElement.id];
+                                        const maxKvar = shunt.maxSteps * shunt.stepSize;
+                                        const curKvar = shunt.steps * shunt.stepSize;
                                         
-                                        {/* Trilha do Gradiente (Embutida) */}
-                                        <div style={{ position: 'relative', height: '10px', background: 'linear-gradient(90deg, #d32f2f 0%, #d32f2f 15%, #fbc02d 25%, #388e3c 40%, #388e3c 60%, #fbc02d 75%, #d32f2f 85%, #d32f2f 100%)', borderRadius: '4px', boxShadow: 'inset 0 1px 3px rgba(0,0,0,0.5)' }}>
-                                            
-                                            {/* Marcação central de 1.00 pu */}
-                                            <div style={{ position: 'absolute', left: '50%', top: '0', bottom: '0', width: '2px', background: 'rgba(255,255,255,0.4)', transform: 'translateX(-50%)' }}></div>
-                                            
-                                            {/* O Ponteiro (Barra Vertical Branca) */}
-                                            <div style={{ 
-                                                position: 'absolute', 
-                                                top: '-4px', 
-                                                bottom: '-4px', 
-                                                left: `${Math.max(0, Math.min(100, ((v - 0.90) / 0.20) * 100))}%`, 
-                                                width: '6px', 
-                                                background: '#ffffff', 
-                                                border: '1px solid #333',
-                                                borderRadius: '3px', 
-                                                boxShadow: '0 0 5px rgba(0,0,0,0.8)',
-                                                transform: 'translateX(-50%)',
-                                                transition: 'left 0.4s cubic-bezier(0.25, 1, 0.5, 1)'
-                                            }}></div>
-                                        </div>
-                                        
-                                        {/* Valor Exato em Destaque */}
-                                        <div style={{ textAlign: 'center', marginTop: '10px', fontSize: '14px', fontWeight: 'bold', color: vColor, fontFamily: 'monospace' }}>
-                                            {puVal} pu
-                                        </div>
-                                    </div>
+                                        return (
+                                            <div style={{ marginTop: '20px', paddingTop: '15px', borderTop: `1px solid ${darkMode ? '#333' : '#eee'}` }}>
+                                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                                                    <span style={{ fontSize: '12px', color: darkMode ? '#aaa' : '#666', whiteSpace: 'nowrap' }}>Banco Shunt</span>
+                                                    <b style={{ color: '#00bcd4', fontSize: '13px' }}>{curKvar} <span style={{fontSize: '10px', color: '#888'}}>/ {maxKvar} kVAr</span></b>
+                                                </div>
+                                                
+                                                <input 
+                                                    type="range" 
+                                                    min="0" 
+                                                    max={shunt.maxSteps} 
+                                                    step="1" 
+                                                    value={shunt.steps}
+                                                    onChange={(e) => {
+                                                        const newVal = parseInt(e.target.value);
+                                                        const diff = newVal - shunt.steps;
+                                                        if(handleShuntChange) handleShuntChange(selectedElement.id, diff);
+                                                    }}
+                                                    style={{ width: '100%', accentColor: '#00bcd4', cursor: 'pointer', height: '4px', background: darkMode ? '#333' : '#ddd', borderRadius: '2px', appearance: 'auto' }}
+                                                />
+                                                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px', color: darkMode ? '#777' : '#999', marginTop: '4px' }}>
+                                                    <span>0</span>
+                                                    <span>Estágio {shunt.steps}</span>
+                                                    <span>{shunt.maxSteps}</span>
+                                                </div>
+                                            </div>
+                                        );
+                                    })()
                                 )}
-                                {/* 👆 ========================================= 👆 */}
+
+                                {/* 👇 O NOVO MEDIDOR DE TENSÃO (Bullet Graph Limpo) 👇 */}
+                                <div style={{ marginTop: 'auto', paddingTop: '15px', borderTop: `1px solid ${darkMode ? '#333' : '#eee'}` }}>
+                                    {isSource ? (
+                                        /* Barra de carregamento da Subestação (S) */
+                                        <>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', marginBottom: '6px' }}>
+                                                <span style={{ color: darkMode ? '#aaa' : '#666' }}>Carregamento</span>
+                                                <b style={{ color: loadColor }}>{loadingPercent.toFixed(1)}%</b>
+                                            </div>
+                                            <div style={{ height: '6px', background: darkMode ? '#333' : '#e0e0e0', borderRadius: '3px', overflow: 'hidden' }}>
+                                                <div style={{ width: `${Math.min(loadingPercent, 100)}%`, height: '100%', background: loadColor, transition: 'width 0.4s ease, background 0.4s ease' }}></div>
+                                            </div>
+                                        </>
+                                    ) : (
+                                        /* Bullet Graph Minimalista para Tensão PU da Carga */
+                                        <>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px', color: '#888', marginBottom: '4px', fontFamily: 'monospace' }}>
+                                                <span>0.90</span>
+                                                <span>1.00</span>
+                                                <span>1.10</span>
+                                            </div>
+                                            
+                                            <div style={{ position: 'relative', height: '4px', background: darkMode ? '#333' : '#e0e0e0', borderRadius: '2px' }}>
+                                                {/* Faixa Segura (0.95 a 1.05) - Discreta */}
+                                                <div style={{ position: 'absolute', left: '25%', width: '50%', height: '100%', background: darkMode ? 'rgba(76, 175, 80, 0.15)' : 'rgba(76, 175, 80, 0.25)', borderRadius: '2px' }}></div>
+                                                {/* Marcador Central (1.00) */}
+                                                <div style={{ position: 'absolute', left: '50%', top: '-3px', bottom: '-3px', width: '1px', background: darkMode ? '#666' : '#999' }}></div>
+                                                
+                                                {/* A Agulha da Tensão */}
+                                                <div style={{ 
+                                                    position: 'absolute', top: '-5px', bottom: '-5px', 
+                                                    left: `${Math.max(0, Math.min(100, ((v - 0.90) / 0.20) * 100))}%`, 
+                                                    width: '4px', background: vColor, borderRadius: '2px',
+                                                    transform: 'translateX(-50%)', transition: 'left 0.4s cubic-bezier(0.25, 1, 0.5, 1), background 0.4s ease'
+                                                }}></div>
+                                            </div>
+
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '12px' }}>
+                                                <span style={{ fontSize: '13px', color: darkMode ? '#aaa' : '#666' }}>Tensão</span>
+                                                <span style={{ fontSize: '15px', fontWeight: 'bold', color: vColor, fontFamily: 'monospace' }}>{puVal} pu</span>
+                                            </div>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '6px' }}>
+                                                <span style={{ fontSize: '13px', color: darkMode ? '#aaa' : '#666' }}>Ângulo</span>
+                                                <span style={{ fontSize: '14px', fontWeight: 'bold', color: darkMode ? '#ccc' : '#444', fontFamily: 'monospace' }}>{angle.toFixed(2)}°</span>
+                                            </div>
+                                        </>
+                                    )}
+                                </div>
                             </>
                         );
                     })()

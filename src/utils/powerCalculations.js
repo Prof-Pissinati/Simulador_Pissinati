@@ -3,21 +3,22 @@ import { solveLinearSystem } from './mathSolver';
 // --- GERENCIADOR DE CACHE ---
 export const CacheManager = {
     cache: new Map(),
-    getKey: (branches, faultNodes, method) => {
+    getKey: (branches, faultNodes, method, sysData) => {
         const branchState = branches.map(b => `${b.id}:${b.state}:${b.currentTap || 0}`).join('|');
         const faultState = Array.from(faultNodes).sort().join(',');
-        return `${method}-${branchState}-${faultState}`;
+        // Ensina o cache a "ler" os estágios dos capacitores
+        const shuntState = sysData && sysData.shunts ? Object.entries(sysData.shunts).map(([id, s]) => `${id}:${s.steps}`).join(',') : '';
+        return `${method}-${branchState}-${faultState}-${shuntState}`;
     },
-    get: function(branches, faultNodes, method) {
-        return this.cache.get(this.getKey(branches, faultNodes, method));
+    get: function(branches, faultNodes, method, sysData) {
+        return this.cache.get(this.getKey(branches, faultNodes, method, sysData));
     },
-    set: function(branches, faultNodes, method, result) {
-        const key = this.getKey(branches, faultNodes, method);
+    set: function(branches, faultNodes, method, sysData, result) {
+        const key = this.getKey(branches, faultNodes, method, sysData);
         if (this.cache.size > 20) this.cache.clear();
         this.cache.set(key, result);
     }
 };
-
 // --- FUNÇÃO PRINCIPAL DE FLUXO DE POTÊNCIA ---
 export function runPowerFlow(branches, faultNodes, method = 'NR', sysData){
     CacheManager.cache.clear();
@@ -89,7 +90,6 @@ export function runPowerFlow(branches, faultNodes, method = 'NR', sysData){
         const g = r_pu / mag2;
         const b_line = -x_pu / mag2; 
         
-        // CÁLCULO DO TAP (Relação de Transformação 'a')
         let a = 1.0;
         if (branch.isRegulator && branch.maxTaps > 0) {
             const regMaxPu = branch.regMax > 1 ? branch.regMax / 100 : (branch.regMax || 0.1); 
@@ -110,8 +110,8 @@ export function runPowerFlow(branches, faultNodes, method = 'NR', sysData){
 
     // INJEÇÃO DOS BANCOS DE CAPACITORES (SHUNTS)
     nodes.forEach((id, i) => {
-        if (shunts[id]) {
-            const b_shunt_pu = shunts[id] / Sbase;
+        if (shunts[id] && shunts[id].steps > 0) {
+            const b_shunt_pu = (shunts[id].steps * shunts[id].stepSize) / Sbase;
             B[i][i] += b_shunt_pu;
         }
     });
@@ -386,9 +386,10 @@ export function propagateFeeds(branches, faultNodes, sysData) {
     return nodeFeeds;
 }
 
+// 👇 CÁLCULO DE CARGA ATUALIZADO PARA ABATER O REATIVO DO CAPACITOR 👇
 export function calculateLoads(nodeFeeds, faultNodes, sysData) {
     const subs = {};
-    const { sources = [], loads = {} } = sysData || {};
+    const { sources = [], loads = {}, shunts = {} } = sysData || {};
     
     sources.forEach(s => {
         subs[s] = {p:0, q:0, nodes:0};
@@ -400,11 +401,24 @@ export function calculateLoads(nodeFeeds, faultNodes, sysData) {
             const feeds = nodeFeeds[id];
             if(feeds && feeds.size >= 1) {
                 const s = Array.from(feeds)[0];
-                const l = loads[id]; 
-                if(l && subs[s]) {
-                    subs[s].p += l.p;
-                    subs[s].q += l.q;
-                    subs[s].nodes++;
+                if(subs[s]) {
+                    let nodeP = 0;
+                    let nodeQ = 0;
+                    
+                    // Soma a carga normal
+                    if (loads[id]) {
+                        nodeP += loads[id].p || 0;
+                        nodeQ += loads[id].q || 0;
+                        subs[s].nodes++;
+                    }
+                    
+                    // Subtrai a carga reativa injetada pelos bancos de capacitores
+                    if (shunts[id] && shunts[id].steps > 0) {
+                        nodeQ -= (shunts[id].steps * shunts[id].stepSize);
+                    }
+                    
+                    subs[s].p += nodeP;
+                    subs[s].q += nodeQ;
                 }
             }
         }
