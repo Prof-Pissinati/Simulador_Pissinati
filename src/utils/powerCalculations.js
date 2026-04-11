@@ -296,8 +296,11 @@ function buildResult(nodes, V, Theta, Zbase, branches, nodeMap, energizedNodes, 
     });
 
     branches.forEach(b => {
+        // 👇 AGORA ELE SEMPRE LÊ O LIMITE PRIMEIRO 👇
+        const limitCurrent = b.Imax || b.imax || b.capacity || b.limit || 1000;
+
         if (b.state === 0 || !energizedNodes.has(b.from) || !energizedNodes.has(b.to)) {
-             lineResults[b.id] = { current: 0, percentage: 0, pFlow: 0, qFlow: 0 };
+             lineResults[b.id] = { current: 0, percentage: 0, pFlow: 0, qFlow: 0, limitCurrent }; // 👈 Passando para a UI
              return;
         }
         
@@ -305,14 +308,14 @@ function buildResult(nodes, V, Theta, Zbase, branches, nodeMap, energizedNodes, 
         const v = nodeMap.get(b.to);
         
         if (u === undefined || v === undefined) {
-             lineResults[b.id] = { current: 0, percentage: 0, pFlow: 0, qFlow: 0 };
+             lineResults[b.id] = { current: 0, percentage: 0, pFlow: 0, qFlow: 0, limitCurrent }; // 👈 Passando para a UI
              return;
         }
 
         const r_pu = b.r / Zbase;
         const x_pu = b.x / Zbase;
         const mag2 = r_pu**2 + x_pu**2;
-        if(mag2 < 1e-20) { lineResults[b.id] = { current: 0, percentage: 0, pFlow: 0, qFlow: 0 }; return; }
+        if(mag2 < 1e-20) { lineResults[b.id] = { current: 0, percentage: 0, pFlow: 0, qFlow: 0, limitCurrent }; return; }
 
         const g = r_pu / mag2; 
         const bb = -x_pu / mag2;
@@ -330,13 +333,13 @@ function buildResult(nodes, V, Theta, Zbase, branches, nodeMap, energizedNodes, 
         const q_pu = -(V[u]**2 * bb / a2) - (V[u] * V[v] * (g * Math.sin(ang) - bb * Math.cos(ang)) / a);
         
         const i_real = (Math.sqrt(p_pu**2 + q_pu**2) / V[u]) * (Sbase / (Math.sqrt(3) * Vbase));
-        const limitCurrent = b.Imax || b.imax || b.capacity || b.limit || 1000;
         
         lineResults[b.id] = {
             current: i_real,
             percentage: (i_real / limitCurrent) * 100,
             pFlow: p_pu * Sbase,
-            qFlow: q_pu * Sbase
+            qFlow: q_pu * Sbase,
+            limitCurrent // 👈 Passando o valor real mastigado para a UI
         };
     });
     return { nodes: nodeResults, lines: lineResults };

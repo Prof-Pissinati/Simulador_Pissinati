@@ -154,7 +154,16 @@ export function useFileImport({
                 setTimeout(() => { window.dispatchEvent(new CustomEvent('applyGraphLayout', { detail: parsedData })); }, 100);
                 
                 setIsProjectLoaded(true);
-                showToast("Sistema AMPL importado com sucesso!", "success");
+                
+                // 👇 VALIDAÇÃO DE INTEGRIDADE DE DADOS 👇
+                const missingLimits = parsedData.branches.filter(b => !b.Imax && !b.imax && !b.limit && !b.capacity);
+                if (missingLimits.length > 0) {
+                    showToast(`⚠️ Aviso: ${missingLimits.length} linha(s) importada(s) sem Limite de Corrente. Assumindo 1000A.`, "warning");
+                } else {
+                    showToast("Sistema AMPL importado com integridade total!", "success");
+                }
+                // 👆 FIM DA VALIDAÇÃO 👆
+
             } catch (err) {
                 alert("❌ Erro ao processar o ficheiro .dat.");
                 console.error(err);

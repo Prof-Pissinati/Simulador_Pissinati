@@ -705,6 +705,13 @@ const handleShuntChange = useCallback((nodeId, increment) => {
                         disconnectedStats={disconnectedStats} 
                         lineCurrents={lineCurrents} 
                         feedersList={SYSTEM_DATA.feeders || []}
+                        
+                        // 👇 ADICIONADO PARA O INSPETOR QUE AGORA FICA AQUI 👇
+                        nodeData={nodeData}
+                        systemLoads={systemLoads}
+                        systemShunts={systemShunts}
+                        handleTapChange={handleTapChange}
+                        handleShuntChange={handleShuntChange}
                     />
                 ) : (
                     <EditSidebar 
@@ -813,7 +820,7 @@ const handleShuntChange = useCallback((nodeId, increment) => {
             </div>
 
             <div className="hide-on-print right-panel-wrapper" style={{ zIndex: 100 }}>
-                <div onClick={() => setFaultSidebarOpen(!isFaultSidebarOpen)} title={isFaultSidebarOpen ? "Ocultar Painel" : "Painel de Faltas"} style={{ position: 'absolute', left: '-28px', top: 'calc(50% - 35px)', width: '28px', height: '70px', background: darkMode ? '#1e1e1e' : '#fff', borderTop: `1px solid ${darkMode ? '#333' : '#ccc'}`, borderBottom: `1px solid ${darkMode ? '#333' : '#ccc'}`, borderLeft: `1px solid ${darkMode ? '#333' : '#ccc'}`, borderRadius: '12px 0 0 12px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', boxShadow: '-4px 0 15px rgba(0,0,0,0.1)', color: '#ff9800', zIndex: 101, transition: 'background-color 0.2s' }}> {isFaultSidebarOpen ? '▶' : '⚡'} </div>
+                <div onClick={() => setFaultSidebarOpen(!isFaultSidebarOpen)} title={isFaultSidebarOpen ? "Ocultar Painel" : "Diretório de Elementos"} style={{ position: 'absolute', left: '-28px', top: 'calc(50% - 35px)', width: '28px', height: '70px', background: darkMode ? '#1e1e1e' : '#fff', borderTop: `1px solid ${darkMode ? '#333' : '#ccc'}`, borderBottom: `1px solid ${darkMode ? '#333' : '#ccc'}`, borderLeft: `1px solid ${darkMode ? '#333' : '#ccc'}`, borderRadius: '12px 0 0 12px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', boxShadow: '-4px 0 15px rgba(0,0,0,0.1)', color: '#ff9800', zIndex: 101, transition: 'background-color 0.2s' }}> {isFaultSidebarOpen ? '▶' : '⚡'} </div>
                 <div className="panel-content">
                     <FaultPanel 
                         isFaultSidebarOpen={isFaultSidebarOpen} 
@@ -829,16 +836,12 @@ const handleShuntChange = useCallback((nodeId, increment) => {
                         getNodeColor={getNodeColor} 
                         darkMode={darkMode} 
                         THEME={THEME} 
-                        nodeData={nodeData} 
-                        lineCurrents={lineCurrents} 
-                        loads={loads} 
                         branches={branches} 
-                        sses={SYSTEM_DATA.sses || {}} 
                         feedersList={SYSTEM_DATA.feeders || []} 
-                        handleTapChange={handleTapChange}
-                        systemShunts={systemShunts}
-                        handleShuntChange={handleShuntChange}
-                        systemLoads={systemLoads}
+                        
+                        // 👇 ADICIONADO PARA A LISTA DE CHAVES QUE AGORA FICA AQUI 👇
+                        toggleSwitch={toggleSwitch}
+                        setHoveredLineId={setHoveredLineId}
                     />
                 </div>
             </div>
