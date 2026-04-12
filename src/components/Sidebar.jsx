@@ -34,7 +34,9 @@ export default function Sidebar({
     systemLoads,
     systemShunts,
     handleTapChange,
-    handleShuntChange
+    handleShuntChange,
+    viewMode,
+    setViewMode
 }) {
     const fileInputRef = useRef(null);
     const isMini = sidebarMode !== 'full'; // 👈 Variável que identifica o estado compacto (não full)
@@ -76,7 +78,7 @@ export default function Sidebar({
                 <input type="file" ref={fileInputRef} style={{display: 'none'}} accept=".txt,.dat,.log" onChange={handleFileChange} />
 
                 {/* Grelha de botões: 2 colunas no normal, 1 coluna no mini */}
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: isMini ? '4px' : '2px', marginBottom: '2px' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: isMini ? '1fr 1fr' : '1fr 1fr', gap: isMini ? '4px' : '2px', marginBottom: '2px' }}>
                     <button className="sidebar-action-btn" style={{ '--btn-color': darkMode ? '#aaaaaa' : '#555555' }} onClick={() => setDarkMode(!darkMode)} title="Alternar Tema">
                         {darkMode ? '☀️' : '🌙'}{!isMini && ' Tema'}
                     </button>
@@ -92,23 +94,16 @@ export default function Sidebar({
                     <button className="sidebar-action-btn" style={{ '--btn-color': calcMethod === 'NR' ? '#ff6d00' : '#2979ff' }} onClick={() => setCalcMethod(calcMethod === 'NR' ? 'GS' : 'NR')} title={`Clique para trocar. Atual: ${calcMethod}`}>
                         {calcMethod === 'NR' ? '⚡' : '🌊'}{!isMini && ` ${calcMethod}`}
                     </button>
-                    {!isMini && (
-                        <button className="sidebar-action-btn" style={{ '--btn-color': '#9e9e9e' }} onClick={() => setShowLabels(!showLabels)} title="Mostrar/Esconder Labels">
-                            🏷️ Labels
-                        </button>
-                    )}
-                    {isMini && (
-                        <button className="sidebar-action-btn" style={{ '--btn-color': '#9c27b0' }} onClick={onDownloadReport} title="Baixar Relatório TXT">
-                            📄
-                        </button>
-                    )}
-                </div>
-
-                {!isMini && (
-                    <button className="sidebar-action-btn" style={{ '--btn-color': '#9c27b0', width: '100%', marginBottom: '-10px', marginTop: '2px' }} onClick={onDownloadReport} title="Baixar Relatório TXT">
-                        📄 Relatório
+                    <button className="sidebar-action-btn" style={{ '--btn-color': '#9e9e9e' }} onClick={() => setShowLabels(!showLabels)} title="Mostrar/Esconder Labels">
+                        🏷️{!isMini && ' Labels'}
                     </button>
-                )}
+                    <button className="sidebar-action-btn" style={{ '--btn-color': '#9c27b0' }} onClick={onDownloadReport} title="Baixar Relatório TXT">
+                        📄{!isMini && ' Relatório'}
+                    </button>
+                    <button className="sidebar-action-btn" style={{ '--btn-color': viewMode === 'schematic' ? '#e91e63' : '#00bcd4' }} onClick={() => setViewMode(viewMode === 'schematic' ? 'map' : 'schematic')} title="Alternar Visualização">
+                        {viewMode === 'schematic' ? '🗺️' : '📐'}{!isMini && (viewMode === 'schematic' ? ' Ver Mapa' : ' Diagrama')}
+                    </button>
+                </div>
             </div>
 
             {/* PAINEL DE CARGAS (Resumo) */}

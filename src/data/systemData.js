@@ -78,3 +78,12 @@ export const SYSTEM_DATA = {
         {from:28, to:50, hasSwitch:true, r:0.112574, x:0.077616, Imax:150, initialState:0},
     ]
 };
+
+// Coordenadas fictícias em Ilha Solteira para o nosso teste geográfico
+export const GEO_POSITIONS = {
+    '1000': { lat: -20.4319, lng: -51.3425 }, // Centro de Ilha Solteira
+    '101':  { lat: -20.4350, lng: -51.3400 }, // Um pouco para o Sul
+    '102':  { lat: -20.4280, lng: -51.3450 }, // Um pouco para o Norte
+    '1':    { lat: -20.4365, lng: -51.3380 }, // Barra de carga
+    '2':    { lat: -20.4380, lng: -51.3350 }, // Barra de carga
+};

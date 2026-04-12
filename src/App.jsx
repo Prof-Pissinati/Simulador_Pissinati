@@ -3,6 +3,7 @@ import { propagateFeeds, calculateLoads, runPowerFlow, CacheManager } from './ut
 import { THEME } from './utils/theme';
 import Sidebar from './components/Sidebar';
 import FaultPanel from './components/FaultPanel';
+import MapArea from './components/MapArea';
 import GraphArea from './components/GraphArea';
 import EditSidebar from './components/EditSidebar'; 
 import { exportSVG } from './utils/exportUtils';
@@ -20,6 +21,8 @@ import SequenceOverlay from './components/SequenceOverlay';
 function App() {
     const [activeSources, setActiveSources] = useState([101, 102, 104]);
     const [darkMode, setDarkMode] = useState(true); 
+    // Controle de Visualização: 'schematic' (Diagrama SVG) ou 'map' (Georreferenciado Leaflet)
+    const [viewMode, setViewMode] = useState('schematic');
     const [branches, setBranches] = useState(() => SYSTEM_DATA.branches.map((b, idx) => ({ 
         ...b, id: idx, state: (b.initialState !== undefined ? b.initialState : (b.state !== undefined ? b.state : 1)) 
     })));
@@ -705,13 +708,14 @@ const handleShuntChange = useCallback((nodeId, increment) => {
                         disconnectedStats={disconnectedStats} 
                         lineCurrents={lineCurrents} 
                         feedersList={SYSTEM_DATA.feeders || []}
-                        
-                        // 👇 ADICIONADO PARA O INSPETOR QUE AGORA FICA AQUI 👇
                         nodeData={nodeData}
                         systemLoads={systemLoads}
                         systemShunts={systemShunts}
                         handleTapChange={handleTapChange}
                         handleShuntChange={handleShuntChange}
+                        // 👇 AS DUAS LINHAS NOVAS AQUI 👇
+                        viewMode={viewMode}
+                        setViewMode={setViewMode}
                     />
                 ) : (
                     <EditSidebar 
@@ -730,6 +734,7 @@ const handleShuntChange = useCallback((nodeId, increment) => {
             </div>
 
             <div className="graph-wrapper">
+                {/* ... Botões flutuantes mantidos ... */}
                 <div className="hide-on-print" style={{ background: darkMode ? 'rgba(30, 30, 30, 0.65)' : 'rgba(255, 255, 255, 0.75)', backdropFilter: 'blur(12px)', WebkitBackdropFilter: 'blur(12px)', border: `1px solid ${darkMode ? '#444' : '#ddd'}`, boxShadow: '0 8px 32px rgba(0,0,0,0.15)', position: 'absolute', top: '20px', left: '20px', zIndex: 1000, display: 'flex', flexDirection: 'column', gap: '4px', padding: '6px', borderRadius: '14px' }}>
                     <button className="tool-btn" style={{ background: 'transparent', border: 'none', cursor: 'pointer', fontSize: '18px', padding: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: '8px', color: darkMode ? '#fff' : '#333', transition: 'all 0.2s ease', minWidth: '40px', minHeight: '40px' }} title="Menu Esquerdo" onClick={() => {if (isEditMode) setIsEditMode(false); else setSidebarMode(p => p === 'full' ? 'mini' : (p === 'mini' ? 'hidden' : 'full'))}}>≡</button>
                     <div style={{ height: '1px', width: '70%', margin: '2px auto', background: darkMode ? '#555' : '#e0e0e0' }}></div>
@@ -755,68 +760,87 @@ const handleShuntChange = useCallback((nodeId, increment) => {
                     <div className="hide-on-print" style={{ position: 'absolute', top: '15px', left: '50%', transform: 'translateX(-50%)', zIndex: 9000, background: '#ff9800', color: '#000', padding: '6px 20px', borderRadius: '20px', fontWeight: 'bold', fontSize: '13px', boxShadow: '0 4px 15px rgba(0,0,0,0.3)' }}> Visualização de Impressão: {printFrameMode === 'landscape' ? 'Paisagem' : 'Retrato'} (Ctrl+P para Imprimir) </div>
                 )}
 
-                <GraphArea 
-                    printFrameMode={printFrameMode} 
-                    isFaultSidebarOpen={isFaultSidebarOpen} 
-                    branches={branches} allNodes={allNodes} 
-                    sources={sources} showLabels={showLabels} 
-                    getEdgeColor={getEdgeColor} 
-                    getNodeColor={getNodeColor} 
-                    toggleSwitch={toggleSwitch} 
-                    toggleFault={toggleFault} 
-                    setSelectedElement={setSelectedElement} 
-                    selectedElement={selectedElement} 
-                    hoveredLineId={effectiveHoveredLineId} 
-                    setHoveredLineId={setHoveredLineId} 
-                    hoveredNodeId={hoveredNodeId} 
-                    setHoveredNodeId={setHoveredNodeId} 
-                    maintenanceMode={maintenanceMode} 
-                    activePositions={activePositions} 
-                    activeWaypoints={activeWaypoints} 
-                    lineCurrents={lineCurrents} 
-                    nodeData={nodeData} 
-                    isEditMode={isEditMode} 
-                    setIsEditMode={setIsEditMode} 
-                    darkMode={darkMode} 
-                    onSaveLayoutToHistory={saveLayoutToHistory} 
-                    loads={loads} systemLoads={systemLoads} 
-                    onExportRequest={handleExportFullState} 
-                    sses={SYSTEM_DATA.sses} 
-                    feedersList={SYSTEM_DATA.feeders || []} 
-                    handleTapChange={handleTapChange}
-                    systemShunts={systemShunts} 
-                    handleShuntChange={handleShuntChange}
-                >
-                    {showLegend && (
-                        <div className="legend" style={{ position: 'absolute', bottom: '20px', right: '20px', zIndex: 1000, pointerEvents: 'all', background: darkMode ? '#121212' : '#ffffff', border: '1px solid #444', borderRadius: '8px', boxShadow: '0 6px 20px rgba(0,0,0,0.2)' }} onMouseDown={e=>e.stopPropagation()} onMouseUp={e=>e.stopPropagation()} onClick={e=>e.stopPropagation()} onWheel={e=>e.stopPropagation()} onDoubleClick={e=>e.stopPropagation()} >
-                            <div style={{marginBottom:'10px', paddingBottom:'8px', borderBottom:'1px solid #444'}}>
-                                <div style={{fontSize:'9px', color:'#888', fontWeight:'bold', marginBottom:'4px', letterSpacing:'1px'}}>LAYOUT</div>
-                                <div style={{display:'flex', gap:'2px', background:'#222', padding:'2px', borderRadius:'4px'}}>
-                                    <button onClick={() => setLayoutMode('project')} style={{ flex:1, border:'none', borderRadius:'2px', padding:'4px', cursor:'pointer', fontSize:'10px', fontWeight:'bold', background: layoutMode === 'project' ? '#00bcd4' : 'transparent', color: layoutMode === 'project' ? '#000' : '#666', transition: 'all 0.2s' }}> PROJETO </button>
-                                    <button onClick={() => setLayoutMode('organic')} style={{ flex:1, border:'none', borderRadius:'2px', padding:'4px', cursor:'pointer', fontSize:'10px', fontWeight:'bold', background: layoutMode === 'organic' ? '#00bcd4' : 'transparent', color: layoutMode === 'organic' ? '#000' : '#666', transition: 'all 0.2s' }}> ORGÂNICO </button>
+                {/* 👇 A MÁGICA ACONTECE AQUI: ALTERNÂNCIA DE TELAS 👇 */}
+                {viewMode === 'schematic' ? (
+                    <GraphArea 
+                        darkMode={darkMode}
+                        printFrameMode={printFrameMode} 
+                        isFaultSidebarOpen={isFaultSidebarOpen} 
+                        branches={branches} allNodes={allNodes} 
+                        sources={sources} showLabels={showLabels} 
+                        getEdgeColor={getEdgeColor} 
+                        getNodeColor={getNodeColor} 
+                        toggleSwitch={toggleSwitch} 
+                        toggleFault={toggleFault} 
+                        setSelectedElement={setSelectedElement} 
+                        selectedElement={selectedElement} 
+                        hoveredLineId={effectiveHoveredLineId} 
+                        setHoveredLineId={setHoveredLineId} 
+                        hoveredNodeId={hoveredNodeId} 
+                        setHoveredNodeId={setHoveredNodeId} 
+                        maintenanceMode={maintenanceMode} 
+                        activePositions={activePositions} 
+                        activeWaypoints={activeWaypoints} 
+                        lineCurrents={lineCurrents} 
+                        nodeData={nodeData} 
+                        isEditMode={isEditMode} 
+                        setIsEditMode={setIsEditMode} 
+                        onSaveLayoutToHistory={saveLayoutToHistory} 
+                        loads={loads} systemLoads={systemLoads} 
+                        onExportRequest={handleExportFullState} 
+                        sses={SYSTEM_DATA.sses} 
+                        feedersList={SYSTEM_DATA.feeders || []} 
+                        handleTapChange={handleTapChange}
+                        systemShunts={systemShunts} 
+                        handleShuntChange={handleShuntChange}
+                    >
+                        {showLegend && (
+                            <div className="legend" style={{ position: 'absolute', bottom: '20px', right: '20px', zIndex: 1000, pointerEvents: 'all', background: darkMode ? '#121212' : '#ffffff', border: '1px solid #444', borderRadius: '8px', boxShadow: '0 6px 20px rgba(0,0,0,0.2)' }} onMouseDown={e=>e.stopPropagation()} onMouseUp={e=>e.stopPropagation()} onClick={e=>e.stopPropagation()} onWheel={e=>e.stopPropagation()} onDoubleClick={e=>e.stopPropagation()} >
+                                <div style={{marginBottom:'10px', paddingBottom:'8px', borderBottom:'1px solid #444'}}>
+                                    <div style={{fontSize:'9px', color:'#888', fontWeight:'bold', marginBottom:'4px', letterSpacing:'1px'}}>LAYOUT</div>
+                                    <div style={{display:'flex', gap:'2px', background:'#222', padding:'2px', borderRadius:'4px'}}>
+                                        <button onClick={() => setLayoutMode('project')} style={{ flex:1, border:'none', borderRadius:'2px', padding:'4px', cursor:'pointer', fontSize:'10px', fontWeight:'bold', background: layoutMode === 'project' ? '#00bcd4' : 'transparent', color: layoutMode === 'project' ? '#000' : '#666', transition: 'all 0.2s' }}> PROJETO </button>
+                                        <button onClick={() => setLayoutMode('organic')} style={{ flex:1, border:'none', borderRadius:'2px', padding:'4px', cursor:'pointer', fontSize:'10px', fontWeight:'bold', background: layoutMode === 'organic' ? '#00bcd4' : 'transparent', color: layoutMode === 'organic' ? '#000' : '#666', transition: 'all 0.2s' }}> ORGÂNICO </button>
+                                    </div>
                                 </div>
-                            </div>
-                            
-                            {sources.map(s => (
-                                <div key={s} className="legend-item">
-                                    <div className="legend-dot" style={{ background: getBaseColor(s, [...sources, ...feedersList], darkMode) }}></div> 
-                                    SUB {s}
-                                </div>
-                            ))}
-                            
-                            {feedersList.map(f => (
-                                <div key={f} className="legend-item">
-                                    <div className="legend-dot" style={{ background: getBaseColor(f, [...sources, ...feedersList], darkMode) }}></div> 
-                                    ALIM {f}
-                                </div>
-                            ))}
+                                
+                                {sources.map(s => (
+                                    <div key={s} className="legend-item">
+                                        <div className="legend-dot" style={{ background: getBaseColor(s, [...sources, ...feedersList], darkMode) }}></div> 
+                                        SUB {s}
+                                    </div>
+                                ))}
+                                
+                                {feedersList.map(f => (
+                                    <div key={f} className="legend-item">
+                                        <div className="legend-dot" style={{ background: getBaseColor(f, [...sources, ...feedersList], darkMode) }}></div> 
+                                        ALIM {f}
+                                    </div>
+                                ))}
 
-                            <div className="legend-item"><div className="legend-dot" style={{ background: THEME.light.fault }}></div> Falta/Sobrecarga</div>
-                            <div className="legend-item"><div className="legend-dot" style={{ background: THEME.light.loop }}></div> Loop</div>
-                            <div className="legend-item"><div className="legend-dot" style={{ background: THEME.light.de }}></div> Desenergizado</div>
-                        </div>
-                    )}
-                </GraphArea>
+                                <div className="legend-item"><div className="legend-dot" style={{ background: THEME.light.fault }}></div> Falta/Sobrecarga</div>
+                                <div className="legend-item"><div className="legend-dot" style={{ background: THEME.light.loop }}></div> Loop</div>
+                                <div className="legend-item"><div className="legend-dot" style={{ background: THEME.light.de }}></div> Desenergizado</div>
+                            </div>
+                        )}
+                    </GraphArea>
+                ) : (
+                    <MapArea 
+                        darkMode={darkMode}
+                        branches={branches} 
+                        sources={sources} 
+                        feedersList={SYSTEM_DATA.feeders || []} 
+                        getEdgeColor={getEdgeColor} 
+                        getNodeColor={getNodeColor} 
+                        toggleSwitch={toggleSwitch} 
+                        toggleFault={toggleFault} 
+                        setSelectedElement={setSelectedElement} 
+                        nodeData={nodeData}
+                        lineCurrents={lineCurrents}
+                    />
+                )}
+                {/* 👆 FIM DA ALTERNÂNCIA 👆 */}
+
             </div>
 
             <div className="hide-on-print right-panel-wrapper" style={{ zIndex: 100 }}>
