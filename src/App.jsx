@@ -851,16 +851,20 @@ const handleShuntChange = useCallback((nodeId, increment) => {
                     <div style={{ background: darkMode ? '#222' : '#fff', color: darkMode ? '#fff' : '#000', padding: '25px', borderRadius: '12px', width: '350px', boxShadow: '0 10px 30px rgba(0,0,0,0.5)' }} onClick={e => e.stopPropagation()}>
                         <h3 style={{ margin: '0 0 15px 0', borderBottom: '1px solid #555', paddingBottom: '10px' }}>Atalhos de Teclado</h3>
                         <ul style={{ listStyle: 'none', padding: 0, margin: 0, lineHeight: '2' }}>
-                            <li><strong style={{ color: '#ff9800' }}>P</strong> - Alterar Paisagem/Retrato</li>
-                            <li><strong style={{ color: '#ff9800' }}>Ctrl + P</strong> - Imprimir PDF</li>
-                            <li><strong style={{ color: '#ff9800' }}>E</strong> - Entrar/Sair da Edição</li>
-                            <li><strong style={{ color: '#ff9800' }}>Z</strong> - Centralizar Sistema</li>
-                            <li><strong style={{ color: '#ff9800' }}>D</strong> - Tema Escuro</li>
-                            <li><strong style={{ color: '#ff9800' }}>L</strong> - Mostrar Labels</li>
-                            <li><strong style={{ color: '#ff9800' }}>M</strong> - Método de Cálculo (NR/GS)</li>
-                            <li><strong style={{ color: '#ff9800' }}>R</strong> - Reiniciar Sistema</li>
-                            <li><strong style={{ color: '#ff9800' }}>Shift + Arrastar Fundo</strong> - Seleção Múltipla</li>
-                            <li><strong style={{ color: '#ff9800' }}>O</strong> - Abrir/Importar Arquivo</li>
+                            <li><strong style={{ color: '#00bcd4' }}>Clique (Chave)</strong> - Abrir/Fechar Chave</li>
+                            <li><strong style={{ color: '#00bcd4' }}>Clique (Barra)</strong> - Inserir/Remover Falta</li>
+                            <li><strong style={{ color: '#ff9800' }}>Shift + Clique</strong> - Fixar/Desafixar Tooltip (Post-it)</li>
+                            <li><strong style={{ color: '#ff9800' }}>Shift + Arrastar Fundo</strong> - Seleção Múltipla (Modo Edição)</li>
+                            <li><strong style={{ color: '#ff9800' }}>Duplo Clique (Linha)</strong> - Criar/Remover Joelho (Modo Edição)</li>
+                            <hr style={{ borderColor: '#444', margin: '8px 0' }} />
+                            <li><strong style={{ color: '#4caf50' }}>Z</strong> - Centralizar Diagrama na Tela</li>
+                            <li><strong style={{ color: '#4caf50' }}>P</strong> - Alterar Paisagem/Retrato (Impressão)</li>
+                            <li><strong style={{ color: '#4caf50' }}>Ctrl + P</strong> - Imprimir / Salvar PDF</li>
+                            <li><strong style={{ color: '#4caf50' }}>E</strong> - Entrar/Sair do Modo de Edição</li>
+                            <li><strong style={{ color: '#4caf50' }}>D</strong> - Alternar Tema (Escuro/Claro)</li>
+                            <li><strong style={{ color: '#4caf50' }}>L</strong> - Mostrar/Ocultar Labels</li>
+                            <li><strong style={{ color: '#4caf50' }}>M</strong> - Alternar Método (NR / GS)</li>
+                            <li><strong style={{ color: '#4caf50' }}>R</strong> - Reiniciar Sistema (Limpar Faltas)</li>
                         </ul>
                         <button onClick={() => setShowShortcuts(false)} style={{ marginTop: '20px', width: '100%', padding: '10px', background: '#00bcd4', border: 'none', borderRadius: '6px', color: '#000', fontWeight: 'bold', cursor: 'pointer' }}>Fechar</button>
                     </div>

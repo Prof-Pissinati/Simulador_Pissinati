@@ -428,3 +428,49 @@ export function calculateLoads(nodeFeeds, faultNodes, sysData) {
     });
     return subs;
 }
+/*
+// 👇 CÁLCULO DE CARGA ATUALIZADO PARA CONTAR TODAS AS BARRAS E ALIMENTADORES 👇
+export function calculateLoads(nodeFeeds, faultNodes, sysData) {
+    const subs = {};
+    const { sources = [], feeders = [], loads = {}, shunts = {} } = sysData || {};
+    
+    // 1. Inicializa Subs Principais e Alimentadores
+    const allSources = [...sources, ...feeders];
+    allSources.forEach(s => {
+        subs[s] = { p: 0, q: 0, nodes: 0 };
+    });
+
+    Object.keys(nodeFeeds).forEach(n => {
+        const id = parseInt(n);
+        if (!allSources.includes(id) && !faultNodes.has(id)) {
+            const feeds = nodeFeeds[id];
+            if (feeds && feeds.size >= 1) {
+                const s = Array.from(feeds)[0];
+                if (subs[s]) {
+                    let nodeP = 0;
+                    let nodeQ = 0;
+                    
+                    // 👇 AQUI ESTÁ O SEGREDO: Conta a barra independente de ter carga ou não
+                    subs[s].nodes++; 
+                    
+                    // Soma a carga normal
+                    if (loads[id]) {
+                        nodeP += loads[id].p || 0;
+                        nodeQ += loads[id].q || 0;
+                    }
+                    
+                    // Subtrai a carga reativa injetada pelos bancos de capacitores
+                    if (shunts[id] && shunts[id].steps > 0) {
+                        nodeQ -= (shunts[id].steps * shunts[id].stepSize);
+                    }
+                    
+                    subs[s].p += nodeP;
+                    subs[s].q += nodeQ;
+                }
+            }
+        }
+    });
+
+    return subs;
+} 
+*/

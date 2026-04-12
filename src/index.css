@@ -70,18 +70,13 @@ body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-
     overflow: hidden; white-space: nowrap; height: 100%; 
 }
 .sidebar.hidden { width: 0; border: none; }
-.sidebar.mini { width: 100px; }
 
-/* Mini Desktop */
-.sidebar.mini :not(.load-display, .load-card, .load-card *, .sidebar-header, .sidebar-header h1, .switch-list, .switch-item, .switch-item *) { display: none !important; }
-.sidebar.mini .sidebar-header h1 { font-size: 16px; text-align: center; display: block; }
-.sidebar.mini .sidebar-header .control-group { display: none; }
-.sidebar.mini .load-display { display: flex; flex-direction: column; padding: 10px; gap: 8px; }
-.sidebar.mini .load-card { padding: 8px; }
-.sidebar.mini .switch-list { display: block !important; padding: 5px !important; }
-.sidebar.mini .sidebar-header { padding: 10px; border-bottom: 1px solid var(--border-color); flex-shrink: 0; }
-.sidebar.mini .switch-item { padding: 6px 4px !important; font-size: 11px !important; }
-.sidebar.mini .switch-btn { padding: 2px 4px !important; min-width: 30px !important; font-size: 10px !important; }
+/* --- SIDEBAR MINI (Compacta) --- */
+.sidebar.mini { width: 85px; }
+.sidebar.mini .sidebar-header { padding: 15px 5px; }
+.sidebar.mini .load-display { padding: 10px 5px; }
+.sidebar.mini .load-card { padding: 8px 2px; }
+.sidebar.mini .sidebar-action-btn { padding: 10px 0; font-size: 16px; }
 
 /* Botão Toggle Esquerdo */
 .sidebar-toggle { 

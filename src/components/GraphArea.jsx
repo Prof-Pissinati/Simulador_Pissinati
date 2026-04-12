@@ -6,7 +6,6 @@ import GraphNode from './GraphNode';
 
 const FIXED_GRID_SIZE = 10;
 
-
 function getClosestSegmentIndex(p1, p2, waypoints, clickPt) {
     if (!p1 || !p2 || !clickPt) return 0; 
     const pts = [p1, ...waypoints, p2];
@@ -36,33 +35,33 @@ export default function GraphArea({
     const [transform, setTransform] = useState({ x: -50, y: 0, scale: 1 });
     const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
 
-    // 👇 AS NOVAS MEMÓRIAS UNIFICADAS 👇
+    // 👇 ANTENA DE RASTREIO DO MOUSE NO SVG 👇
+    const [mouseSvgPt, setMouseSvgPt] = useState({ x: 0, y: 0 });
+
     const [renderPositions, setRenderPositions] = useState(activePositions);
-    const [renderWaypoints, setRenderWaypoints] = useState(activeWaypoints); // <-- NOVO
+    const [renderWaypoints, setRenderWaypoints] = useState(activeWaypoints);
 
     const [manualPositions, setManualPositions] = useState({});
     const [manualWaypoints, setManualWaypoints] = useState({}); 
 
     const manualPosRef = useRef({});
     const renderPosRef = useRef({});
-    const manualWpRef = useRef({}); // <-- NOVO
-    const renderWpRef = useRef({}); // <-- NOVO
+    const manualWpRef = useRef({});
+    const renderWpRef = useRef({});
 
-    // Mantém as referências sempre atualizadas para a animação ler instantaneamente
+    const [pinnedCards, setPinnedCards] = useState([]);
+    const [draggingCard, setDraggingCard] = useState(null);
+
     useEffect(() => {
         manualPosRef.current = manualPositions;
         renderPosRef.current = renderPositions;
-        manualWpRef.current = manualWaypoints; // <-- NOVO
-        renderWpRef.current = renderWaypoints; // <-- NOVO
+        manualWpRef.current = manualWaypoints;
+        renderWpRef.current = renderWaypoints;
     });
 
-    // =======================================================================
-    // MOTOR DE ANIMAÇÃO UNIFICADO (Barras e Joelhos)
-    // =======================================================================
     useEffect(() => {
         let startTime = null; let animationFrameId;
 
-        // 1. Tira uma foto de onde as barras e joelhos estão EXATAMENTE AGORA na tela
         const startPositions = {};
         Object.keys(activePositions).forEach(id => {
             startPositions[id] = manualPosRef.current[id] || renderPosRef.current[id] || activePositions[id];
@@ -75,7 +74,6 @@ export default function GraphArea({
             startWaypoints[k] = manualWpRef.current[k] || renderWpRef.current[k] || safeActiveWps[k] || [];
         });
 
-        // 2. Limpa o manual, entregando o controle ABSOLUTO para a animação
         setManualPositions({});
         setManualWaypoints({});
 
@@ -100,8 +98,6 @@ export default function GraphArea({
                 const endWpArray = safeActiveWps[key] || [];
                 const startWpArray = startWaypoints[key] || [];
                 
-                // 👇 BLINDAGEM CONTRA TELETRANSPORTE 👇
-                // Se a quantidade de joelhos mudou (criou/apagou), pula a animação!
                 if (startWpArray.length !== endWpArray.length) {
                     currentWaypoints[key] = endWpArray.map(wp => ({ ...wp })); 
                 } else {
@@ -113,7 +109,6 @@ export default function GraphArea({
                         return { ...endWp }; 
                     });
                 }
-                // 👆 ================================ 👆
             }
 
             setRenderPositions(currentPositions);
@@ -124,10 +119,8 @@ export default function GraphArea({
 
         animationFrameId = requestAnimationFrame(animate);
         return () => cancelAnimationFrame(animationFrameId);
-    // 👇 MUDANÇA CRÍTICA: Tiramos o allNodes da linha abaixo! 👇
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [activePositions, activeWaypoints]); 
-    // =======================================================================
 
     const [dragInfo, setDragInfo] = useState(null); 
     const wasDragged = useRef(false);
@@ -145,6 +138,8 @@ export default function GraphArea({
 
     const [isAnimatingZoom, setIsAnimatingZoom] = useState(false);
     const zoomTimeout = useRef(null);
+
+    const lastMouseUpdate = useRef(0); // 👈 Controle de FPS para o Tooltip
 
     const stopAnimation = useCallback(() => {
         if (isAnimatingZoom) setIsAnimatingZoom(false);
@@ -195,7 +190,6 @@ export default function GraphArea({
     useEffect(() => {
         const handleApplyLayout = (e) => {
             setIsRestoringLayout(true);
-            // Deixamos a limpeza da memória APENAS para o Motor de Animação!
             if (restoreTimeout.current) clearTimeout(restoreTimeout.current);
             restoreTimeout.current = setTimeout(() => setIsRestoringLayout(false), 400);
         };
@@ -211,9 +205,7 @@ export default function GraphArea({
             if (onExportRequest) onExportRequest(fullLayout.positions, fullLayout.waypoints);
         };
 
-
         const handleSaveHistory = () => {
-            // Aciona o salvamento de histórico para o botão "Desfazer"
             if (onSaveLayoutToHistory) onSaveLayoutToHistory(getCurrentFullLayout().positions, getCurrentFullLayout().waypoints);
         };
 
@@ -234,8 +226,6 @@ export default function GraphArea({
             }
         };
 
-        
-        
         window.addEventListener('applyGraphLayout', handleApplyLayout);
         window.addEventListener('resetGraphLayout', handleResetLayout);
         window.addEventListener('requestLayoutExport', handleTriggerExport);
@@ -249,7 +239,6 @@ export default function GraphArea({
             window.removeEventListener('getLatestLayout', handleGetLatestLayout);
             window.removeEventListener('saveLayoutToHistory', handleSaveHistory);
         };
-    // 👉 IMPORTANTE: Adicione o onSaveLayoutToHistory na lista verde aqui embaixo!
     }, [getCurrentFullLayout, onExportRequest, onSaveLayoutToHistory]);
 
     const isPanning = useRef(false);
@@ -270,9 +259,6 @@ export default function GraphArea({
         return { x: (rawPt.x - transform.x) / transform.scale, y: (rawPt.y - transform.y) / transform.scale };
     }, [getRawSVGPoint, transform.x, transform.y, transform.scale]);
 
-    // =======================================================================
-    // O COFRE DE ESTADOS (Para as funções lerem sem recriar)
-    // =======================================================================
     const contextRef = useRef({});
     useEffect(() => {
         contextRef.current = {
@@ -282,17 +268,11 @@ export default function GraphArea({
             onSaveLayoutToHistory, getCurrentFullLayout, branches, dragInfo, setSelectedElement
         };
     });
-
-    // =======================================================================
-    // FUNÇÕES IMUTÁVEIS (useCallback blindado, só nascem uma vez!)
-    // =======================================================================
     
-    // --- CONTROLE DAS LINHAS ---
     const handleLineMouseDown = useCallback((e, branchId) => {
         e.preventDefault();
         const ctx = contextRef.current;
 
-        // MODO VISUALIZAÇÃO: Shift trava no painel, sem arrastar nada
         if (!ctx.isEditMode) {
             if (e.shiftKey) {
                 const branch = ctx.branches.find(b => b.id === branchId);
@@ -302,7 +282,6 @@ export default function GraphArea({
             return; 
         }
 
-        // MODO EDIÇÃO: Atualiza o painel ao clicar, e permite arrasto/joelho
         const branch = ctx.branches.find(b => b.id === branchId);
         if (branch) ctx.setSelectedElement({ type: 'edge', data: branch });
 
@@ -326,13 +305,26 @@ export default function GraphArea({
         const ctx = contextRef.current;
         if (ctx.isEditMode) return;
         
-        if (e.shiftKey) return; // Bloqueia a manobra se o Shift foi usado!
+        if (e.shiftKey) {
+            const branch = ctx.branches.find(b => b.id === branchId);
+            ctx.setSelectedElement({ type: 'edge', data: branch });
+            
+            const rawPt = getRawSVGPoint(e.clientX, e.clientY);
+            const spawnX = (rawPt.x - transform.x) / transform.scale;
+            const spawnY = (rawPt.y - transform.y) / transform.scale;
+
+            setPinnedCards(prev => {
+                const exists = prev.find(p => p.id === branchId && p.type === 'line');
+                if (exists) return prev.filter(p => !(p.id === branchId && p.type === 'line')); 
+                return [...prev, { id: branchId, type: 'line', x: spawnX, y: spawnY }]; 
+            });
+            return; 
+        }
 
         const branch = ctx.branches.find(b => b.id === branchId);
         if (branch.hasSwitch || ctx.maintenanceMode) ctx.toggleSwitch(branchId);
-    }, []);
+    }, [getRawSVGPoint, transform]);
 
-    // --- CRIAR JOELHO (Duplo Clique na Linha) ---
     const handleLineDoubleClick = useCallback((e, branchId) => {
         const ctx = contextRef.current;
         if (!ctx.isEditMode) return;
@@ -348,15 +340,12 @@ export default function GraphArea({
         
         const insertIdx = getClosestSegmentIndex(p1, p2, waypoints, svgPt);
         
-        // 1. Calcula a nova lista primeiro (FORA do setState)
         const baseWps = ctx.manualWaypoints[branchId] ? ctx.manualWaypoints[branchId] : (ctx.renderWaypoints[branchId] || []);
         const currentWps = Array.isArray(baseWps) ? [...baseWps] : [];
         currentWps.splice(insertIdx, 0, { x: svgPt.x, y: svgPt.y });
         
-        // 2. Atualiza a memória local
         setManualWaypoints(prev => ({ ...prev, [branchId]: currentWps }));
 
-        // 3. Avisa o App.jsx (Totalmente legal no React pois está fora do prev=>)
         const finalLayout = ctx.getCurrentFullLayout();
         finalLayout.waypoints[branchId] = currentWps;
         window.dispatchEvent(new CustomEvent('applyGraphLayout', { 
@@ -364,22 +353,18 @@ export default function GraphArea({
         }));
     }, [getTransformedPoint]);
 
-    // --- DELETAR JOELHO (Duplo Clique no Joelho) ---
     const handleWaypointDoubleClick = useCallback((e, branchId, wpIndex) => {
         const ctx = contextRef.current;
         if (!ctx.isEditMode) return;
         if (ctx.onSaveLayoutToHistory) ctx.onSaveLayoutToHistory(ctx.getCurrentFullLayout().positions, ctx.getCurrentFullLayout().waypoints);
         e.stopPropagation();
 
-        // 1. Calcula a nova lista primeiro (FORA do setState)
         const baseWps = ctx.manualWaypoints[branchId] ? ctx.manualWaypoints[branchId] : (ctx.renderWaypoints[branchId] || []);
         const currentWps = Array.isArray(baseWps) ? [...baseWps] : [];
         currentWps.splice(wpIndex, 1);
         
-        // 2. Atualiza a memória local
         setManualWaypoints(prev => ({ ...prev, [branchId]: currentWps }));
 
-        // 3. Avisa o App.jsx 
         const finalLayout = ctx.getCurrentFullLayout();
         finalLayout.waypoints[branchId] = currentWps;
         window.dispatchEvent(new CustomEvent('applyGraphLayout', { 
@@ -395,8 +380,6 @@ export default function GraphArea({
         setHoveredLineId(null); setLocalHoveredLine(null);
     }, [setHoveredLineId]);
     
-
-    // --- CONTROLE DOS JOELHOS (WAYPOINTS) ---
     const handleWaypointMouseDown = useCallback((e, branchId, wpIndex, wpKey, wp) => {
         e.preventDefault();
         const ctx = contextRef.current;
@@ -427,12 +410,10 @@ export default function GraphArea({
         setDragInfo({ type: 'mixed', leaderType: 'waypoint', leaderId: wpKey, initialX: wp.x, initialY: wp.y, startX: svgPt.x, startY: svgPt.y, groupNodes, groupWps });
     }, [getTransformedPoint]);
 
-    // --- CONTROLE DAS BARRAS ---
     const handleNodeMouseDown = useCallback((e, nodeId) => {
         e.preventDefault();
         const ctx = contextRef.current;
 
-        // MODO VISUALIZAÇÃO: Shift trava no painel
         if (!ctx.isEditMode) {
             if (e.shiftKey) {
                 ctx.setSelectedElement({ type: 'node', id: nodeId });
@@ -441,7 +422,8 @@ export default function GraphArea({
             return; 
         }
 
-        // MODO EDIÇÃO: Começa o arrasto e usa o Shift para SELEÇÃO MÚLTIPLA
+        ctx.setSelectedElement({ type: 'node', id: nodeId });
+
         e.stopPropagation(); 
         wasDragged.current = false;
         if (ctx.onSaveLayoutToHistory) ctx.onSaveLayoutToHistory(ctx.getCurrentFullLayout().positions, ctx.getCurrentFullLayout().waypoints);
@@ -476,10 +458,23 @@ export default function GraphArea({
         const ctx = contextRef.current;
         if (ctx.isEditMode || wasDragged.current) return;
         
-        if (e.shiftKey) return; // Bloqueia criar falta se o Shift foi usado!
+        if (e.shiftKey) {
+            ctx.setSelectedElement({ type: 'node', id: nodeId });
+            
+            const rawPt = getRawSVGPoint(e.clientX, e.clientY);
+            const spawnX = (rawPt.x - transform.x) / transform.scale;
+            const spawnY = (rawPt.y - transform.y) / transform.scale;
+
+            setPinnedCards(prev => {
+                const exists = prev.find(p => p.id === nodeId && p.type === 'node');
+                if (exists) return prev.filter(p => !(p.id === nodeId && p.type === 'node'));
+                return [...prev, { id: nodeId, type: 'node', x: spawnX + 20, y: spawnY + 20 }];
+            });
+            return;
+        }
 
         ctx.toggleFault(nodeId);
-    }, []);
+    }, [getRawSVGPoint, transform]);
 
     const handleNodeMouseEnter = useCallback((nodeId) => {
         const ctx = contextRef.current;
@@ -491,7 +486,6 @@ export default function GraphArea({
         if(!ctx.dragInfo) { setHoveredNodeId(null); setLocalHoveredNode(null); }
     }, [setHoveredNodeId]);
 
-    // =======================================================================
 
     const isPaper = printFrameMode !== 'none';
     const isLandscape = printFrameMode === 'landscape';
@@ -506,7 +500,7 @@ export default function GraphArea({
         let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
         nodeIds.forEach(id => {
             const p = positions[id];
-            if (!p) return; // <--- ADICIONE ESTA TRAVA DE SEGURANÇA AQUI
+            if (!p) return; 
             
             if (p.x < minX) minX = p.x;
             if (p.x > maxX) maxX = p.x;
@@ -516,7 +510,7 @@ export default function GraphArea({
 
         Object.values(waypoints).forEach(branchWps => {
             branchWps.forEach(wp => {
-                if (!wp) return; // <--- ADICIONE ESTA TRAVA DE SEGURANÇA AQUI
+                if (!wp) return; 
                 
                 if (wp.x < minX) minX = wp.x;
                 if (wp.x > maxX) maxX = wp.x;
@@ -562,10 +556,9 @@ export default function GraphArea({
         return () => window.removeEventListener('triggerZoomExtents', handleZoom);
     }, [handleZoomExtents]);
 
-    // 1. Envolvemos no useCallback
     const handleWheel = useCallback((e) => {
         stopAnimation(); 
-        e.preventDefault(); // Agora o navegador vai aceitar isso sem reclamar!
+        e.preventDefault(); 
         const scaleMultiplier = e.deltaY > 0 ? 0.9 : 1.1;
         setTransform(prev => {
             const newScale = Math.max(0.1, Math.min(4, prev.scale * scaleMultiplier));
@@ -578,7 +571,6 @@ export default function GraphArea({
         });
     }, [stopAnimation, getRawSVGPoint]);
 
-    // 2. Adicionamos o EventListener com { passive: false }
     useEffect(() => {
         const svg = svgRef.current;
         if (svg) {
@@ -592,6 +584,16 @@ export default function GraphArea({
         if (e.button === 1) { e.preventDefault(); handleZoomExtents(); return; }
         const svgPt = getTransformedPoint(e.clientX, e.clientY);
         const isBackgroundClick = e.target.tagName === 'svg' || e.target.id === 'bg-grid-rect';
+
+        // 👇 LÓGICA DO ARRASTO DO POST-IT CORRIGIDA 👇
+        const closestCard = e.target.closest('.pinned-card');
+        if (closestCard) {
+            const cardId = closestCard.getAttribute('data-id');
+            const cardType = closestCard.getAttribute('data-type');
+            setDraggingCard({ id: cardId, type: cardType, startX: svgPt.x, startY: svgPt.y });
+            e.stopPropagation();
+            return;
+        }
 
         if (isBackgroundClick) {
             if (isEditMode && e.shiftKey) {
@@ -610,8 +612,29 @@ export default function GraphArea({
     };
 
     const handleMouseMove = (e) => {
-        setMousePos({ x: e.clientX, y: e.clientY });
         const svgPt = getTransformedPoint(e.clientX, e.clientY);
+
+        // 👇 THROTTLING: Limita a atualização visual a ~30 FPS para não travar o PC 👇
+        const now = Date.now();
+        if (now - lastMouseUpdate.current > 30) {
+            setMouseSvgPt(svgPt); 
+            lastMouseUpdate.current = now;
+        } // Atualiza a Antena do Tooltip Hover
+
+        // 👇 MOTOR DE ARRASTO DO POST-IT 👇
+        if (draggingCard) {
+            const dx = svgPt.x - draggingCard.startX;
+            const dy = svgPt.y - draggingCard.startY;
+            setPinnedCards(prev => prev.map(card => {
+                // A conversão String() protege o motor contra erro de tipagem no ID
+                if (String(card.id) === String(draggingCard.id) && card.type === draggingCard.type) {
+                    return { ...card, x: card.x + dx, y: card.y + dy };
+                }
+                return card;
+            }));
+            setDraggingCard({ ...draggingCard, startX: svgPt.x, startY: svgPt.y });
+            return;
+        }
 
         if (isSelecting.current && isEditMode) {
             setSelectionBox(prev => ({ ...prev, x2: svgPt.x, y2: svgPt.y }));
@@ -652,17 +675,14 @@ export default function GraphArea({
                             const [bId, idxStr] = key.split('-');
                             const idx = parseInt(idxStr);
                             
-                            // 👇 BLINDAGEM MÁXIMA: Garante que a memória nunca fique vazia 👇
                             if (!nextWps[bId] || nextWps[bId].length === 0) {
                                 const ctx = contextRef.current;
                                 nextWps[bId] = ctx.renderWaypoints[bId] ? JSON.parse(JSON.stringify(ctx.renderWaypoints[bId])) : [];
                             }
                             
-                            // SEM A TRAVA DE ÍNDICE: Atualiza a posição custe o que custar!
                             if (nextWps[bId]) {
                                 nextWps[bId][idx] = { x: dragInfo.groupWps[key].x + actualDx, y: dragInfo.groupWps[key].y + actualDy };
                             }
-                            // 👆 ============================================================ 👆
                         });
                         return nextWps;
                     });
@@ -693,6 +713,11 @@ export default function GraphArea({
     };
 
     const handleMouseUp = (e) => {
+        if (draggingCard) {
+            setDraggingCard(null);
+            return;
+        }
+
         if (isSelecting.current && selectionBox) {
             const minX = Math.min(selectionBox.x1, selectionBox.x2);
             const maxX = Math.max(selectionBox.x1, selectionBox.x2);
@@ -718,7 +743,6 @@ export default function GraphArea({
         }
         
         if (dragInfo) { 
-            // 👇 SALVA A NOVA POSIÇÃO NO CÉREBRO (App.jsx) AO SOLTAR O MOUSE 👇
             const finalLayout = getCurrentFullLayout();
             window.dispatchEvent(new CustomEvent('applyGraphLayout', { 
                 detail: { 
@@ -726,7 +750,6 @@ export default function GraphArea({
                     waypoints: finalLayout.waypoints 
                 } 
             }));
-            // 👆 ========================================================== 👆
             
             setDragInfo(null); 
             setTimeout(() => { wasDragged.current = false; }, 50); 
@@ -751,7 +774,6 @@ export default function GraphArea({
     const hoveredLineData = localHoveredLine !== null ? lineCurrents[localHoveredLine] : null;
     const hoveredNodeInfo = localHoveredNode !== null && nodeData[localHoveredNode] ? nodeData[localHoveredNode] : null;
 
-    // Bounds visíveis em coordenadas de mundo SVG (usado pelos tooltips para não sair da tela)
     const svgWorldBounds = {
         left:   (-transform.x) / transform.scale,
         right:  (containerSize.w - transform.x) / transform.scale,
@@ -789,8 +811,6 @@ export default function GraphArea({
         overflow: 'hidden'
     };
 
-    
-
     return (
         <div className="graph-container" style={{ position: 'relative', width: '100%', height: '100%', display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
             <div ref={measureRef} style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, pointerEvents: 'none', zIndex: -1 }}></div>
@@ -802,7 +822,7 @@ export default function GraphArea({
                     style={{ width: '100%', height: '100%', display: 'block', cursor: svgCursor }}
                     onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onMouseUp={handleMouseUp} 
                     onMouseEnter={() => setIsHoveringSVG(true)}
-                    onMouseLeave={() => { setIsHoveringSVG(false); isPanning.current = false; isSelecting.current = false; setHoveredLineId(null); setHoveredNodeId(null); setLocalHoveredNode(null); setLocalHoveredLine(null); if(dragInfo) setDragInfo(null); }}
+                    onMouseLeave={() => { setIsHoveringSVG(false); isPanning.current = false; isSelecting.current = false; setHoveredLineId(null); setHoveredNodeId(null); setLocalHoveredNode(null); setLocalHoveredLine(null); if(dragInfo) setDragInfo(null); if(draggingCard) setDraggingCard(null); }}
                 >
                     <g 
                         transform={`translate(${transform.x}, ${transform.y}) scale(${transform.scale})`}
@@ -819,8 +839,6 @@ export default function GraphArea({
                             </g>
                         )}
 
-                        {/* --- DESENHO DAS LINHAS (CABOS) --- */}
-                        {/* --- DESENHO DAS LINHAS (CABOS) --- */}
                         {branches.map(b => {
                             const p1 = manualPositions[b.from] || renderPositions[b.from];
                             const p2 = manualPositions[b.to] || renderPositions[b.to];
@@ -834,43 +852,28 @@ export default function GraphArea({
                             const isHovered = hoveredLineId === b.id || localHoveredLine === b.id;
                             const isSelected = selectedElement && selectedElement.type === 'edge' && selectedElement.data.id === b.id;
 
-                            // Direção de fluxo: +1 (from→to) | -1 (to→from) | 0 (sem fluxo)
                             const lineData = lineCurrents[b.id];
-                            const flowDir = (!lineData || lineData.current < 0.01) ? 0
-                                : (lineData.pFlow >= 0 ? 1 : -1);
+                            const flowDir = (!lineData || lineData.current < 0.01) ? 0 : (lineData.pFlow >= 0 ? 1 : -1);
 
                             return (
                                 <GraphEdge 
-                                    key={b.id}
-                                    branch={b}
-                                    pathString={pathString}
-                                    color={color}
-                                    isHighlighted={isHovered || isSelected}
-                                    isEditMode={isEditMode}
-                                    isRestoringLayout={isRestoringLayout}
-                                    waypoints={waypoints}
-                                    selectedEditWaypoints={selectedEditWaypoints}
-                                    dragInfoType={dragInfo?.type}
-                                    flowDir={flowDir}
-                                    p1={p1}
-                                    p2={p2}
-                                    onLineMouseDown={handleLineMouseDown}
-                                    onLineClick={handleLineClick}
-                                    onLineDoubleClick={handleLineDoubleClick}
-                                    onLineMouseEnter={handleLineMouseEnter}
-                                    onLineMouseLeave={handleLineMouseLeave}
-                                    onWaypointMouseDown={handleWaypointMouseDown}
+                                    key={b.id} branch={b} pathString={pathString} color={color}
+                                    isHighlighted={isHovered || isSelected} isEditMode={isEditMode}
+                                    isRestoringLayout={isRestoringLayout} waypoints={waypoints}
+                                    selectedEditWaypoints={selectedEditWaypoints} dragInfoType={dragInfo?.type}
+                                    flowDir={flowDir} p1={p1} p2={p2}
+                                    onLineMouseDown={handleLineMouseDown} onLineClick={handleLineClick}
+                                    onLineDoubleClick={handleLineDoubleClick} onLineMouseEnter={handleLineMouseEnter}
+                                    onLineMouseLeave={handleLineMouseLeave} onWaypointMouseDown={handleWaypointMouseDown}
                                     onWaypointDoubleClick={handleWaypointDoubleClick}
                                 />
                             );
                         })}
 
-                        {/* --- DESENHO DOS NÓS (BARRAS) --- */}
                         {allNodes.map(nodeId => {
                             const pos = manualPositions[nodeId] || renderPositions[nodeId];
                             if (!pos) return null;
                             
-                            // isSource e isFeeder são separados para renderizar formas distintas
                             const isSource = sources.includes(nodeId);
                             const isFeeder = feedersList.includes(nodeId);
                             const color = getNodeColor(nodeId);
@@ -878,11 +881,9 @@ export default function GraphArea({
                             const isHighlighted = hoveredNodeId === nodeId || localHoveredNode === nodeId || isSelectedEdit || (!isEditMode && selectedElement?.id === nodeId);
                             const nodeLoad = systemLoads && systemLoads[nodeId] ? (systemLoads[nodeId].p / 1000).toFixed(1) : null;
 
-                            // LÓGICA DA AURA DE VIOLAÇÃO DE TENSÃO (A que eu tinha apagado sem querer)
                             const v_pu = nodeData[nodeId]?.v;
                             const hasViolation = v_pu && (v_pu < 0.93 || v_pu > 1.05);
 
-                            // LÓGICA DO CAPACITOR (SHUNTS)
                             const shuntData = systemShunts && systemShunts[nodeId];
                             const hasShunt = !!shuntData;
                             const isShuntOn = hasShunt && shuntData.steps > 0;
@@ -890,40 +891,18 @@ export default function GraphArea({
 
                             return (
                                 <g key={`wrapper-${nodeId}`} className={hasViolation ? "voltage-glow-wrapper" : ""}>
-                                   
                                     <GraphNode
-                                        key={nodeId}
-                                        nodeId={nodeId}
-                                        pos={pos}
-                                        isSource={isSource}
-                                        isFeeder={isFeeder}
-                                        color={color}
-                                        isHighlighted={isHighlighted}
-                                        darkMode={darkMode}
-                                        isEditMode={isEditMode}
-                                        isRestoringLayout={isRestoringLayout}
-                                        showLabels={showLabels}
-                                        nodeLoad={nodeLoad}
-                                        hasShunt={hasShunt} 
-                                        onMouseDown={handleNodeMouseDown}
-                                        onClick={handleNodeClick}
-                                        onMouseEnter={handleNodeMouseEnter}
-                                        onMouseLeave={handleNodeMouseLeave}
+                                        key={nodeId} nodeId={nodeId} pos={pos} isSource={isSource}
+                                        isFeeder={isFeeder} color={color} isHighlighted={isHighlighted}
+                                        darkMode={darkMode} isEditMode={isEditMode} isRestoringLayout={isRestoringLayout}
+                                        showLabels={showLabels} nodeLoad={nodeLoad} hasShunt={hasShunt} 
+                                        onMouseDown={handleNodeMouseDown} onClick={handleNodeClick}
+                                        onMouseEnter={handleNodeMouseEnter} onMouseLeave={handleNodeMouseLeave}
                                     />
-
-                                    {/* ÍCONE DO CAPACITOR */}
                                     {hasShunt && (
-                                        <g 
-                                            transform={`translate(${pos.x + 18}, ${pos.y - 18})`} 
-                                            style={{ cursor: isEditMode ? 'default' : 'pointer', pointerEvents: 'all' }}
-                                        >
+                                        <g transform={`translate(${pos.x + 18}, ${pos.y - 18})`} style={{ cursor: isEditMode ? 'default' : 'pointer', pointerEvents: 'all' }}>
                                             <title>{`Banco de Capacitores (${injectedQ} kVAr)\nPassos LIGADOS: ${shuntData.steps} de ${shuntData.maxSteps}`}</title>
-                                            <circle 
-                                                cx="0" cy="0" r="12" 
-                                                fill={isShuntOn ? (darkMode ? 'rgba(0, 188, 212, 0.2)' : 'rgba(0, 188, 212, 0.15)') : (darkMode ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)')} 
-                                                stroke={isShuntOn ? '#00bcd4' : (darkMode ? '#555' : '#aaa')} 
-                                                strokeWidth="1.5" 
-                                            />
+                                            <circle cx="0" cy="0" r="12" fill={isShuntOn ? (darkMode ? 'rgba(0, 188, 212, 0.2)' : 'rgba(0, 188, 212, 0.15)') : (darkMode ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)')} stroke={isShuntOn ? '#00bcd4' : (darkMode ? '#555' : '#aaa')} strokeWidth="1.5" />
                                             <text x="0" y="3" textAnchor="middle" fontSize="9" fontWeight="bold" fill={isShuntOn ? '#00bcd4' : (darkMode ? '#888' : '#aaa')} pointerEvents="none">
                                                 {shuntData.steps}
                                             </text>
@@ -937,7 +916,7 @@ export default function GraphArea({
                             <rect x={Math.min(selectionBox.x1, selectionBox.x2)} y={Math.min(selectionBox.y1, selectionBox.y2)} width={Math.abs(selectionBox.x2 - selectionBox.x1)} height={Math.abs(selectionBox.y2 - selectionBox.y1)} fill="rgba(41, 98, 255, 0.1)" stroke="#2962ff" strokeWidth="2" strokeDasharray="5,5" pointerEvents="none" />
                         )}
 
-                        {!isPanning.current && !dragInfo && !isEditMode && !selectionBox && (
+                        {!dragInfo && !isEditMode && !selectionBox && (
                             <SvgTooltips 
                                 isHoveringSVG={isHoveringSVG}
                                 localHoveredLine={localHoveredLine}
@@ -955,6 +934,10 @@ export default function GraphArea({
                                 sses={sses}
                                 feedersList={feedersList}
                                 svgWorldBounds={svgWorldBounds}
+                                pinnedCards={pinnedCards}
+                                setPinnedCards={setPinnedCards}
+                                nodeData={nodeData}
+                                mouseSvgPt={mouseSvgPt} // 👈 INJEÇÃO DA ANTENA
                             />
                         )}
                     </g>
