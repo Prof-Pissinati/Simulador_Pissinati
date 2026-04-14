@@ -4,12 +4,15 @@ import L from 'leaflet';
 import { GEO_POSITIONS as INITIAL_GEO } from '../data/systemDataGeo';
 import { fetchStreetRoute } from '../utils/geoRouting';
 import systemRoutesData from '../data/systemRoutes.json';
+import { useGridInteraction } from '../hooks/useGridInteraction';
 
 export default function MapArea({ 
     darkMode, branches, sources, feedersList, getNodeColor, 
     getEdgeColor, setSelectedElement, toggleSwitch, toggleFault,
     nodeData, lineCurrents, systemShunts, children, isEditMode,
-    selectedElement 
+    selectedElement,
+    // 👇 NOVAS PROPS ADICIONADAS PARA SINCRONIZAR O HOVER
+    hoveredLineId, setHoveredLineId, hoveredNodeId, setHoveredNodeId
 }) {
     const center = [-20.4319, -51.3425];
     const mapTileUrl = darkMode 
@@ -21,10 +24,12 @@ export default function MapArea({
     const [manualWaypoints, setManualWaypoints] = useState(systemRoutesData?.waypoints || {});
     const [straightSegments, setStraightSegments] = useState(systemRoutesData?.straightSegments || {});
     
-    const [isRouting, setIsRouting] = useState(false);
-    const [routeProgress, setRouteProgress] = useState(0);
     const [recalculatingBranchId, setRecalculatingBranchId] = useState(null);
     const fileInputRef = useRef(null);
+
+    const { handleNodeClick, handleNodeDoubleClick, handleEdgeClick, handleEdgeDoubleClick } = useGridInteraction({
+        isEditMode, setSelectedElement, toggleSwitch, toggleFault
+    });
 
     const getBranchId = (branch) => `${branch.from}-${branch.to}`;
 
@@ -39,7 +44,6 @@ export default function MapArea({
         return minIdx;
     };
 
-    // 👇 Correção: A função agora recebe a array exata de trechos retos da linha
     const calculateBranchPath = async (branchObj, currentWps, branchStrSegs) => {
         const p1 = geoPositions[branchObj.from];
         const p2 = geoPositions[branchObj.to];
@@ -69,7 +73,6 @@ export default function MapArea({
         return fullPath;
     };
 
-    // 👇 Correção do Assíncrono: Agora podemos forçar as variáveis para não ter delay
     const forceRecalculateBranch = async (branchObj, overrideWps = null, overrideStrSegs = null) => {
         const bId = getBranchId(branchObj);
         setRecalculatingBranchId(bId);
@@ -181,7 +184,7 @@ export default function MapArea({
 
         if (type === 'sub') shape = `<circle cx="10" cy="10" r="8" fill="${color}" stroke="${strokeColor}" stroke-width="1.5" ${glowStyle}/>`;
         else if (type === 'feeder') shape = `<polygon points="10,1 18,5 18,15 10,19 2,15 2,5" fill="${color}" stroke="${strokeColor}" stroke-width="1.5" ${glowStyle}/>`;
-        else if (type === 'shunt') shape = `<polygon points="10,2 18,10 10,18 2,10" fill="${color}" stroke="${strokeColor}" stroke-width="1.5" ${glowStyle}/>`;
+        else if (type === 'shunt') shape = `<polygon points="10,2 18,10 10,18 2,10" fill="${color}" stroke="${strokeColor}" stroke-width="2.5" ${glowStyle}/>`;
         else shape = `<rect x="3" y="6" width="14" height="8" rx="1.5" fill="${color}" stroke="${strokeColor}" stroke-width="1.5" ${glowStyle}/>`;
 
         return L.divIcon({ className: 'custom-node', html: `<svg width="20" height="20" viewBox="0 0 20 20" style="overflow: visible;">${shape}</svg>`, iconSize: [20, 20], iconAnchor: [10, 10] });
@@ -208,7 +211,7 @@ export default function MapArea({
                 <div style={{ position: 'absolute', top: '80px', left: '50%', transform: 'translateX(-50%)', zIndex: 1000, background: '#e91e63', color: 'white', padding: '8px 16px', borderRadius: '20px', fontWeight: 'bold', fontSize: '13px', boxShadow: '0 4px 10px rgba(233,30,99,0.4)', animation: 'pulse 1.5s infinite' }}>🛰️ Roteando trecho...</div>
             )}
 
-            <MapContainer center={center} zoom={15} style={{ width: '100%', height: '100%', background: darkMode ? '#121212' : '#f0f2f5' }}>
+            <MapContainer center={center} zoom={15} doubleClickZoom={false} style={{ width: '100%', height: '100%', background: darkMode ? '#121212' : '#f0f2f5' }}>
                 <TileLayer url={mapTileUrl} attribution='&copy; OSM' />
 
                 {branches.map(branch => {
@@ -217,65 +220,81 @@ export default function MapArea({
                     const p2 = geoPositions[branch.to];
                     if (!p1 || !p2) return null;
 
-                    const color = getEdgeColor(branch);
-                    const isClosed = branch.state === 1;
                     const lineData = lineCurrents[bId] || lineCurrents[branch.id]; 
+                    const isClosed = (branch.state !== undefined ? branch.state : branch.initialState) === 1;
                     
-                    const wps = manualWaypoints[bId] || [];
-                    const fallbackPath = [[p1.lat, p1.lng], ...wps.map(w => [w.lat, w.lng]), [p2.lat, p2.lng]];
-                    const path = routedPaths[bId] || fallbackPath;
+                    let displayColor = getEdgeColor(branch); 
+
+                    if (!isClosed) {
+                        displayColor = '#777'; 
+                    } else if (lineData) {
+                        if (lineData.hasLoop) {
+                            displayColor = '#ffff00'; 
+                        } else if (lineData.percentage > 100) {
+                            displayColor = '#ff0000'; 
+                        }
+                    }
+
+                    const path = routedPaths[bId] || [[p1.lat, p1.lng], [p2.lat, p2.lng]];
+                    const isSelected = selectedElement?.type === 'edge' && (
+                        (branch.id !== undefined && String(selectedElement?.data?.id) === String(branch.id)) || 
+                        (String(selectedElement?.data?.from) === String(branch.from) && String(selectedElement?.data?.to) === String(branch.to))
+                    );
                     
-                    const isSelected = selectedElement?.type === 'edge' && (selectedElement?.data?.id === branch.id || selectedElement?.data?.from === branch.from);
+                    // 👇 HOVER DA LINHA
+                    const isHovered = hoveredLineId === bId || hoveredLineId === branch.id;
                     const isRecalculating = recalculatingBranchId === bId;
                     
-                    const lineColor = isRecalculating ? '#e91e63' : (isSelected ? '#fff' : color);
-                    const lineWeight = isSelected ? 6 : (routedPaths[bId] ? 4 : 5);
-                    const lineOpacity = isRecalculating ? 0.5 : (isClosed ? 0.9 : 0.4);
+                    // 👇 APLICAÇÃO DO HOVER NA COR E ESPESSURA
+                    const lineColor = isRecalculating ? '#e91e63' : (isSelected || isHovered ? '#fff' : displayColor);
+                    const lineWeight = isSelected || isHovered ? 8 : (lineData?.percentage > 100 ? 6 : 5);
+                    const lineOpacity = isRecalculating ? 0.5 : (isSelected || isHovered ? 1.0 : (isClosed ? 0.9 : 0.4));
 
                     return (
                         <Polyline 
-                            key={`branch-${bId}`} positions={path} color={lineColor} weight={lineWeight} opacity={lineOpacity} dashArray={isClosed ? null : "10, 10"}
+                            key={`branch-${bId}-${isClosed}-${displayColor}-${isHovered}`} 
+                            positions={path} 
+                            color={lineColor} 
+                            weight={lineWeight} 
+                            opacity={lineOpacity} 
+                            dashArray={isClosed ? null : "10, 10"}
                             eventHandlers={{
+                                // 👇 ATIVADORES DO HOVER
+                                mouseover: () => { if (setHoveredLineId) setHoveredLineId(branch.id !== undefined ? branch.id : bId); },
+                                mouseout: () => { if (setHoveredLineId) setHoveredLineId(null); },
+
                                 click: async (e) => { 
                                     if (isEditMode) {
                                         const map = e.target._map;
-                                        const points = [p1, ...wps, p2];
+                                        const points = [p1, ...(manualWaypoints[bId] || []), p2];
                                         const segIdx = getClickedSegmentIndex(map, e.latlng, points);
                                         const isCtrl = e.originalEvent.ctrlKey || e.originalEvent.metaKey;
-                                        
                                         let newBranchStrSegs = straightSegments[bId] || [];
-                                        
                                         if (isCtrl) {
-                                            console.log(`🕹️ DEBUG: CTRL pressionado na linha ${bId}. Transformando trecho ${segIdx} em RETA.`);
-                                            if (!newBranchStrSegs.includes(segIdx)) {
-                                                newBranchStrSegs = [...newBranchStrSegs, segIdx];
-                                            } else {
-                                                console.log(`⚠️ DEBUG: O trecho ${segIdx} já era uma reta. O clique foi ignorado para evitar loops.`);
-                                            }
+                                            if (!newBranchStrSegs.includes(segIdx)) newBranchStrSegs = [...newBranchStrSegs, segIdx];
                                         } else {
-                                            console.log(`🖱️ DEBUG: Clique Normal na linha ${bId}. Buscando RUA no trecho ${segIdx}.`);
-                                            if (newBranchStrSegs.includes(segIdx)) {
-                                                newBranchStrSegs = newBranchStrSegs.filter(i => i !== segIdx);
-                                            }
+                                            if (newBranchStrSegs.includes(segIdx)) newBranchStrSegs = newBranchStrSegs.filter(i => i !== segIdx);
                                         }
-                                        
-                                        // Salva o novo estado das retas
                                         setStraightSegments(prev => ({ ...prev, [bId]: newBranchStrSegs }));
-                                        
-                                        // Força o recalculo imediato usando as variáveis fresquinhas!
-                                        await forceRecalculateBranch(branch, wps, newBranchStrSegs);
-
-                                    } else if (isSelected && branch.hasSwitch) toggleSwitch(branch.id || bId); 
-                                    else setSelectedElement({ type: 'edge', data: branch }); 
+                                        await forceRecalculateBranch(branch, (manualWaypoints[bId] || []), newBranchStrSegs);
+                                    } else {
+                                        handleEdgeClick(branch); 
+                                    }
                                 },
+                                dblclick: (e) => handleEdgeDoubleClick(branch, bId, e),
                                 contextmenu: (e) => handleAddWaypoint(e, branch) 
                             }}
                         >
-                            <Tooltip direction="center" offset={[0,0]}>
+                            <Tooltip direction="center" sticky>
                                 <div style={{ textAlign: 'center' }}>
                                     <strong>Linha {branch.from}-{branch.to}</strong><br/>
-                                    {isClosed ? `Carga: ${(lineData?.percentage || 0).toFixed(1)}%` : 'ABERTA'}<br/>
-                                    {isEditMode && <span style={{fontSize: '10px', color: '#00bcd4'}}><strong>Ctrl+Click:</strong> Linha Reta NESTE trecho<br/><strong>Click Simples:</strong> Rota de Rua NESTE trecho</span>}
+                                    {isClosed ? (
+                                        <>
+                                            Carga: {(lineData?.percentage || 0).toFixed(1)}%<br/>
+                                            {lineData?.hasLoop && <span style={{color: 'yellow', fontWeight: 'bold'}}>⚠️ LOOP DETECTADO</span>}
+                                            {lineData?.percentage > 100 && <span style={{color: 'red', fontWeight: 'bold'}}>🚨 SOBRECARGA</span>}
+                                        </>
+                                    ) : 'ABERTA'}
                                 </div>
                             </Tooltip>
                         </Polyline>
@@ -299,41 +318,54 @@ export default function MapArea({
                     const pos = geoPositions[nodeId];
                     const numId = parseInt(nodeId);
                     const v_pu = nodeData[nodeId]?.v || 1.0;
-                    const isSelected = selectedElement?.type === 'node' && selectedElement?.id === numId;
-                    const color = isSelected ? '#ff9800' : getNodeColor(numId);
                     
                     const isSource = sources.includes(numId);
                     const isFeeder = feedersList.includes(numId);
-                    const hasShunt = systemShunts && systemShunts[numId];
+                    
+                    const isPassedShunt = systemShunts && (systemShunts[nodeId] || systemShunts[String(numId)]);
+                    const hasShunt = isPassedShunt || numId === 16 || numId === 24; 
+                    
+                    // 👇 HOVER E SELEÇÃO DA BARRA
+                    const isHovered = String(hoveredNodeId) === String(numId);
+                    const isSelected = selectedElement?.type === 'node' && String(selectedElement?.id) === String(numId);
+                    
+                    const baseColor = getNodeColor(numId);
+                    const color = isSelected || isHovered ? '#ffffff' : baseColor;
                     const type = isSource ? 'sub' : (isFeeder ? 'feeder' : (hasShunt ? 'shunt' : 'load'));
 
                     return (
                         <Marker 
-                            key={`node-${nodeId}`} position={[pos.lat, pos.lng]} draggable={isEditMode} icon={createCustomIcon(nodeId, color, type, v_pu)}
+                            key={`node-${nodeId}-${isHovered}`} 
+                            position={[pos.lat, pos.lng]} draggable={isEditMode} icon={createCustomIcon(nodeId, color, type, v_pu)}
                             eventHandlers={{ 
+                                // 👇 ATIVADORES DO HOVER
+                                mouseover: () => { if (setHoveredNodeId) setHoveredNodeId(numId); },
+                                mouseout: () => { if (setHoveredNodeId) setHoveredNodeId(null); },
+
                                 dragend: (e) => setGeoPositions(prev => ({ ...prev, [nodeId]: { lat: e.target.getLatLng().lat, lng: e.target.getLatLng().lng } })),
                                 click: async (e) => { 
                                     if (isEditMode) {
                                         const isCtrl = e.originalEvent.ctrlKey || e.originalEvent.metaKey;
                                         if (isCtrl) {
-                                            console.log(`⚡ DEBUG: Recalculando todas as conexões da Barra ${numId}...`);
                                             const connectedBranches = branches.filter(b => b.from === numId || b.to === numId);
-                                            for (const b of connectedBranches) {
-                                                await forceRecalculateBranch(b);
-                                            }
+                                            for (const b of connectedBranches) await forceRecalculateBranch(b);
                                         }
                                         return;
                                     }
-                                    if (isSelected) toggleFault(numId); 
-                                    else setSelectedElement({ type: 'node', id: numId }); 
-                                }
+                                    handleNodeClick(numId); 
+                                },
+                                dblclick: (e) => handleNodeDoubleClick(numId, e)
                             }}
                         >
                             <Tooltip direction="top" offset={[0, -8]}>
                                 <div style={{ textAlign: 'center' }}>
-                                    <strong style={{ color: color }}>{isSource ? 'SUB' : (isFeeder ? 'ALIM' : 'BARRA')} {nodeId}</strong><br/>
+                                    <strong style={{ color: color }}>{type === 'shunt' ? 'CAPACITOR' : (isSource ? 'SUB' : (isFeeder ? 'ALIM' : 'BARRA'))} {nodeId}</strong><br/>
                                     {v_pu.toFixed(3)} pu
-                                    {isEditMode && <><br/><span style={{fontSize: '9px', color: '#00bcd4'}}>Ctrl+Click: Recalcular Ruas nas Linhas Conectadas</span></>}
+                                    {isEditMode ? (
+                                        <><br/><span style={{fontSize: '9px', color: '#00bcd4'}}>Ctrl+Click: Recalcular Ruas conectadas</span></>
+                                    ) : (
+                                        <><br/><span style={{fontSize: '9px', color: '#ff9800'}}>Duplo-clique para aplicar Falta</span></>
+                                    )}
                                 </div>
                             </Tooltip>
                         </Marker>

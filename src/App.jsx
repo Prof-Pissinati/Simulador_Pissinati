@@ -838,6 +838,11 @@ const handleShuntChange = useCallback((nodeId, increment) => {
                         nodeData={nodeData}
                         lineCurrents={lineCurrents}
                         isEditMode={isEditMode} /* 👈 AQUI ESTÁ O GATILHO DE EDIÇÃO! */
+                        systemShunts={systemShunts}
+                        hoveredLineId={hoveredLineId}
+                        setHoveredLineId={setHoveredLineId}
+                        hoveredNodeId={hoveredNodeId}
+                        setHoveredNodeId={setHoveredNodeId}
                     >
                         {/* 👇 A LEGENDA AGORA É ENVIADA PARA DENTRO DO MAPA 👇 */}
                         {showLegend && (
