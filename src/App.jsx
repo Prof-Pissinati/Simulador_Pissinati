@@ -843,6 +843,9 @@ const handleShuntChange = useCallback((nodeId, increment) => {
                         setHoveredLineId={setHoveredLineId}
                         hoveredNodeId={hoveredNodeId}
                         setHoveredNodeId={setHoveredNodeId}
+                        loads={loads}
+                        systemLoads={systemLoads}
+                        sses={SYSTEM_DATA.sses}
                     >
                         {/* 👇 A LEGENDA AGORA É ENVIADA PARA DENTRO DO MAPA 👇 */}
                         {showLegend && (

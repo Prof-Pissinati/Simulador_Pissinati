@@ -6,16 +6,28 @@ import { fetchStreetRoute } from '../utils/geoRouting';
 import systemRoutesData from '../data/systemRoutes.json';
 import { useGridInteraction } from '../hooks/useGridInteraction';
 
+// 👇 IMPORTAMOS O SEU COMPONENTE INTACTO 👇
+import SvgTooltips from './SvgTooltips'; 
+
 // 👇 MAPA BLINDADO: Agora ele checa a trava antes de limpar a seleção!
 function MapBackgroundEvents({ setSelectedElement, isEditMode, ignoreMapClickRef }) {
     useMapEvents({
         click: () => {
-            // Se a trava de clique estiver ativada, ignora a limpeza (o clique foi num poste/linha)
             if (ignoreMapClickRef.current) return;
-            
             if (!isEditMode) {
                 setSelectedElement(null);
             }
+        }
+    });
+    return null;
+}
+
+// 👇 COMPONENTE NOVO: Rastreia o mouse para a "antena" do SvgTooltips
+function MapMouseTracker({ setMouseSvgPt }) {
+    useMapEvents({
+        mousemove: (e) => {
+            // Usa os pixels da tela (containerPoint) em vez de Lat/Lng
+            setMouseSvgPt(e.containerPoint); 
         }
     });
     return null;
@@ -25,7 +37,9 @@ export default function MapArea({
     darkMode, branches, sources, feedersList, getNodeColor, 
     getEdgeColor, setSelectedElement, toggleSwitch, toggleFault,
     nodeData, lineCurrents, systemShunts, children, isEditMode,
-    selectedElement, hoveredLineId, setHoveredLineId, hoveredNodeId, setHoveredNodeId
+    selectedElement, hoveredLineId, setHoveredLineId, hoveredNodeId, setHoveredNodeId,
+    // 👇 Novas props necessárias para o SvgTooltips 👇
+    loads, systemLoads, sses 
 }) {
     const center = [-20.4319, -51.3425];
     const mapTileUrl = darkMode 
@@ -40,12 +54,72 @@ export default function MapArea({
     const [recalculatingBranchId, setRecalculatingBranchId] = useState(null);
     const fileInputRef = useRef(null);
 
-    // 👇 TRAVA DE CLIQUE (LATCH): O nosso semáforo super-rápido
+    // TRAVA DE CLIQUE (LATCH)
     const ignoreMapClickRef = useRef(false);
+    const containerRef = useRef(null); // Ref para medir o tamanho da tela
+
+    // ==========================================
+    // 💡 ESTADOS DO SCADA (TOOLTIPS E POST-ITS)
+    // ==========================================
+    const [mouseSvgPt, setMouseSvgPt] = useState({ x: 0, y: 0 });
+    const [pinnedCards, setPinnedCards] = useState([]);
+    const [draggingCard, setDraggingCard] = useState(null);
+    const [svgBounds, setSvgBounds] = useState({ left: 0, right: 1000, top: 0, bottom: 800 });
+
+    useEffect(() => {
+        if (containerRef.current) {
+            const rect = containerRef.current.getBoundingClientRect();
+            setSvgBounds({ left: 0, top: 0, right: rect.width, bottom: rect.height });
+        }
+    }, [isEditMode]);
+
+    // 👇 Função chamada pelo Hook ao usar Shift+Click
+    const handlePinCard = (type, id, event) => {
+        const pt = event.containerPoint; // Ponto da tela onde ocorreu o clique
+        setPinnedCards(prev => {
+            const exists = prev.find(p => String(p.id) === String(id) && p.type === type);
+            if (exists) return prev.filter(p => !(String(p.id) === String(id) && p.type === type)); // Remove se já existir
+            return [...prev, { id, type, x: pt.x + 20, y: pt.y + 20 }]; // Cria deslocado para o lado
+        });
+    };
 
     const { handleNodeClick, handleEdgeClick } = useGridInteraction({
-        isEditMode, setSelectedElement, toggleSwitch, toggleFault
+        isEditMode, setSelectedElement, toggleSwitch, toggleFault, onPinCard: handlePinCard
     });
+
+    // ==========================================
+    // 💡 MOTOR DE ARRASTO DOS POST-ITS
+    // ==========================================
+    const handleSvgMouseDown = (e) => {
+        const closestCard = e.target.closest('.pinned-card');
+        if (closestCard) {
+            const cardId = closestCard.getAttribute('data-id');
+            const cardType = closestCard.getAttribute('data-type');
+            const rect = e.currentTarget.getBoundingClientRect();
+            setDraggingCard({ id: cardId, type: cardType, startX: e.clientX - rect.left, startY: e.clientY - rect.top });
+            e.stopPropagation();
+        }
+    };
+
+    const handleSvgMouseMove = (e) => {
+        if (draggingCard) {
+            const rect = e.currentTarget.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const y = e.clientY - rect.top;
+            const dx = x - draggingCard.startX;
+            const dy = y - draggingCard.startY;
+
+            setPinnedCards(prev => prev.map(card => {
+                if (String(card.id) === String(draggingCard.id) && card.type === draggingCard.type) {
+                    return { ...card, x: card.x + dx, y: card.y + dy };
+                }
+                return card;
+            }));
+            setDraggingCard({ ...draggingCard, startX: x, startY: y });
+        }
+    };
+
+    const handleSvgMouseUp = () => { if (draggingCard) setDraggingCard(null); };
 
     const getBranchId = (branch) => `${branch.from}-${branch.to}`;
 
@@ -209,7 +283,7 @@ export default function MapArea({
     const waypointIcon = L.divIcon({ className: 'custom-waypoint', html: `<div style="background-color: #ff9800; width: 10px; height: 10px; border-radius: 50%; border: 2px solid #fff; box-shadow: 0 0 4px rgba(0,0,0,0.5);"></div>`, iconSize: [10, 10], iconAnchor: [5, 5] });
 
     return (
-        <div style={{ width: '100%', height: '100%', position: 'relative', zIndex: 1 }}>
+        <div ref={containerRef} style={{ width: '100%', height: '100%', position: 'relative', zIndex: 1 }}>
             
             <div style={{ position: 'absolute', top: '20px', left: '50%', transform: 'translateX(-50%)', zIndex: 1000, background: darkMode ? 'rgba(30, 30, 30, 0.9)' : 'rgba(255, 255, 255, 0.9)', padding: '10px 20px', borderRadius: '12px', boxShadow: '0 4px 15px rgba(0,0,0,0.3)', display: 'flex', gap: '10px', backdropFilter: 'blur(5px)' }}>
                 <input type="file" ref={fileInputRef} onChange={handleImportRoutes} style={{ display: 'none' }} accept=".json" />
@@ -227,11 +301,50 @@ export default function MapArea({
                 <div style={{ position: 'absolute', top: '80px', left: '50%', transform: 'translateX(-50%)', zIndex: 1000, background: '#e91e63', color: 'white', padding: '8px 16px', borderRadius: '20px', fontWeight: 'bold', fontSize: '13px', boxShadow: '0 4px 10px rgba(233,30,99,0.4)', animation: 'pulse 1.5s infinite' }}>🛰️ Roteando trecho...</div>
             )}
 
+            {/* 👇 OVERLAY SVG INVISÍVEL PARA OS TOOLTIPS E POST-ITS 👇 */}
+            {!isEditMode && (
+                <div 
+                    onMouseDown={handleSvgMouseDown}
+                    onMouseMove={handleSvgMouseMove}
+                    onMouseUp={handleSvgMouseUp}
+                    onMouseLeave={handleSvgMouseUp}
+                    style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', zIndex: 2000, pointerEvents: draggingCard ? 'all' : 'none' }}
+                >
+                    <svg style={{ width: '100%', height: '100%' }}>
+                        <SvgTooltips 
+                            isHoveringSVG={true} // Força ativo no mapa
+                            localHoveredLine={hoveredLineId}
+                            hoveredBranch={branches.find(b => b.id === hoveredLineId)}
+                            hoveredLineData={lineCurrents[hoveredLineId]}
+                            localHoveredNode={hoveredNodeId}
+                            hoveredNodeInfo={nodeData[hoveredNodeId]}
+                            manualPositions={{}} // HUD não usa grid SVG
+                            animPositions={{}}   // HUD não usa grid SVG
+                            sources={sources}
+                            branches={branches}
+                            lineCurrents={lineCurrents}
+                            loads={loads}
+                            systemLoads={systemLoads}
+                            sses={sses}
+                            feedersList={feedersList}
+                            svgWorldBounds={svgBounds}
+                            pinnedCards={pinnedCards}
+                            setPinnedCards={setPinnedCards}
+                            nodeData={nodeData}
+                            mouseSvgPt={mouseSvgPt} 
+                        />
+                    </svg>
+                </div>
+            )}
+
             <MapContainer center={center} zoom={15} doubleClickZoom={false} style={{ width: '100%', height: '100%', background: darkMode ? '#121212' : '#f0f2f5' }}>
                 
                 {/* 👇 MAPA OUVE CLIQUES VAZIOS (E RESPEITA A TRAVA) */}
                 <MapBackgroundEvents setSelectedElement={setSelectedElement} isEditMode={isEditMode} ignoreMapClickRef={ignoreMapClickRef} />
                 
+                {/* O RASTREADOR ALIMENTA A ANTENA DO SCADA */}
+                {!isEditMode && <MapMouseTracker setMouseSvgPt={setMouseSvgPt} />}
+
                 <TileLayer url={mapTileUrl} attribution='&copy; OSM' />
 
                 {branches.map(branch => {
@@ -305,23 +418,15 @@ export default function MapArea({
                                 contextmenu: (e) => handleAddWaypoint(e, branch) 
                             }}
                         >
-                            <Tooltip direction="center" sticky>
-                                <div style={{ textAlign: 'center' }}>
-                                    <strong>Linha {branch.from}-{branch.to}</strong><br/>
-                                    {isClosed ? (
-                                        <>
-                                            Carga: {(lineData?.percentage || 0).toFixed(1)}%<br/>
-                                            {lineData?.hasLoop && <span style={{color: 'yellow', fontWeight: 'bold'}}>⚠️ LOOP DETECTADO</span>}
-                                            {lineData?.percentage > 100 && <span style={{color: 'red', fontWeight: 'bold'}}>🚨 SOBRECARGA</span>}
-                                        </>
-                                    ) : 'ABERTA'}<br/>
-                                    {isEditMode ? (
+                            {/* O Tooltip antigo só aparece no Modo de Edição agora */}
+                            {isEditMode && (
+                                <Tooltip direction="center" sticky>
+                                    <div style={{ textAlign: 'center' }}>
+                                        <strong>Linha {branch.from}-{branch.to}</strong><br/>
                                         <span style={{fontSize: '10px', color: '#00bcd4'}}><strong>Ctrl+Click:</strong> Linha Reta NESTE trecho<br/><strong>Click Simples:</strong> Rota de Rua NESTE trecho</span>
-                                    ) : (
-                                        <span style={{fontSize: '10px', color: '#ff9800'}}>{branch.hasSwitch ? 'Clique p/ Manobrar | Shift+Click p/ Selecionar' : 'Shift+Click p/ Selecionar'}</span>
-                                    )}
-                                </div>
-                            </Tooltip>
+                                    </div>
+                                </Tooltip>
+                            )}
                         </Polyline>
                     );
                 })}
@@ -384,17 +489,15 @@ export default function MapArea({
                                 }
                             }}
                         >
-                            <Tooltip direction="top" offset={[0, -8]}>
-                                <div style={{ textAlign: 'center' }}>
-                                    <strong style={{ color: color }}>{type === 'shunt' ? 'CAPACITOR' : (isSource ? 'SUB' : (isFeeder ? 'ALIM' : 'BARRA'))} {nodeId}</strong><br/>
-                                    {v_pu.toFixed(3)} pu
-                                    {isEditMode ? (
-                                        <><br/><span style={{fontSize: '9px', color: '#00bcd4'}}>Ctrl+Click: Recalcular Ruas conectadas</span></>
-                                    ) : (
-                                        <><br/><span style={{fontSize: '9px', color: '#ff9800'}}>Clique p/ Falta | Shift+Click p/ Selecionar</span></>
-                                    )}
-                                </div>
-                            </Tooltip>
+                            {/* O Tooltip antigo só aparece no Modo de Edição agora */}
+                            {isEditMode && (
+                                <Tooltip direction="top" offset={[0, -8]}>
+                                    <div style={{ textAlign: 'center' }}>
+                                        <strong style={{ color: color }}>{type === 'shunt' ? 'CAPACITOR' : (isSource ? 'SUB' : (isFeeder ? 'ALIM' : 'BARRA'))} {nodeId}</strong><br/>
+                                        <br/><span style={{fontSize: '9px', color: '#00bcd4'}}>Ctrl+Click: Recalcular Ruas conectadas</span>
+                                    </div>
+                                </Tooltip>
+                            )}
                         </Marker>
                     );
                 })}
