@@ -1,18 +1,31 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { MapContainer, TileLayer, Tooltip, Polyline, Marker } from 'react-leaflet';
+import { MapContainer, TileLayer, Tooltip, Polyline, Marker, useMapEvents } from 'react-leaflet';
 import L from 'leaflet';
 import { GEO_POSITIONS as INITIAL_GEO } from '../data/systemDataGeo';
 import { fetchStreetRoute } from '../utils/geoRouting';
 import systemRoutesData from '../data/systemRoutes.json';
 import { useGridInteraction } from '../hooks/useGridInteraction';
 
+// 👇 MAPA BLINDADO: Agora ele checa a trava antes de limpar a seleção!
+function MapBackgroundEvents({ setSelectedElement, isEditMode, ignoreMapClickRef }) {
+    useMapEvents({
+        click: () => {
+            // Se a trava de clique estiver ativada, ignora a limpeza (o clique foi num poste/linha)
+            if (ignoreMapClickRef.current) return;
+            
+            if (!isEditMode) {
+                setSelectedElement(null);
+            }
+        }
+    });
+    return null;
+}
+
 export default function MapArea({ 
     darkMode, branches, sources, feedersList, getNodeColor, 
     getEdgeColor, setSelectedElement, toggleSwitch, toggleFault,
     nodeData, lineCurrents, systemShunts, children, isEditMode,
-    selectedElement,
-    // 👇 NOVAS PROPS ADICIONADAS PARA SINCRONIZAR O HOVER
-    hoveredLineId, setHoveredLineId, hoveredNodeId, setHoveredNodeId
+    selectedElement, hoveredLineId, setHoveredLineId, hoveredNodeId, setHoveredNodeId
 }) {
     const center = [-20.4319, -51.3425];
     const mapTileUrl = darkMode 
@@ -27,7 +40,10 @@ export default function MapArea({
     const [recalculatingBranchId, setRecalculatingBranchId] = useState(null);
     const fileInputRef = useRef(null);
 
-    const { handleNodeClick, handleNodeDoubleClick, handleEdgeClick, handleEdgeDoubleClick } = useGridInteraction({
+    // 👇 TRAVA DE CLIQUE (LATCH): O nosso semáforo super-rápido
+    const ignoreMapClickRef = useRef(false);
+
+    const { handleNodeClick, handleEdgeClick } = useGridInteraction({
         isEditMode, setSelectedElement, toggleSwitch, toggleFault
     });
 
@@ -212,6 +228,10 @@ export default function MapArea({
             )}
 
             <MapContainer center={center} zoom={15} doubleClickZoom={false} style={{ width: '100%', height: '100%', background: darkMode ? '#121212' : '#f0f2f5' }}>
+                
+                {/* 👇 MAPA OUVE CLIQUES VAZIOS (E RESPEITA A TRAVA) */}
+                <MapBackgroundEvents setSelectedElement={setSelectedElement} isEditMode={isEditMode} ignoreMapClickRef={ignoreMapClickRef} />
+                
                 <TileLayer url={mapTileUrl} attribution='&copy; OSM' />
 
                 {branches.map(branch => {
@@ -241,11 +261,9 @@ export default function MapArea({
                         (String(selectedElement?.data?.from) === String(branch.from) && String(selectedElement?.data?.to) === String(branch.to))
                     );
                     
-                    // 👇 HOVER DA LINHA
                     const isHovered = hoveredLineId === bId || hoveredLineId === branch.id;
                     const isRecalculating = recalculatingBranchId === bId;
                     
-                    // 👇 APLICAÇÃO DO HOVER NA COR E ESPESSURA
                     const lineColor = isRecalculating ? '#e91e63' : (isSelected || isHovered ? '#fff' : displayColor);
                     const lineWeight = isSelected || isHovered ? 8 : (lineData?.percentage > 100 ? 6 : 5);
                     const lineOpacity = isRecalculating ? 0.5 : (isSelected || isHovered ? 1.0 : (isClosed ? 0.9 : 0.4));
@@ -259,11 +277,14 @@ export default function MapArea({
                             opacity={lineOpacity} 
                             dashArray={isClosed ? null : "10, 10"}
                             eventHandlers={{
-                                // 👇 ATIVADORES DO HOVER
                                 mouseover: () => { if (setHoveredLineId) setHoveredLineId(branch.id !== undefined ? branch.id : bId); },
                                 mouseout: () => { if (setHoveredLineId) setHoveredLineId(null); },
 
                                 click: async (e) => { 
+                                    // 👇 FECHA O SEMÁFORO! O clique no mapa será ignorado.
+                                    ignoreMapClickRef.current = true;
+                                    setTimeout(() => { ignoreMapClickRef.current = false; }, 100);
+
                                     if (isEditMode) {
                                         const map = e.target._map;
                                         const points = [p1, ...(manualWaypoints[bId] || []), p2];
@@ -278,10 +299,9 @@ export default function MapArea({
                                         setStraightSegments(prev => ({ ...prev, [bId]: newBranchStrSegs }));
                                         await forceRecalculateBranch(branch, (manualWaypoints[bId] || []), newBranchStrSegs);
                                     } else {
-                                        handleEdgeClick(branch); 
+                                        handleEdgeClick(branch, bId, e); 
                                     }
                                 },
-                                dblclick: (e) => handleEdgeDoubleClick(branch, bId, e),
                                 contextmenu: (e) => handleAddWaypoint(e, branch) 
                             }}
                         >
@@ -294,7 +314,12 @@ export default function MapArea({
                                             {lineData?.hasLoop && <span style={{color: 'yellow', fontWeight: 'bold'}}>⚠️ LOOP DETECTADO</span>}
                                             {lineData?.percentage > 100 && <span style={{color: 'red', fontWeight: 'bold'}}>🚨 SOBRECARGA</span>}
                                         </>
-                                    ) : 'ABERTA'}
+                                    ) : 'ABERTA'}<br/>
+                                    {isEditMode ? (
+                                        <span style={{fontSize: '10px', color: '#00bcd4'}}><strong>Ctrl+Click:</strong> Linha Reta NESTE trecho<br/><strong>Click Simples:</strong> Rota de Rua NESTE trecho</span>
+                                    ) : (
+                                        <span style={{fontSize: '10px', color: '#ff9800'}}>{branch.hasSwitch ? 'Clique p/ Manobrar | Shift+Click p/ Selecionar' : 'Shift+Click p/ Selecionar'}</span>
+                                    )}
                                 </div>
                             </Tooltip>
                         </Polyline>
@@ -325,12 +350,11 @@ export default function MapArea({
                     const isPassedShunt = systemShunts && (systemShunts[nodeId] || systemShunts[String(numId)]);
                     const hasShunt = isPassedShunt || numId === 16 || numId === 24; 
                     
-                    // 👇 HOVER E SELEÇÃO DA BARRA
                     const isHovered = String(hoveredNodeId) === String(numId);
                     const isSelected = selectedElement?.type === 'node' && String(selectedElement?.id) === String(numId);
                     
                     const baseColor = getNodeColor(numId);
-                    const color = isSelected || isHovered ? '#ffffff' : baseColor;
+                    const color = isSelected || isHovered ? '#fff' : baseColor;
                     const type = isSource ? 'sub' : (isFeeder ? 'feeder' : (hasShunt ? 'shunt' : 'load'));
 
                     return (
@@ -338,12 +362,16 @@ export default function MapArea({
                             key={`node-${nodeId}-${isHovered}`} 
                             position={[pos.lat, pos.lng]} draggable={isEditMode} icon={createCustomIcon(nodeId, color, type, v_pu)}
                             eventHandlers={{ 
-                                // 👇 ATIVADORES DO HOVER
                                 mouseover: () => { if (setHoveredNodeId) setHoveredNodeId(numId); },
                                 mouseout: () => { if (setHoveredNodeId) setHoveredNodeId(null); },
 
                                 dragend: (e) => setGeoPositions(prev => ({ ...prev, [nodeId]: { lat: e.target.getLatLng().lat, lng: e.target.getLatLng().lng } })),
+                                
                                 click: async (e) => { 
+                                    // 👇 FECHA O SEMÁFORO AQUI TAMBÉM!
+                                    ignoreMapClickRef.current = true;
+                                    setTimeout(() => { ignoreMapClickRef.current = false; }, 100);
+
                                     if (isEditMode) {
                                         const isCtrl = e.originalEvent.ctrlKey || e.originalEvent.metaKey;
                                         if (isCtrl) {
@@ -352,9 +380,8 @@ export default function MapArea({
                                         }
                                         return;
                                     }
-                                    handleNodeClick(numId); 
-                                },
-                                dblclick: (e) => handleNodeDoubleClick(numId, e)
+                                    handleNodeClick(numId, e); 
+                                }
                             }}
                         >
                             <Tooltip direction="top" offset={[0, -8]}>
@@ -364,7 +391,7 @@ export default function MapArea({
                                     {isEditMode ? (
                                         <><br/><span style={{fontSize: '9px', color: '#00bcd4'}}>Ctrl+Click: Recalcular Ruas conectadas</span></>
                                     ) : (
-                                        <><br/><span style={{fontSize: '9px', color: '#ff9800'}}>Duplo-clique para aplicar Falta</span></>
+                                        <><br/><span style={{fontSize: '9px', color: '#ff9800'}}>Clique p/ Falta | Shift+Click p/ Selecionar</span></>
                                     )}
                                 </div>
                             </Tooltip>
