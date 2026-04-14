@@ -13,6 +13,7 @@ import SvgTooltips from './SvgTooltips';
 function MapBackgroundEvents({ setSelectedElement, isEditMode, ignoreMapClickRef }) {
     useMapEvents({
         click: () => {
+            setSelectedElement(null);
             if (ignoreMapClickRef.current) return;
             if (!isEditMode) {
                 setSelectedElement(null);
@@ -390,7 +391,7 @@ export default function MapArea({
                             opacity={lineOpacity} 
                             dashArray={isClosed ? null : "10, 10"}
                             eventHandlers={{
-                                mouseover: () => { if (setHoveredLineId) setHoveredLineId(branch.id !== undefined ? branch.id : bId); },
+                                mouseover: () => { if (setHoveredLineId) setHoveredLineId(branch.id !== undefined ? branch.id : bId); if (setHoveredNodeId) setHoveredNodeId(null);},
                                 mouseout: () => { if (setHoveredLineId) setHoveredLineId(null); },
 
                                 click: async (e) => { 
@@ -467,7 +468,7 @@ export default function MapArea({
                             key={`node-${nodeId}-${isHovered}`} 
                             position={[pos.lat, pos.lng]} draggable={isEditMode} icon={createCustomIcon(nodeId, color, type, v_pu)}
                             eventHandlers={{ 
-                                mouseover: () => { if (setHoveredNodeId) setHoveredNodeId(numId); },
+                                mouseover: () => { if (setHoveredNodeId) setHoveredNodeId(numId); if (setHoveredLineId) setHoveredLineId(null);},
                                 mouseout: () => { if (setHoveredNodeId) setHoveredNodeId(null); },
 
                                 dragend: (e) => setGeoPositions(prev => ({ ...prev, [nodeId]: { lat: e.target.getLatLng().lat, lng: e.target.getLatLng().lng } })),
