@@ -837,10 +837,31 @@ const handleShuntChange = useCallback((nodeId, increment) => {
                         setSelectedElement={setSelectedElement} 
                         nodeData={nodeData}
                         lineCurrents={lineCurrents}
-                    />
+                        isEditMode={isEditMode} /* 👈 AQUI ESTÁ O GATILHO DE EDIÇÃO! */
+                    >
+                        {/* 👇 A LEGENDA AGORA É ENVIADA PARA DENTRO DO MAPA 👇 */}
+                        {showLegend && (
+                            <div className="legend" style={{ position: 'absolute', bottom: '20px', right: '20px', zIndex: 1000, pointerEvents: 'all', background: darkMode ? '#121212' : '#ffffff', border: '1px solid #444', borderRadius: '8px', boxShadow: '0 6px 20px rgba(0,0,0,0.2)' }} onMouseDown={e=>e.stopPropagation()} onMouseUp={e=>e.stopPropagation()} onClick={e=>e.stopPropagation()} onWheel={e=>e.stopPropagation()} onDoubleClick={e=>e.stopPropagation()} >
+                                <div style={{marginBottom:'10px', paddingBottom:'8px', borderBottom:'1px solid #444'}}>
+                                    <div style={{fontSize:'9px', color:'#888', fontWeight:'bold', marginBottom:'4px', letterSpacing:'1px'}}>LAYOUT</div>
+                                    <div style={{display:'flex', gap:'2px', background:'#222', padding:'2px', borderRadius:'4px'}}>
+                                        <button onClick={() => setLayoutMode('project')} style={{ flex:1, border:'none', borderRadius:'2px', padding:'4px', cursor:'pointer', fontSize:'10px', fontWeight:'bold', background: layoutMode === 'project' ? '#00bcd4' : 'transparent', color: layoutMode === 'project' ? '#000' : '#666', transition: 'all 0.2s' }}> PROJETO </button>
+                                        <button onClick={() => setLayoutMode('organic')} style={{ flex:1, border:'none', borderRadius:'2px', padding:'4px', cursor:'pointer', fontSize:'10px', fontWeight:'bold', background: layoutMode === 'organic' ? '#00bcd4' : 'transparent', color: layoutMode === 'organic' ? '#000' : '#666', transition: 'all 0.2s' }}> ORGÂNICO </button>
+                                    </div>
+                                </div>
+                                {sources.map(s => (
+                                    <div key={s} className="legend-item"><div className="legend-dot" style={{ background: getBaseColor(s, [...sources, ...feedersList], darkMode) }}></div> SUB {s}</div>
+                                ))}
+                                {feedersList.map(f => (
+                                    <div key={f} className="legend-item"><div className="legend-dot" style={{ background: getBaseColor(f, [...sources, ...feedersList], darkMode) }}></div> ALIM {f}</div>
+                                ))}
+                                <div className="legend-item"><div className="legend-dot" style={{ background: THEME.light.fault }}></div> Falta/Sobrecarga</div>
+                                <div className="legend-item"><div className="legend-dot" style={{ background: THEME.light.loop }}></div> Loop</div>
+                                <div className="legend-item"><div className="legend-dot" style={{ background: THEME.light.de }}></div> Desenergizado</div>
+                            </div>
+                        )}
+                    </MapArea>
                 )}
-                {/* 👆 FIM DA ALTERNÂNCIA 👆 */}
-
             </div>
 
             <div className="hide-on-print right-panel-wrapper" style={{ zIndex: 100 }}>
