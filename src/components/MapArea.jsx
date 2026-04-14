@@ -193,11 +193,11 @@ export default function MapArea({
         <div style={{ width: '100%', height: '100%', position: 'relative', zIndex: 1 }}>
             
             <div style={{ position: 'absolute', top: '20px', left: '50%', transform: 'translateX(-50%)', zIndex: 1000, background: darkMode ? 'rgba(30, 30, 30, 0.9)' : 'rgba(255, 255, 255, 0.9)', padding: '10px 20px', borderRadius: '12px', boxShadow: '0 4px 15px rgba(0,0,0,0.3)', display: 'flex', gap: '10px', backdropFilter: 'blur(5px)' }}>
-                <button onClick={() => fileInputRef.current.click()} style={{ background: '#2196f3', color: '#fff', border: 'none', padding: '8px 16px', borderRadius: '6px', fontWeight: 'bold', cursor: 'pointer' }}>📥 Importar systemRoutes.json</button>
                 <input type="file" ref={fileInputRef} onChange={handleImportRoutes} style={{ display: 'none' }} accept=".json" />
                 
                 {isEditMode && (
                     <>
+                        <button onClick={() => fileInputRef.current.click()} style={{ background: '#2196f3', color: '#fff', border: 'none', padding: '8px 16px', borderRadius: '6px', fontWeight: 'bold', cursor: 'pointer' }}>📥 Importar systemRoutes.json</button>
                         <button onClick={handleExportRoutes} style={{ background: '#ff9800', color: '#fff', border: 'none', padding: '8px 16px', borderRadius: '6px', fontWeight: 'bold', cursor: 'pointer' }}>💾 Exportar Rotas</button>
                         <button onClick={() => { const formattedPositions = "{\n" + Object.keys(geoPositions).sort((a,b)=>parseInt(a)-parseInt(b)).map(k => `    "${k}": { "lat": ${geoPositions[k].lat}, "lng": ${geoPositions[k].lng} }`).join(",\n") + "\n}"; console.log(formattedPositions); alert("Coordenadas no Console! Aperte F12 para copiar."); }} style={{ background: '#4caf50', color: '#fff', border: 'none', padding: '8px 16px', borderRadius: '6px', fontWeight: 'bold', cursor: 'pointer' }}>💾 Exportar Posições</button>
                     </>
