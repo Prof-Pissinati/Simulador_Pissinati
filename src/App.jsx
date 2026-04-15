@@ -220,25 +220,43 @@ function App() {
     });
 
     const handleUploadSwitches = (file) => {
-        const reader = new FileReader();
-        reader.onload = (e) => {
-            const { updates, newFaults, providedSteps } = parseSequenceFile(e.target.result, branches);
-            if (updates.size === 0 && newFaults.size === 0 && (!providedSteps || providedSteps.length === 0)) { 
-                showToast('Arquivo lido, mas nenhum dado compatível encontrado.', 'warning'); return; 
-            }
+    const reader = new FileReader();
+    reader.onload = (e) => {
+        const { updates, newFaults, providedSteps } = parseSequenceFile(e.target.result, branches);
+        
+        if (updates.size === 0 && newFaults.size === 0 && (!providedSteps || providedSteps.length === 0)) { 
+            showToast('Arquivo lido, mas nenhum dado compatível encontrado.', 'warning'); 
+            return; 
+        }
 
-            const targetBranches = branches.map(b => {
-                const key = `${b.from}-${b.to}`;
-                return updates.has(key) ? { ...b, state: updates.get(key) } : { ...b };
-            });
+        // 1. Criamos o estado "alvo" de chaves baseado no arquivo
+        const targetBranches = branches.map(b => {
+            const key = `${b.from}-${b.to}`;
+            return updates.has(key) ? { ...b, state: updates.get(key) } : { ...b };
+        });
 
-            const result = generateSequence(branches, faultNodes, targetBranches, newFaults, allBoundaryNodes, systemLoads, providedSteps);
-            setSequenceData(result); 
-            setSeqOverlayOpen(true);
-            showToast(`Sequenciamento gerado: ${result.steps.length} manobras.`, 'success');
-        };
-        reader.readAsText(file);
+        // 2. Geramos a sequência (isso inclui o cálculo de proteção automático)
+        const result = generateSequence(branches, faultNodes, targetBranches, newFaults, allBoundaryNodes, systemLoads, providedSteps);
+        
+        // 3. ATUALIZAÇÃO CRÍTICA: Se houver uma manobra de proteção (fault_add), 
+        // aplicamos o primeiro snapshot da sequência ao sistema "ao vivo".
+        if (result.snapshots && result.snapshots.length > 1) {
+            // O snapshot[1] geralmente é o primeiro passo após o estado inicial (a proteção atuando)
+            const protectionSnapshot = result.snapshots[1];
+            setBranches(protectionSnapshot.branches);
+            setFaultNodes(protectionSnapshot.faults);
+            if (protectionSnapshot.shunts) setSystemShunts(protectionSnapshot.shunts);
+        } else {
+            // Caso não haja passos, apenas atualiza o que veio do arquivo
+            setFaultNodes(newFaults);
+        }
+
+        setSequenceData(result); 
+        setSeqOverlayOpen(true);
+        showToast(`Sequenciamento carregado e Proteção aplicada!`, 'success');
     };
+    reader.readAsText(file);
+};
 
     // 👇 NOVA FUNÇÃO PARA EXPORTAR A SEQUÊNCIA 👇
     const handleExportSequence = useCallback(() => {

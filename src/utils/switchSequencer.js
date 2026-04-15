@@ -1,4 +1,17 @@
+// Configuração de tempos de manobra (Unidade: Minutos)
+// Você pode alterar esses valores para realizar análises de sensibilidade no doutorado.
+const MANEUVER_TIMES = {
+    SWITCH_OPEN: 1.0,      // Tempo para abrir uma chave (manual ou remota)
+    SWITCH_CLOSE: 1.0,     // Tempo para fechar uma chave
+    CHANGE_TAP: 0.5,       // Tempo para cada degrau de alteração de TAP
+    SHUNT_STEP: 0.5,       // Tempo para alteração de estágio de banco de capacitores
+    FAULT_PROTECTION: 0.01, // Atuação da proteção (quase instantânea)
+    FAULT_RESTORE: 2.0      // Tempo para restauração física de uma barra
+};
+
 const BFS_LIMIT = 14;
+
+// --- FUNÇÕES DE CÁLCULO ELÉTRICO ---
 
 function getEnergizedNodes(branches, faultNodes, sources) {
     const adj = {};
@@ -29,18 +42,6 @@ function getEnergizedNodes(branches, faultNodes, sources) {
     return energized;
 }
 
-function getProtectedNodes(initialBranches, initialFaults, sources) {
-    return getEnergizedNodes(initialBranches, initialFaults, sources);
-}
-
-function isStateValid(branches, faults, protectedNodes, sources) {
-    const energized = getEnergizedNodes(branches, faults, sources);
-    for (const n of protectedNodes) {
-        if (!energized.has(n)) return false;
-    }
-    return true;
-}
-
 function calculateDisconnectedP(branches, faults, sources, systemLoads) {
     if (!systemLoads) return 0;
     const energized = getEnergizedNodes(branches, faults, sources);
@@ -54,11 +55,11 @@ function calculateDisconnectedP(branches, faults, sources, systemLoads) {
     return totalP;
 }
 
+// --- LÓGICA DE SNAPSHOTS E TEMPO ---
+
 export function applyStepToSnapshot(step, snapshot) {
-    // 👇 1. Agora extraímos os shunts do snapshot
     const { branches, faults, shunts = {} } = snapshot;
 
-    // Em todos os retornos, passamos o 'shunts' adiante para ele não se perder na linha do tempo
     if (step.type === 'open') return { branches: branches.map(b => b.id === step.branchId ? { ...b, state: 0 } : b), faults, shunts };
     if (step.type === 'close') return { branches: branches.map(b => b.id === step.branchId ? { ...b, state: 1 } : b), faults, shunts };
     if (step.type === 'tap') return { branches: branches.map(b => b.id === step.branchId ? { ...b, currentTap: step.tapValue } : b), faults, shunts };
@@ -66,7 +67,6 @@ export function applyStepToSnapshot(step, snapshot) {
     if (step.type === 'fault_add') {
         const newFaults = new Set(faults);
         newFaults.add(step.nodeId);
-        
         let newBranches = [...branches];
         if (step.openedBranches && step.openedBranches.length > 0) {
             const toOpen = new Set(step.openedBranches);
@@ -81,9 +81,8 @@ export function applyStepToSnapshot(step, snapshot) {
         return { branches, faults: newFaults, shunts };
     }
 
-    // 👇 2. O NOVO COMANDO DOS CAPACITORES 👇
     if (step.type === 'shunt_step') {
-        const newShunts = JSON.parse(JSON.stringify(shunts)); // Cópia profunda segura
+        const newShunts = JSON.parse(JSON.stringify(shunts));
         if (newShunts[step.nodeId]) {
             newShunts[step.nodeId].steps = step.steps;
         }
@@ -93,134 +92,81 @@ export function applyStepToSnapshot(step, snapshot) {
     return snapshot;
 }
 
+/**
+ * Constrói a linha do tempo de snapshots acumulando o tempo de manobra e a ENS (FO).
+ */
 export function buildSnapshots(initialSnapshot, steps, sources, systemLoads) {
     const snapshots = [];
-    let current = initialSnapshot;
+    let current = { ...initialSnapshot };
     let accumulatedENS = 0; 
+    let totalElapsedMinutes = 0;
 
+    // Snapshot inicial (T=0)
     current.disconnectedP = calculateDisconnectedP(current.branches, current.faults, sources, systemLoads);
-    current.accumulatedENS = accumulatedENS;
+    current.accumulatedENS = 0;
+    current.elapsedTime = 0;
+    current.stepDescription = "Estado Inicial";
     snapshots.push(current);
 
     for (const step of steps) {
-        current = applyStepToSnapshot(step, current);
-        current.disconnectedP = calculateDisconnectedP(current.branches, current.faults, sources, systemLoads);
+        // 1. Identifica o tempo que este passo consome
+        let maneuverTime = 0;
+        switch (step.type) {
+            case 'open': maneuverTime = MANEUVER_TIMES.SWITCH_OPEN; break;
+            case 'close': maneuverTime = MANEUVER_TIMES.SWITCH_CLOSE; break;
+            case 'tap': maneuverTime = MANEUVER_TIMES.CHANGE_TAP; break;
+            case 'shunt_step': maneuverTime = MANEUVER_TIMES.SHUNT_STEP; break;
+            case 'fault_add': maneuverTime = MANEUVER_TIMES.FAULT_PROTECTION; break;
+            case 'fault_remove': maneuverTime = MANEUVER_TIMES.FAULT_RESTORE; break;
+            default: maneuverTime = 0;
+        }
+
+        // 2. Aplica a manobra
+        const nextState = applyStepToSnapshot(step, current);
         
-        accumulatedENS += current.disconnectedP;
-        current.accumulatedENS = accumulatedENS;
+        // 3. Calcula a carga desligada NOVO estado
+        const pLoss = calculateDisconnectedP(nextState.branches, nextState.faults, sources, systemLoads);
         
-        snapshots.push(current);
+        // 4. Acumula os valores
+        totalElapsedMinutes += maneuverTime;
+        // ENS = P_desenergizada * tempo_em_que_ficou_desligada
+        accumulatedENS += (pLoss * maneuverTime);
+
+        // 5. Atualiza o objeto para o próximo passo
+        current = {
+            ...nextState,
+            disconnectedP: pLoss,
+            accumulatedENS: accumulatedENS,
+            elapsedTime: totalElapsedMinutes,
+            stepDescription: step.description
+        };
+        
+        snapshots.push({...current});
     }
     return snapshots;
 }
 
-function describeStep(step, branches) {
-    if (step.type === 'open') {
-        const b = branches.find(br => br.id === step.branchId);
-        return `Abrir chave ${b ? `${b.from}–${b.to}` : `#${step.branchId}`}`;
+// --- GERAÇÃO DE SEQUÊNCIA (BFS / GREEDY) ---
+
+function isStateValid(branches, faults, protectedNodes, sources) {
+    const energized = getEnergizedNodes(branches, faults, sources);
+    for (const n of protectedNodes) {
+        if (!energized.has(n)) return false;
     }
-    if (step.type === 'close') {
-        const b = branches.find(br => br.id === step.branchId);
-        return `Fechar chave ${b ? `${b.from}–${b.to}` : `#${step.branchId}`}`;
-    }
-    if (step.type === 'tap') {
-        const b = branches.find(br => br.id === step.branchId);
-        return `Ajustar TAP ${b ? `${b.from}–${b.to}` : `#${step.branchId}`} → ${step.tapValue > 0 ? '+' : ''}${step.tapValue}`;
-    }
-    if (step.type === 'fault_add')    return `Falta na barra ${step.nodeId} e Proteção`;
-    if (step.type === 'fault_remove') return `Restaurar barra ${step.nodeId}`;
-    // 👇 O TEXTO PARA A MANOBRA DO CAPACITOR 👇
-    if (step.type === 'shunt_step')   return `Ajustar Capacitor ${step.nodeId} → Estágio ${step.steps}`;
-    return 'Passo desconhecido';
-}
-
-function generateSequenceBFS(startBranches, targetBranches, faults, protectedNodes, sources) {
-    const variableIds = [];
-    targetBranches.forEach(tb => {
-        const sb = startBranches.find(b => b.id === tb.id);
-        if (sb && sb.state !== tb.state) variableIds.push(tb.id);
-    });
-    if (variableIds.length === 0) return [];
-
-    const targetCode = variableIds.map(id => targetBranches.find(br => br.id === id)?.state || 0).join('');
-    const startCode  = variableIds.map(id => startBranches.find(br => br.id === id)?.state || 0).join('');
-    if (startCode === targetCode) return [];
-
-    const queue   = [{ branches: startBranches, path: [] }];
-    const visited = new Map([[startCode, []]]);
-
-    while (queue.length > 0) {
-        const { branches, path } = queue.shift();
-        for (const id of variableIds) {
-            const branch    = branches.find(b => b.id === id);
-            if (!branch) continue;
-            const newState  = branch.state === 1 ? 0 : 1;
-            const newBranches = branches.map(b => b.id === id ? { ...b, state: newState } : b);
-
-            if (!isStateValid(newBranches, faults, protectedNodes, sources)) continue;
-
-            const code = variableIds.map(vid => newBranches.find(br => br.id === vid)?.state || 0).join('');
-            if (visited.has(code)) continue;
-
-            const step = { type: newState === 0 ? 'open' : 'close', branchId: id, fromNode: branch.from, toNode: branch.to, description: '' };
-            const newPath = [...path, step];
-
-            if (code === targetCode) return newPath.map(s => ({ ...s, description: describeStep(s, startBranches) }));
-
-            visited.set(code, newPath);
-            queue.push({ branches: newBranches, path: newPath });
-        }
-    }
-    return null; 
-}
-
-function generateSequenceGreedy(startBranches, targetBranches, faults, protectedNodes, sources) {
-    const toClose = []; const toOpen  = [];
-    targetBranches.forEach(tb => {
-        const sb = startBranches.find(b => b.id === tb.id);
-        if (!sb) return;
-        if (sb.state === 0 && tb.state === 1) toClose.push({ ...tb });
-        if (sb.state === 1 && tb.state === 0) toOpen.push({ ...tb });
-    });
-
-    const steps = []; let simState = startBranches.map(b => ({ ...b }));
-
-    for (const tb of toClose) {
-        steps.push({ type: 'close', branchId: tb.id, fromNode: tb.from, toNode: tb.to, description: describeStep({ type: 'close', branchId: tb.id }, startBranches) });
-        simState = simState.map(b => b.id === tb.id ? { ...b, state: 1 } : b);
-    }
-
-    const remaining = [...toOpen];
-    let maxPasses = remaining.length * remaining.length + 5; 
-
-    while (remaining.length > 0 && maxPasses-- > 0) {
-        let opened = false;
-        for (let i = 0; i < remaining.length; i++) {
-            const tb = remaining[i];
-            const testState = simState.map(b => b.id === tb.id ? { ...b, state: 0 } : b);
-            if (isStateValid(testState, faults, protectedNodes, sources)) {
-                steps.push({ type: 'open', branchId: tb.id, fromNode: tb.from, toNode: tb.to, description: describeStep({ type: 'open', branchId: tb.id }, startBranches) });
-                simState = testState; remaining.splice(i, 1); opened = true; break; 
-            }
-        }
-        if (!opened) {
-            const tb = remaining.shift();
-            steps.push({ type: 'open', branchId: tb.id, fromNode: tb.from, toNode: tb.to, description: `⚠️ ${describeStep({ type: 'open', branchId: tb.id }, startBranches)} (manobra forçada)` });
-            simState = simState.map(b => b.id === tb.id ? { ...b, state: 0 } : b);
-        }
-    }
-    return steps;
+    return true;
 }
 
 export function generateSequence(currentBranches, currentFaults, targetBranches, targetFaults, sources, systemLoads, providedSteps = null) {
     const steps = [];
 
+    // Lógica de remoção de faltas
     for (const nodeId of currentFaults) {
         if (!targetFaults.has(nodeId)) {
             steps.push({ type: 'fault_remove', nodeId, description: `Restaurar barra ${nodeId}` });
         }
     }
 
+    // Lógica de Proteção Automática (Adição de faltas)
     for (const nodeId of targetFaults) {
         if (!currentFaults.has(nodeId)) {
             const branchesToOpen = [];
@@ -235,7 +181,6 @@ export function generateSequence(currentBranches, currentFaults, targetBranches,
                         if (b.hasSwitch) { 
                             branchesToOpen.push(b.id); 
                         } else if (sources.includes(neighbor)) {
-                            // 👇 BARREIRA INTRANSPONÍVEL: Bateu em uma subestação/fonte, para a busca aqui! 👇
                             visitedNodes.add(neighbor);
                         } else { 
                             visitedNodes.add(neighbor); 
@@ -248,9 +193,14 @@ export function generateSequence(currentBranches, currentFaults, targetBranches,
         }
     }
 
+    // Se houver passos manuais importados, processa-os com a nova lógica de tempo
     if (providedSteps && providedSteps.length > 0) {
         const initial = { branches: currentBranches, faults: currentFaults };
-        return { steps: providedSteps, snapshots: buildSnapshots(initial, providedSteps, sources, systemLoads), method: 'Gravado Manualmente' };
+        return { 
+            steps: providedSteps, 
+            snapshots: buildSnapshots(initial, providedSteps, sources, systemLoads), 
+            method: 'Sequência Importada/Manual' 
+        };
     }
 
     const tapSteps = [];
@@ -289,54 +239,115 @@ export function generateSequence(currentBranches, currentFaults, targetBranches,
 }
 
 export function parseSequenceFile(content, currentBranches) {
-    const lines = content.split(/\r\n|\n/); const updates = new Map(); const newFaults = new Set(); const providedSteps = [];
+    const lines = content.split(/\r\n|\n/);
+    const updates = new Map();
+    const newFaults = new Set();
+    const providedSteps = [];
     let mode = null;
+
+    // Mapa auxiliar para encontrar chaves pelos nós (i-j)
     const branchByEdge = new Map();
-    currentBranches.forEach(b => { branchByEdge.set(`${b.from}-${b.to}`, b); branchByEdge.set(`${b.to}-${b.from}`, b); });
+    currentBranches.forEach(b => {
+        branchByEdge.set(`${b.from}-${b.to}`, b);
+        branchByEdge.set(`${b.to}-${b.from}`, b);
+    });
 
     for (const rawLine of lines) {
-        const l = rawLine.trim(); if (!l) continue;
-        if (/^set\s+BF\s*:=/.test(l)) { const match = l.match(/set\s+BF\s*:=\s*([\d\s]+);?/); if (match?.[1]) { match[1].trim().split(/\s+/).forEach(f => { const id = parseInt(f); if (!isNaN(id)) newFaults.add(id); }); } continue; }
+        const l = rawLine.trim();
+        if (!l) continue;
+
+        // Identificação de Modos
         if (l.includes('Circuitos Ativos')) { mode = 'active'; continue; }
         if (l.includes('Circuitos Desconectados')) { mode = 'disconnected'; continue; }
         if (/^Sequenciamento/i.test(l)) { mode = 'sequence'; continue; }
 
-        if (mode === 'active' || mode === 'disconnected') {
-            if (l.startsWith('i') || l.startsWith('set') || isNaN(parseInt(l[0]))) continue;
-            const parts = l.split(/\s+/).filter(p => p !== '');
-            if (parts.length >= 2) { const from = parseInt(parts[0]); const to = parseInt(parts[1]); const state = mode === 'active' ? 1 : 0; if (!isNaN(from) && !isNaN(to)) { updates.set(`${from}-${to}`, state); updates.set(`${to}-${from}`, state); } }
+        // Processamento de Faltas do Cabeçalho (AMPL)
+        if (/^set\s+BF\s*:=/.test(l)) {
+            const match = l.match(/set\s+BF\s*:=\s*([\d\s]+);?/);
+            if (match?.[1]) {
+                match[1].trim().split(/\s+/).forEach(f => {
+                    const id = parseInt(f);
+                    if (!isNaN(id)) newFaults.add(id);
+                });
+            }
             continue;
         }
 
+        // Modo de Sequenciamento de Comandos
         if (mode === 'sequence') {
-            const parts = l.split(/\s+/).filter(p => p !== ''); if (parts.length < 1) continue;
+            const parts = l.split(/\s+/).filter(p => p !== '');
+            if (parts.length < 1) continue;
             const cmd = parts[0].toUpperCase();
+
+            // Comandos de Chaveamento e TAP
             if ((cmd === 'FECHAR' || cmd === 'ABRIR') && parts.length >= 3) {
-                const from = parseInt(parts[1]); const to = parseInt(parts[2]); const b = branchByEdge.get(`${from}-${to}`);
-                if (b) { providedSteps.push({ type: cmd === 'FECHAR' ? 'close' : 'open', branchId: b.id, fromNode: b.from, toNode: b.to, description: `${cmd === 'FECHAR' ? 'Fechar' : 'Abrir'} chave ${from}–${to}` }); }
-                continue;
-            }
-            if (cmd === 'TAP' && parts.length >= 4) {
-                const from = parseInt(parts[1]); const to = parseInt(parts[2]); const value = parseFloat(parts[3]); const b = branchByEdge.get(`${from}-${to}`);
-                if (b && !isNaN(value)) { providedSteps.push({ type: 'tap', branchId: b.id, tapValue: value, fromNode: b.from, toNode: b.to, description: `Ajustar TAP ${from}–${to} → ${value > 0 ? '+' : ''}${value}` }); }
-                continue;
-            }
-            // 👇 ADICIONE ESTE BLOCO LOGO ABAIXO DO CÓDIGO DO "TAP" 👇
-            if (cmd === 'SHUNT_STEP' && parts.length >= 3) {
-                const nodeId = parseInt(parts[1]); 
-                const steps = parseInt(parts[2]);
-                if (!isNaN(nodeId) && !isNaN(steps)) { 
-                    providedSteps.push({ 
-                        type: 'shunt_step', 
-                        nodeId, 
-                        steps, 
-                        description: `Ajustar Capacitor ${nodeId} → Estágio ${steps}` 
-                    }); 
+                const from = parseInt(parts[1]);
+                const to = parseInt(parts[2]);
+                const b = branchByEdge.get(`${from}-${to}`);
+                if (b) {
+                    providedSteps.push({
+                        type: cmd === 'FECHAR' ? 'close' : 'open',
+                        branchId: b.id,
+                        fromNode: b.from,
+                        toNode: b.to,
+                        description: `${cmd === 'FECHAR' ? 'Fechar' : 'Abrir'} chave ${from}–${to}`
+                    });
                 }
                 continue;
             }
-            if (cmd === 'FALTA_RESTAURAR' && parts.length >= 2) { const nodeId = parseInt(parts[1]); if (!isNaN(nodeId)) { providedSteps.push({ type: 'fault_remove', nodeId, description: `Restaurar barra ${nodeId}` }); } continue; }
-            if (cmd === 'FALTA_ADICIONAR' && parts.length >= 2) { const nodeId = parseInt(parts[1]); if (!isNaN(nodeId)) { providedSteps.push({ type: 'fault_add', nodeId, description: `Aplicar falta na barra ${nodeId}` }); } continue; }
+
+            // Comandos de Proteção e Faltas (COM INTELIGÊNCIA)
+            if (cmd === 'FALTA_ADICIONAR' && parts.length >= 2) {
+                const nodeId = parseInt(parts[1]);
+                if (!isNaN(nodeId)) {
+                    // --- LÓGICA DE PROTEÇÃO EMBUTIDA NO PARSE ---
+                    const branchesToOpen = [];
+                    const visitedNodes = new Set([nodeId]);
+                    const queue = [nodeId];
+                    
+                    while (queue.length > 0) {
+                        const curr = queue.shift();
+                        // Busca ramos energizados que tocam o setor da falta
+                        currentBranches.filter(b => b.state === 1 && (b.from === curr || b.to === curr)).forEach(b => {
+                            const neighbor = b.from === curr ? b.to : b.from;
+                            if (!visitedNodes.has(neighbor)) {
+                                if (b.hasSwitch) { 
+                                    branchesToOpen.push(b.id); // Identifica a chave de proteção
+                                } else { 
+                                    visitedNodes.add(neighbor); 
+                                    queue.push(neighbor); 
+                                }
+                            }
+                        });
+                    }
+
+                    providedSteps.push({ 
+                        type: 'fault_add', 
+                        nodeId, 
+                        openedBranches: branchesToOpen, // Agora o passo já carrega as chaves
+                        description: `Falta na barra ${nodeId} e atuação da Proteção` 
+                    });
+                }
+                continue;
+            }
+
+            if (cmd === 'FALTA_RESTAURAR' && parts.length >= 2) {
+                const nodeId = parseInt(parts[1]);
+                if (!isNaN(nodeId)) {
+                    providedSteps.push({ type: 'fault_remove', nodeId, description: `Restaurar barra ${nodeId}` });
+                }
+                continue;
+            }
+
+            // Comandos de Shunt e Tap (mantidos)
+            if (cmd === 'SHUNT_STEP' && parts.length >= 3) {
+                const nodeId = parseInt(parts[1]);
+                const steps = parseInt(parts[2]);
+                if (!isNaN(nodeId) && !isNaN(steps)) {
+                    providedSteps.push({ type: 'shunt_step', nodeId, steps, description: `Ajustar Capacitor ${nodeId} → Estágio ${steps}` });
+                }
+                continue;
+            }
         }
     }
     return { updates, newFaults, providedSteps: providedSteps.length > 0 ? providedSteps : null };
