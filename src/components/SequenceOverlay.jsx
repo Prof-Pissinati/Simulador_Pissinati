@@ -14,6 +14,8 @@ export default function SequenceOverlay({
     onUpdateStepValue,
     onActiveStepChange, 
     onExportSequence, // 👈 Nova propriedade recebida
+    onOptimizeSequence, // 👈 Nova prop para o botão
+    optimizerStatus,    // 👈 Nova prop para o texto de progresso
     onClose,
     darkMode    = true,
 }) {
@@ -178,6 +180,25 @@ export default function SequenceOverlay({
 
                     <div style={{ flex: 1, display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 15 }}>
                         
+                        {/* 👇 MENSAGEM DO OTIMIZADOR 👇 */}
+                        {optimizerStatus && (
+                            <div style={{ fontSize: '11px', color: '#00bcd4', marginRight: 'auto', fontStyle: 'italic', animation: 'pulse 1.5s infinite' }}>
+                                {optimizerStatus}
+                            </div>
+                        )}
+
+                        {/* 👇 NOVO BOTÃO DE RECONFIGURAR 👇 */}
+                        {onOptimizeSequence && (
+                            <button 
+                                onClick={onOptimizeSequence}
+                                style={{ background: 'rgba(0, 188, 212, 0.15)', border: `1px solid #00bcd4`, color: '#00bcd4', padding: '4px 10px', borderRadius: '6px', fontSize: '12px', fontWeight: 'bold', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '5px', transition: 'all 0.2s' }}
+                                title="Rodar Algoritmo de Otimização (VND)"
+                                onMouseOver={e => e.target.style.background = 'rgba(0, 188, 212, 0.3)'}
+                                onMouseOut={e => e.target.style.background = 'rgba(0, 188, 212, 0.15)'}
+                            >
+                                ✨ Otimizar
+                            </button>
+                        )}
                         {/* 👇 NOVO BOTÃO DE EXPORTAR 👇 */}
                         {onExportSequence && (
                             <button 

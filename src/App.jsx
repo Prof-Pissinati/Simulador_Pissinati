@@ -15,8 +15,10 @@ import { useColorIntelligence, getBaseColor } from './hooks/useColorIntelligence
 import { SYSTEM_DATA} from './data/systemData';
 import { SYSTEM_DATA_SHUNT } from './data/systemData54';
 
-import { parseSequenceFile, generateSequence, buildSnapshots } from './utils/switchSequencer';
+import { parseSequenceFile, buildSnapshots, findProtectionSwitches, applyStepToSnapshot } from './utils/switchSequencer';
 import SequenceOverlay from './components/SequenceOverlay';
+
+import { runOptimizer } from './utils/reconfigOptimizer';
 
 function App() {
     const [activeSources, setActiveSources] = useState([101, 102, 104]);
@@ -78,6 +80,8 @@ function App() {
 
     // 👇 IMPORTANTE: Esta lista mista blinda os barramentos para o Sequenciador 👇
     const allBoundaryNodes = useMemo(() => [...sources, ...(SYSTEM_DATA.feeders || [])], [sources]);
+
+    const [optimizerStatus, setOptimizerStatus] = useState("");
 
     useEffect(() => {
         if (layoutMode === 'organic' && !organicPositions && allNodes.length > 0) {
@@ -219,44 +223,104 @@ function App() {
         initialBranchesRef
     });
 
-    const handleUploadSwitches = (file) => {
-    const reader = new FileReader();
-    reader.onload = (e) => {
-        const { updates, newFaults, providedSteps } = parseSequenceFile(e.target.result, branches);
-        
-        if (updates.size === 0 && newFaults.size === 0 && (!providedSteps || providedSteps.length === 0)) { 
-            showToast('Arquivo lido, mas nenhum dado compatível encontrado.', 'warning'); 
-            return; 
-        }
+    const handleUploadSwitches = async (file) => {
+        const reader = new FileReader();
+        reader.onload = async (e) => {
+            try {
+                console.log("--- 🕵️ INICIANDO DEBUG DE IMPORTAÇÃO ---");
+                
+                // 1. Fase de Parse
+                const { updates, newFaults, providedSteps } = parseSequenceFile(e.target.result, branches);
+                console.log("1. Parse concluído.", { 
+                    chavesAlteradas: updates.size, 
+                    faltas: Array.from(newFaults), 
+                    passosManuais: providedSteps ? providedSteps.length : 0 
+                });
 
-        // 1. Criamos o estado "alvo" de chaves baseado no arquivo
-        const targetBranches = branches.map(b => {
-            const key = `${b.from}-${b.to}`;
-            return updates.has(key) ? { ...b, state: updates.get(key) } : { ...b };
-        });
+                if (updates.size === 0 && newFaults.size === 0 && (!providedSteps || providedSteps.length === 0)) { 
+                    showToast('Arquivo lido, mas nenhum dado compatível encontrado.', 'warning'); 
+                    return; 
+                }
 
-        // 2. Geramos a sequência (isso inclui o cálculo de proteção automático)
-        const result = generateSequence(branches, faultNodes, targetBranches, newFaults, allBoundaryNodes, systemLoads, providedSteps);
-        
-        // 3. ATUALIZAÇÃO CRÍTICA: Se houver uma manobra de proteção (fault_add), 
-        // aplicamos o primeiro snapshot da sequência ao sistema "ao vivo".
-        if (result.snapshots && result.snapshots.length > 1) {
-            // O snapshot[1] geralmente é o primeiro passo após o estado inicial (a proteção atuando)
-            const protectionSnapshot = result.snapshots[1];
-            setBranches(protectionSnapshot.branches);
-            setFaultNodes(protectionSnapshot.faults);
-            if (protectionSnapshot.shunts) setSystemShunts(protectionSnapshot.shunts);
-        } else {
-            // Caso não haja passos, apenas atualiza o que veio do arquivo
-            setFaultNodes(newFaults);
-        }
+                const initialSnapshot = { branches, faults: faultNodes, shunts: systemShunts };
+                let finalSteps = [];
+                let methodTag = "Carregado";
 
-        setSequenceData(result); 
-        setSeqOverlayOpen(true);
-        showToast(`Sequenciamento carregado e Proteção aplicada!`, 'success');
+                // 2. Decisão de Rota
+                if (providedSteps && providedSteps.length > 0) {
+                    console.log("2A. Rota MANUAL escolhida (Sequência importada do txt).");
+                    finalSteps = providedSteps;
+                    methodTag = "Sequência Importada (Manual)";
+                } else if (updates.size > 0 || newFaults.size > 0) {
+                    console.log("2B. Rota AUTOMÁTICA escolhida (Calculando caminhos...).");
+                    setSeqOverlayOpen(true); 
+                    setOptimizerStatus("Gerando heurística inicial...");
+                    
+                    const targetBranches = branches.map(b => {
+                        const key = `${b.from}-${b.to}`;
+                        return updates.has(key) ? { ...b, state: updates.get(key) } : { ...b };
+                    });
+
+                    console.log("3. Aplicando Faltas no Estado Inicial...");
+                    let postFaultSnapshot = { ...initialSnapshot };
+                    const faultSteps = [];
+
+                    newFaults.forEach(nodeId => {
+                        const branchesToOpen = findProtectionSwitches(nodeId, postFaultSnapshot.branches);
+                        const faultStep = { 
+                            type: 'fault_add', 
+                            nodeId, 
+                            description: `Falta na barra ${nodeId} e Proteção atuada`, 
+                            openedBranches: branchesToOpen 
+                        };
+                        faultSteps.push(faultStep);
+                        // Aplica a falta para atualizar o snapshot temporário
+                        postFaultSnapshot = applyStepToSnapshot(faultStep, postFaultSnapshot); 
+                    });
+
+                    console.log("4. Iniciando Heurística Gulosa...");
+                    // Note que passamos targetBranches para ele saber onde deve chegar
+                    const optResult = await runOptimizer(faultSteps, postFaultSnapshot, targetBranches, sysData, setOptimizerStatus);
+                    console.log("5. Otimização Concluída!", optResult);
+                    
+                    finalSteps = optResult.steps;
+                    methodTag = optResult.method;
+                    setTimeout(() => setOptimizerStatus(""), 3000);
+                    
+                }
+
+                // 3. Aplicação Final
+                console.log("7. Construindo Snapshots finais...");
+                const resultData = {
+                    steps: finalSteps,
+                    snapshots: buildSnapshots(initialSnapshot, finalSteps, allBoundaryNodes, systemLoads),
+                    method: methodTag
+                };
+                console.log("8. Snapshots criados. Total:", resultData.snapshots.length);
+
+                if (resultData.snapshots.length > 1 && newFaults.size > 0) {
+                    setBranches(resultData.snapshots[1].branches);
+                    setFaultNodes(resultData.snapshots[1].faults);
+                } else if (newFaults.size > 0) {
+                    setFaultNodes(newFaults); // Fallback se não gerou snapshots válidos
+                }
+
+                setSequenceData(resultData); 
+                setSeqOverlayOpen(true);
+                console.log("--- ✅ IMPORTAÇÃO FINALIZADA COM SUCESSO ---");
+                showToast(`Sequenciamento carregado com sucesso!`, 'success');
+
+            } catch (error) {
+                console.error("🚨 ERRO GRAVE DURANTE A IMPORTAÇÃO:", error);
+                showToast(`Erro técnico: ${error.message}`, 'error');
+                setOptimizerStatus("Falha na execução.");
+            }
+        };
+        reader.readAsText(file);
     };
-    reader.readAsText(file);
-};
+
+// Lembre-se também de remover o `generateSequence` do topo do seu App.jsx:
+// import { parseSequenceFile, buildSnapshots } from './utils/switchSequencer';
 
     // 👇 NOVA FUNÇÃO PARA EXPORTAR A SEQUÊNCIA 👇
     const handleExportSequence = useCallback(() => {
@@ -1048,6 +1112,25 @@ const handleShuntChange = useCallback((nodeId, increment) => {
                         } else if (step.nodeId !== undefined) {
                             setSelectedElement({ type: 'node', id: step.nodeId });
                         }
+                    }}
+                    optimizerStatus={optimizerStatus}
+                    onOptimizeSequence={async () => {
+                        setOptimizerStatus("Iniciando Otimização Manual...");
+                        
+                        // 👇 A CORREÇÃO: Pega o estado original (Passo 0) da memória, não da tela!
+                        const trueInitialSnapshot = sequenceData.snapshots[0]; 
+                        
+                        // Opcional: Se quiser que a interface volte para o início automaticamente para o usuário ver
+                        // setCurrentStep(0); // (Se você tiver acesso ao estado ou quiser passar via prop)
+
+                        const vndResult = await runVND(sequenceData.steps, trueInitialSnapshot, sysData, setOptimizerStatus);
+                        
+                        setSequenceData({
+                            steps: vndResult.steps,
+                            snapshots: buildSnapshots(trueInitialSnapshot, vndResult.steps, allBoundaryNodes, systemLoads),
+                            method: vndResult.method
+                        });
+                        setTimeout(() => setOptimizerStatus(""), 3000);
                     }}
                 />
             )}

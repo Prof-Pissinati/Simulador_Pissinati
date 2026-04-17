@@ -1,19 +1,18 @@
+// src/utils/switchSequencer.js
+
 // Configuração de tempos de manobra (Unidade: Minutos)
-// Você pode alterar esses valores para realizar análises de sensibilidade no doutorado.
-const MANEUVER_TIMES = {
-    SWITCH_OPEN: 1.0,      // Tempo para abrir uma chave (manual ou remota)
-    SWITCH_CLOSE: 1.0,     // Tempo para fechar uma chave
-    CHANGE_TAP: 0.5,       // Tempo para cada degrau de alteração de TAP
-    SHUNT_STEP: 0.5,       // Tempo para alteração de estágio de banco de capacitores
-    FAULT_PROTECTION: 0.01, // Atuação da proteção (quase instantânea)
-    FAULT_RESTORE: 2.0      // Tempo para restauração física de uma barra
+export const MANEUVER_TIMES = {
+    SWITCH_OPEN: 1.0,      
+    SWITCH_CLOSE: 1.0,     
+    CHANGE_TAP: 0.5,       
+    SHUNT_STEP: 0.5,       
+    FAULT_PROTECTION: 0.01, 
+    FAULT_RESTORE: 2.0      
 };
 
-const BFS_LIMIT = 14;
+// --- FUNÇÕES DE CÁLCULO ELÉTRICO E TOPOLOGIA ---
 
-// --- FUNÇÕES DE CÁLCULO ELÉTRICO ---
-
-function getEnergizedNodes(branches, faultNodes, sources) {
+export function getEnergizedNodes(branches, faultNodes, sources) {
     const adj = {};
     branches.forEach(b => {
         if (b.state !== 1) return;
@@ -42,7 +41,7 @@ function getEnergizedNodes(branches, faultNodes, sources) {
     return energized;
 }
 
-function calculateDisconnectedP(branches, faults, sources, systemLoads) {
+export function calculateDisconnectedP(branches, faults, sources, systemLoads) {
     if (!systemLoads) return 0;
     const energized = getEnergizedNodes(branches, faults, sources);
     let totalP = 0;
@@ -55,7 +54,7 @@ function calculateDisconnectedP(branches, faults, sources, systemLoads) {
     return totalP;
 }
 
-// --- LÓGICA DE SNAPSHOTS E TEMPO ---
+// --- LÓGICA DE SNAPSHOTS E TEMPO (LOG) ---
 
 export function applyStepToSnapshot(step, snapshot) {
     const { branches, faults, shunts = {} } = snapshot;
@@ -92,53 +91,64 @@ export function applyStepToSnapshot(step, snapshot) {
     return snapshot;
 }
 
-/**
- * Constrói a linha do tempo de snapshots acumulando o tempo de manobra e a ENS (FO).
- */
 export function buildSnapshots(initialSnapshot, steps, sources, systemLoads) {
     const snapshots = [];
     let current = { ...initialSnapshot };
     let accumulatedENS = 0; 
     let totalElapsedMinutes = 0;
+    let eventLog = [];
 
-    // Snapshot inicial (T=0)
+    // T=0
     current.disconnectedP = calculateDisconnectedP(current.branches, current.faults, sources, systemLoads);
     current.accumulatedENS = 0;
     current.elapsedTime = 0;
     current.stepDescription = "Estado Inicial";
+    
+    eventLog.push({
+        time: "0.00",
+        event: "Início da Operação",
+        impact: `${current.disconnectedP.toFixed(2)} kW`,
+        ens: "0.00 kWh"
+    });
+    
+    current.log = [...eventLog];
     snapshots.push(current);
 
     for (const step of steps) {
-        // 1. Identifica o tempo que este passo consome
-        let maneuverTime = 0;
-        switch (step.type) {
-            case 'open': maneuverTime = MANEUVER_TIMES.SWITCH_OPEN; break;
-            case 'close': maneuverTime = MANEUVER_TIMES.SWITCH_CLOSE; break;
-            case 'tap': maneuverTime = MANEUVER_TIMES.CHANGE_TAP; break;
-            case 'shunt_step': maneuverTime = MANEUVER_TIMES.SHUNT_STEP; break;
-            case 'fault_add': maneuverTime = MANEUVER_TIMES.FAULT_PROTECTION; break;
-            case 'fault_remove': maneuverTime = MANEUVER_TIMES.FAULT_RESTORE; break;
-            default: maneuverTime = 0;
+        let maneuverTime = step.duration !== undefined ? step.duration : 0;
+        
+        if (maneuverTime === 0) {
+            switch (step.type) {
+                case 'open': maneuverTime = MANEUVER_TIMES.SWITCH_OPEN; break;
+                case 'close': maneuverTime = MANEUVER_TIMES.SWITCH_CLOSE; break;
+                case 'tap': maneuverTime = MANEUVER_TIMES.CHANGE_TAP; break;
+                case 'shunt_step': maneuverTime = MANEUVER_TIMES.SHUNT_STEP; break;
+                case 'fault_add': maneuverTime = MANEUVER_TIMES.FAULT_PROTECTION; break;
+                case 'fault_remove': maneuverTime = MANEUVER_TIMES.FAULT_RESTORE; break;
+                default: maneuverTime = 0;
+            }
         }
 
-        // 2. Aplica a manobra
         const nextState = applyStepToSnapshot(step, current);
-        
-        // 3. Calcula a carga desligada NOVO estado
         const pLoss = calculateDisconnectedP(nextState.branches, nextState.faults, sources, systemLoads);
         
-        // 4. Acumula os valores
         totalElapsedMinutes += maneuverTime;
-        // ENS = P_desenergizada * tempo_em_que_ficou_desligada
-        accumulatedENS += (pLoss * maneuverTime);
+        accumulatedENS += (pLoss * (maneuverTime / 60)); // ENS em kWh (se P estiver em kW e tempo em min)
 
-        // 5. Atualiza o objeto para o próximo passo
+        eventLog.push({
+            time: totalElapsedMinutes.toFixed(2),
+            event: step.description,
+            impact: `${pLoss.toFixed(2)} kW`,
+            ens: `${accumulatedENS.toFixed(2)} kWh`
+        });
+
         current = {
             ...nextState,
             disconnectedP: pLoss,
             accumulatedENS: accumulatedENS,
             elapsedTime: totalElapsedMinutes,
-            stepDescription: step.description
+            stepDescription: step.description,
+            log: [...eventLog]
         };
         
         snapshots.push({...current});
@@ -146,97 +156,29 @@ export function buildSnapshots(initialSnapshot, steps, sources, systemLoads) {
     return snapshots;
 }
 
-// --- GERAÇÃO DE SEQUÊNCIA (BFS / GREEDY) ---
-
-function isStateValid(branches, faults, protectedNodes, sources) {
-    const energized = getEnergizedNodes(branches, faults, sources);
-    for (const n of protectedNodes) {
-        if (!energized.has(n)) return false;
-    }
-    return true;
-}
-
-export function generateSequence(currentBranches, currentFaults, targetBranches, targetFaults, sources, systemLoads, providedSteps = null) {
-    const steps = [];
-
-    // Lógica de remoção de faltas
-    for (const nodeId of currentFaults) {
-        if (!targetFaults.has(nodeId)) {
-            steps.push({ type: 'fault_remove', nodeId, description: `Restaurar barra ${nodeId}` });
-        }
-    }
-
-    // Lógica de Proteção Automática (Adição de faltas)
-    for (const nodeId of targetFaults) {
-        if (!currentFaults.has(nodeId)) {
-            const branchesToOpen = [];
-            const visitedNodes = new Set([nodeId]);
-            const queue = [nodeId];
-            
-            while (queue.length > 0) {
-                const curr = queue.shift();
-                currentBranches.filter(b => b.state === 1 && (b.from === curr || b.to === curr)).forEach(b => {
-                    const neighbor = b.from === curr ? b.to : b.from;
-                    if (!visitedNodes.has(neighbor)) {
-                        if (b.hasSwitch) { 
-                            branchesToOpen.push(b.id); 
-                        } else if (sources.includes(neighbor)) {
-                            visitedNodes.add(neighbor);
-                        } else { 
-                            visitedNodes.add(neighbor); 
-                            queue.push(neighbor); 
-                        }
-                    }
-                });
+// Função auxiliar para encontrar disjuntores/chaves adjacentes a uma falta
+export function findProtectionSwitches(nodeId, branches) {
+    const branchesToOpen = [];
+    const visitedNodes = new Set([nodeId]);
+    const queue = [nodeId];
+    
+    while (queue.length > 0) {
+        const curr = queue.shift();
+        branches.filter(b => b.state === 1 && (b.from === curr || b.to === curr)).forEach(b => {
+            const neighbor = b.from === curr ? b.to : b.from;
+            if (!visitedNodes.has(neighbor)) {
+                if (b.hasSwitch) { 
+                    branchesToOpen.push(b.id); 
+                } else { 
+                    visitedNodes.add(neighbor); 
+                    queue.push(neighbor); 
+                }
             }
-            steps.push({ type: 'fault_add', nodeId, openedBranches: branchesToOpen, description: `Falta na barra ${nodeId} e atuação da Proteção` });
-        }
+        });
     }
-
-    // Se houver passos manuais importados, processa-os com a nova lógica de tempo
-    if (providedSteps && providedSteps.length > 0) {
-        const initial = { branches: currentBranches, faults: currentFaults };
-        return { 
-            steps: providedSteps, 
-            snapshots: buildSnapshots(initial, providedSteps, sources, systemLoads), 
-            method: 'Sequência Importada/Manual' 
-        };
-    }
-
-    const tapSteps = [];
-    targetBranches.forEach(tb => {
-        const sb = currentBranches.find(b => b.id === tb.id);
-        if (sb && tb.isRegulator && sb.currentTap !== tb.currentTap) {
-            tapSteps.push({ type: 'tap', branchId: tb.id, tapValue: tb.currentTap, fromNode: tb.from, toNode: tb.to, description: `Ajustar TAP ${tb.from}–${tb.to} → ${tb.currentTap > 0 ? '+' : ''}${tb.currentTap}` });
-        }
-    });
-
-    let postFaultBranches = currentBranches.map(b => ({...b}));
-    const faultsAfterFaultSteps = new Set(currentFaults);
-
-    for (const s of steps) {
-        const snap = applyStepToSnapshot(s, { branches: postFaultBranches, faults: faultsAfterFaultSteps });
-        postFaultBranches = snap.branches;
-        snap.faults.forEach(f => faultsAfterFaultSteps.add(f));
-    }
-
-    const protectedNodes = getProtectedNodes(postFaultBranches, faultsAfterFaultSteps, sources);
-    const diffCount = targetBranches.filter(tb => { const sb = postFaultBranches.find(b => b.id === tb.id); return sb && sb.state !== tb.state; }).length;
-
-    let switchSteps; let method;
-    if (diffCount <= BFS_LIMIT) {
-        const bfsResult = generateSequenceBFS(postFaultBranches, targetBranches, faultsAfterFaultSteps, protectedNodes, sources);
-        if (bfsResult !== null) { switchSteps = bfsResult; method = `BFS exato (${diffCount} chaves)`; } 
-        else { switchSteps = generateSequenceGreedy(postFaultBranches, targetBranches, faultsAfterFaultSteps, protectedNodes, sources); method = `Greedy fallback (${diffCount} chaves)`; }
-    } else {
-        switchSteps = generateSequenceGreedy(postFaultBranches, targetBranches, faultsAfterFaultSteps, protectedNodes, sources);
-        method = `Greedy (${diffCount} chaves)`;
-    }
-
-    const allSteps = [...steps, ...switchSteps, ...tapSteps];
-    const initial = { branches: currentBranches, faults: currentFaults };
-    return { steps: allSteps, snapshots: buildSnapshots(initial, allSteps, sources, systemLoads), method };
+    return branchesToOpen;
 }
+// --- PARSER DE ARQUIVOS (COM INTELIGÊNCIA DE PROTEÇÃO) ---
 
 export function parseSequenceFile(content, currentBranches) {
     const lines = content.split(/\r\n|\n/);
@@ -245,7 +187,6 @@ export function parseSequenceFile(content, currentBranches) {
     const providedSteps = [];
     let mode = null;
 
-    // Mapa auxiliar para encontrar chaves pelos nós (i-j)
     const branchByEdge = new Map();
     currentBranches.forEach(b => {
         branchByEdge.set(`${b.from}-${b.to}`, b);
@@ -256,12 +197,10 @@ export function parseSequenceFile(content, currentBranches) {
         const l = rawLine.trim();
         if (!l) continue;
 
-        // Identificação de Modos
         if (l.includes('Circuitos Ativos')) { mode = 'active'; continue; }
         if (l.includes('Circuitos Desconectados')) { mode = 'disconnected'; continue; }
         if (/^Sequenciamento/i.test(l)) { mode = 'sequence'; continue; }
 
-        // Processamento de Faltas do Cabeçalho (AMPL)
         if (/^set\s+BF\s*:=/.test(l)) {
             const match = l.match(/set\s+BF\s*:=\s*([\d\s]+);?/);
             if (match?.[1]) {
@@ -273,16 +212,39 @@ export function parseSequenceFile(content, currentBranches) {
             continue;
         }
 
-        // Modo de Sequenciamento de Comandos
+        // 👇 INSIRA ESTE BLOCO DE VOLTA 👇
+        if (mode === 'active' || mode === 'disconnected') {
+            // Ignora linhas de controle e o artefato ""
+            if (l.startsWith('i') || l.startsWith('set') || l.startsWith('[')) continue;
+            
+            const parts = l.split(/\s+/).filter(p => p !== '');
+            if (parts.length >= 2) { 
+                const from = parseInt(parts[0]); 
+                const to = parseInt(parts[1]); 
+                const state = mode === 'active' ? 1 : 0; 
+                
+                if (!isNaN(from) && !isNaN(to)) { 
+                    updates.set(`${from}-${to}`, state); 
+                    updates.set(`${to}-${from}`, state); 
+                } 
+            }
+            continue;
+        }
+        // 👆 FIM DO BLOCO INSERIDO 👆
+
         if (mode === 'sequence') {
             const parts = l.split(/\s+/).filter(p => p !== '');
             if (parts.length < 1) continue;
             const cmd = parts[0].toUpperCase();
 
-            // Comandos de Chaveamento e TAP
+            // Lendo tempo opcional se existir (formato: COMANDO P1 P2 [TEMPO])
+            let customTime = undefined;
+
             if ((cmd === 'FECHAR' || cmd === 'ABRIR') && parts.length >= 3) {
                 const from = parseInt(parts[1]);
                 const to = parseInt(parts[2]);
+                if (parts.length >= 4) customTime = parseFloat(parts[3]);
+                
                 const b = branchByEdge.get(`${from}-${to}`);
                 if (b) {
                     providedSteps.push({
@@ -290,41 +252,26 @@ export function parseSequenceFile(content, currentBranches) {
                         branchId: b.id,
                         fromNode: b.from,
                         toNode: b.to,
+                        duration: customTime,
                         description: `${cmd === 'FECHAR' ? 'Fechar' : 'Abrir'} chave ${from}–${to}`
                     });
                 }
                 continue;
             }
 
-            // Comandos de Proteção e Faltas (COM INTELIGÊNCIA)
             if (cmd === 'FALTA_ADICIONAR' && parts.length >= 2) {
                 const nodeId = parseInt(parts[1]);
+                let customTime = parts.length >= 3 ? parseFloat(parts[2]) : undefined;
+                
                 if (!isNaN(nodeId)) {
-                    // --- LÓGICA DE PROTEÇÃO EMBUTIDA NO PARSE ---
-                    const branchesToOpen = [];
-                    const visitedNodes = new Set([nodeId]);
-                    const queue = [nodeId];
-                    
-                    while (queue.length > 0) {
-                        const curr = queue.shift();
-                        // Busca ramos energizados que tocam o setor da falta
-                        currentBranches.filter(b => b.state === 1 && (b.from === curr || b.to === curr)).forEach(b => {
-                            const neighbor = b.from === curr ? b.to : b.from;
-                            if (!visitedNodes.has(neighbor)) {
-                                if (b.hasSwitch) { 
-                                    branchesToOpen.push(b.id); // Identifica a chave de proteção
-                                } else { 
-                                    visitedNodes.add(neighbor); 
-                                    queue.push(neighbor); 
-                                }
-                            }
-                        });
-                    }
+                    // Usa a nova função centralizada
+                    const branchesToOpen = findProtectionSwitches(nodeId, currentBranches);
 
                     providedSteps.push({ 
                         type: 'fault_add', 
                         nodeId, 
-                        openedBranches: branchesToOpen, // Agora o passo já carrega as chaves
+                        openedBranches: branchesToOpen,
+                        duration: customTime,
                         description: `Falta na barra ${nodeId} e atuação da Proteção` 
                     });
                 }
@@ -333,18 +280,32 @@ export function parseSequenceFile(content, currentBranches) {
 
             if (cmd === 'FALTA_RESTAURAR' && parts.length >= 2) {
                 const nodeId = parseInt(parts[1]);
+                if (parts.length >= 3) customTime = parseFloat(parts[2]);
+                
                 if (!isNaN(nodeId)) {
-                    providedSteps.push({ type: 'fault_remove', nodeId, description: `Restaurar barra ${nodeId}` });
+                    providedSteps.push({ 
+                        type: 'fault_remove', 
+                        nodeId, 
+                        duration: customTime,
+                        description: `Restaurar barra ${nodeId}` 
+                    });
                 }
                 continue;
             }
 
-            // Comandos de Shunt e Tap (mantidos)
             if (cmd === 'SHUNT_STEP' && parts.length >= 3) {
                 const nodeId = parseInt(parts[1]);
                 const steps = parseInt(parts[2]);
+                if (parts.length >= 4) customTime = parseFloat(parts[3]);
+                
                 if (!isNaN(nodeId) && !isNaN(steps)) {
-                    providedSteps.push({ type: 'shunt_step', nodeId, steps, description: `Ajustar Capacitor ${nodeId} → Estágio ${steps}` });
+                    providedSteps.push({ 
+                        type: 'shunt_step', 
+                        nodeId, 
+                        steps, 
+                        duration: customTime,
+                        description: `Ajustar Capacitor ${nodeId} → Estágio ${steps}` 
+                    });
                 }
                 continue;
             }
