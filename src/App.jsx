@@ -227,93 +227,199 @@ function App() {
         const reader = new FileReader();
         reader.onload = async (e) => {
             try {
-                console.log("--- 🕵️ INICIANDO DEBUG DE IMPORTAÇÃO ---");
-                
-                // 1. Fase de Parse
-                const { updates, newFaults, providedSteps } = parseSequenceFile(e.target.result, branches);
-                console.log("1. Parse concluído.", { 
-                    chavesAlteradas: updates.size, 
-                    faltas: Array.from(newFaults), 
-                    passosManuais: providedSteps ? providedSteps.length : 0 
-                });
+                const fileContent = e.target.result;
 
-                if (updates.size === 0 && newFaults.size === 0 && (!providedSteps || providedSteps.length === 0)) { 
-                    showToast('Arquivo lido, mas nenhum dado compatível encontrado.', 'warning'); 
-                    return; 
+                // 👇 1. IMPORTAÇÃO DE SEQUÊNCIA PRONTA (TXT Exportado) 👇
+                if (fileContent.trim().startsWith("Sequenciamento")) {
+                    const lines = fileContent.split('\n').map(l => l.trim()).filter(l => l);
+                    const importedSteps = [];
+
+                    // Lê o ficheiro linha a linha (ignorando a linha 0 que é o cabeçalho)
+                    // Um estado temporário para o parser saber quais chaves já foram abertas/fechadas
+                    let currentTempBranches = [...branches];
+
+                    for (let i = 1; i < lines.length; i++) {
+                        const parts = lines[i].split(' ');
+                        const action = parts[0];
+
+                        if (action === 'FECHAR' || action === 'ABRIR') {
+                            const from = parseInt(parts[1], 10);
+                            const to = parseInt(parts[2], 10);
+                            
+                            const branch = branches.find(b => (b.from === from && b.to === to) || (b.from === to && b.to === from));
+                            
+                            importedSteps.push({
+                                type: action === 'FECHAR' ? 'close' : 'open',
+                                branchId: branch ? branch.id : `${from}-${to}`,
+                                fromNode: from,
+                                toNode: to,
+                                description: `${action === 'FECHAR' ? 'Fechar' : 'Abrir'} chave ${from}-${to}`,
+                                stage: 'Sequência Importada'
+                            });
+
+                            // Atualiza a memória temporária do parser
+                            if (branch) {
+                                currentTempBranches = currentTempBranches.map(b => 
+                                    b.id === branch.id ? { ...b, state: action === 'FECHAR' ? 1 : 0 } : b
+                                );
+                            }
+
+                        } else if (action === 'FALTA_ADICIONAR') {
+                            const node = parseInt(parts[1], 10);
+                            
+                            // 👇 A CORREÇÃO ENTRA AQUI 👇
+                            // Aciona a mesma função de proteção do Otimizador!
+                            const branchesToOpen = findProtectionSwitches(node, currentTempBranches);
+
+                            importedSteps.push({
+                                type: 'fault_add',
+                                nodeId: node,
+                                description: `Falta na barra ${node} e Proteção atuada`,
+                                openedBranches: branchesToOpen, // <-- O SEGREDO QUE ESTAVA FALTANDO!
+                                stage: 'Sequência Importada'
+                            });
+
+                            // Atualiza a memória temporária abrindo as chaves isoladas
+                            currentTempBranches = currentTempBranches.map(b =>
+                                branchesToOpen.some(op => op.id === b.id) ? { ...b, state: 0 } : b
+                            );
+
+                        } else if (action === 'FALTA_RESTAURAR') {
+                            const node = parseInt(parts[1], 10);
+                            importedSteps.push({
+                                type: 'fault_remove',
+                                nodeId: node,
+                                description: `Restauração da falta na barra ${node}`,
+                                stage: 'Sequência Importada'
+                            });
+                        }
+                    }
+
+                    if (importedSteps.length === 0) return;
+
+                    setSeqOverlayOpen(true);
+                    setOptimizerStatus("A carregar sequência exportada...");
+
+                    // Pega no estado base que está atualmente no ecrã
+                    const baseSnapshot = { branches, faults: faultNodes, shunts: systemShunts };
+                    
+                    // Constrói os snapshots para a barra temporal do simulador
+                    const resultData = {
+                        steps: importedSteps,
+                        snapshots: buildSnapshots(baseSnapshot, importedSteps, allBoundaryNodes, systemLoads),
+                        method: "Sequência Importada"
+                    };
+
+                    setSequenceData(resultData);
+                    
+                    // Atualiza a vista (mapa) para mostrar o estado final
+                    if (resultData.snapshots.length > 0) {
+                        const finalSnap = resultData.snapshots[resultData.snapshots.length - 1];
+                        setBranches(finalSnap.branches);
+                        setFaultNodes(finalSnap.faults);
+                    }
+
+                    setTimeout(() => setOptimizerStatus(""), 2500);
+                    return; // 👈 CRUCIAL: Interrompe a função aqui, pois já carregou a sequência!
                 }
 
-                const initialSnapshot = { branches, faults: faultNodes, shunts: systemShunts };
+                // 👇 2. IMPORTAÇÃO DE ESTADO/TOPOLOGIA (Otimizador Guloso) 👇
+                // 👇 2. O PULO DO GATO: Definir o Estado Base
+                // Se já existe uma sequência, usamos o ÚLTIMO snapshot dela como estado inicial!
+                const isAppending = sequenceData && sequenceData.steps && sequenceData.steps.length > 0;
+                const initialSnapshot = isAppending 
+                    ? sequenceData.snapshots[sequenceData.snapshots.length - 1] 
+                    : { branches, faults: faultNodes, shunts: systemShunts };
+
+                // Define o nome da "Pasta" (Etapa)
+                const currentStageNumber = isAppending ? new Set(sequenceData.steps.map(s => s.stage)).size + 1 : 1;
+                const stageName = `Etapa ${currentStageNumber}`;
+
                 let finalSteps = [];
                 let methodTag = "Carregado";
 
-                // 2. Decisão de Rota
-                if (providedSteps && providedSteps.length > 0) {
-                    console.log("2A. Rota MANUAL escolhida (Sequência importada do txt).");
-                    finalSteps = providedSteps;
-                    methodTag = "Sequência Importada (Manual)";
-                } else if (updates.size > 0 || newFaults.size > 0) {
-                    console.log("2B. Rota AUTOMÁTICA escolhida (Calculando caminhos...).");
-                    setSeqOverlayOpen(true); 
-                    setOptimizerStatus("Gerando heurística inicial...");
+                // ... (Regra 2A - Manual - mantemos igual) ...
+
+                if (updates.size > 0 || newFaults.size > 0) {
+                    setSeqOverlayOpen(true);
+                    setOptimizerStatus(`Processando ${stageName}...`);
                     
-                    const targetBranches = branches.map(b => {
+                    // Usa o snapshot congelado da Etapa 1 para não sofrer interferência visual da tela
+                    const targetBranches = initialSnapshot.branches.map(b => {
                         const key = `${b.from}-${b.to}`;
                         return updates.has(key) ? { ...b, state: updates.get(key) } : { ...b };
                     });
 
-                    console.log("3. Aplicando Faltas no Estado Inicial...");
                     let postFaultSnapshot = { ...initialSnapshot };
                     const faultSteps = [];
 
-                    newFaults.forEach(nodeId => {
+                    // 👇 3. LÓGICA DE DELTA (COMPARAÇÃO DE FALTAS) 👇
+                    const importedFaults = newFaults; 
+                    const currentFaults = initialSnapshot.faults;
+
+                    const faultsToAdd = [...importedFaults].filter(f => !currentFaults.has(f));
+                    const faultsToRemove = [...currentFaults].filter(f => !importedFaults.has(f));
+
+                    // A. Processa as Faltas Restauradas (Consertos)
+                    faultsToRemove.forEach(nodeId => {
+                        const step = { 
+                            type: 'fault_remove', 
+                            nodeId, 
+                            description: `Restauração da falta na barra ${nodeId}`, 
+                            stage: stageName // 👈 Tag para agrupar na UI
+                        };
+                        faultSteps.push(step);
+                        postFaultSnapshot = applyStepToSnapshot(step, postFaultSnapshot);
+                    });
+
+                    // B. Processa as Faltas Novas
+                    faultsToAdd.forEach(nodeId => {
                         const branchesToOpen = findProtectionSwitches(nodeId, postFaultSnapshot.branches);
-                        const faultStep = { 
+                        const step = { 
                             type: 'fault_add', 
                             nodeId, 
                             description: `Falta na barra ${nodeId} e Proteção atuada`, 
-                            openedBranches: branchesToOpen 
+                            openedBranches: branchesToOpen,
+                            stage: stageName // 👈 Tag para agrupar na UI
                         };
-                        faultSteps.push(faultStep);
-                        // Aplica a falta para atualizar o snapshot temporário
-                        postFaultSnapshot = applyStepToSnapshot(faultStep, postFaultSnapshot); 
+                        faultSteps.push(step);
+                        postFaultSnapshot = applyStepToSnapshot(step, postFaultSnapshot); 
                     });
 
-                    console.log("4. Iniciando Heurística Gulosa...");
-                    // Note que passamos targetBranches para ele saber onde deve chegar
+                    // 4. Roda o Otimizador Guloso
                     const optResult = await runOptimizer(faultSteps, postFaultSnapshot, targetBranches, sysData, setOptimizerStatus);
-                    console.log("5. Otimização Concluída!", optResult);
                     
+                    // Marca as manobras com a Etapa atual
+                    optResult.steps.forEach(s => { if(!s.stage) s.stage = stageName; });
                     finalSteps = optResult.steps;
                     methodTag = optResult.method;
-                    setTimeout(() => setOptimizerStatus(""), 3000);
-                    
                 }
 
-                // 3. Aplicação Final
-                console.log("7. Construindo Snapshots finais...");
+                // 👇 5. CONCATENAÇÃO DOS ESTADOS 👇
+                // Se estamos adicionando a uma linha do tempo existente, somamos os passos
+                const allSteps = isAppending ? [...sequenceData.steps, ...finalSteps] : finalSteps;
+                const absoluteInitialState = isAppending ? sequenceData.snapshots[0] : initialSnapshot;
+
                 const resultData = {
-                    steps: finalSteps,
-                    snapshots: buildSnapshots(initialSnapshot, finalSteps, allBoundaryNodes, systemLoads),
+                    steps: allSteps,
+                    snapshots: buildSnapshots(absoluteInitialState, allSteps, allBoundaryNodes, systemLoads),
                     method: methodTag
                 };
-                console.log("8. Snapshots criados. Total:", resultData.snapshots.length);
 
-                if (resultData.snapshots.length > 1 && newFaults.size > 0) {
-                    setBranches(resultData.snapshots[1].branches);
-                    setFaultNodes(resultData.snapshots[1].faults);
-                } else if (newFaults.size > 0) {
-                    setFaultNodes(newFaults); // Fallback se não gerou snapshots válidos
+                // Atualiza os estados visuais
+                if (resultData.snapshots.length > 1) {
+                    const finalSnap = resultData.snapshots[resultData.snapshots.length - 1];
+                    setBranches(finalSnap.branches);
+                    setFaultNodes(finalSnap.faults);
                 }
 
                 setSequenceData(resultData); 
                 setSeqOverlayOpen(true);
-                console.log("--- ✅ IMPORTAÇÃO FINALIZADA COM SUCESSO ---");
-                showToast(`Sequenciamento carregado com sucesso!`, 'success');
+                setTimeout(() => setOptimizerStatus(""), 3000);
 
             } catch (error) {
-                console.error("🚨 ERRO GRAVE DURANTE A IMPORTAÇÃO:", error);
+                console.error("🚨 ERRO GRAVE:", error);
                 showToast(`Erro técnico: ${error.message}`, 'error');
-                setOptimizerStatus("Falha na execução.");
             }
         };
         reader.readAsText(file);

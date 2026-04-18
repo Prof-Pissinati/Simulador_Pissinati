@@ -19,6 +19,13 @@ export default function SequenceOverlay({
     onClose,
     darkMode    = true,
 }) {
+
+    const [collapsedStages, setCollapsedStages] = useState({});
+    
+    const toggleStage = (stageName) => {
+        setCollapsedStages(prev => ({ ...prev, [stageName]: !prev[stageName] }));
+    };
+
     const [currentStep,  setCurrentStep]  = useState(0);
     const [isPlaying,    setIsPlaying]    = useState(false);
     const [playInterval, setPlayInterval] = useState(1500); 
@@ -230,88 +237,124 @@ export default function SequenceOverlay({
                 <div style={{ maxHeight: isExpanded ? '45vh' : '0px', opacity: isExpanded ? 1 : 0, overflowY: 'auto', transition: 'max-height 0.3s ease, opacity 0.3s ease', borderTop: isExpanded ? `1px solid ${border}` : 'none', background: darkMode ? 'rgba(0,0,0,0.4)' : 'rgba(0,0,0,0.02)' }} ref={listRef}>
                     {steps.length === 0 ? (
                         <div style={{ padding: 20, color: muted, textAlign: 'center', fontSize: 13 }}>Lista vazia. Ative a gravação e clique no diagrama para injetar manobras.</div>
-                    ) : steps.map((step, idx) => {
-                        const stepNum = idx + 1; 
-                        const isDone = stepNum <= currentStep; 
-                        const isCurrent = stepNum === currentStep; 
-                        const isSelected = selectedIndices.includes(idx); // NOVO
-                        const color = STEP_COLORS[step.type] ?? '#888';
-                        
-                        const canToggle = step.type === 'open' || step.type === 'close' || step.type === 'fault_add' || step.type === 'fault_remove';
-                        const isTap = step.type === 'tap';
-                        const isShunt = step.type === 'shunt_step';
+                    ) : (
+                        // 👇 O NOVO AGRUPAMENTO POR ETAPAS 👇
+                        Object.entries(
+                            steps.reduce((acc, step, idx) => {
+                                const stage = step.stage || 'Etapa 1'; // Se não tiver etapa, cai na Etapa 1
+                                if (!acc[stage]) acc[stage] = [];
+                                // Salvamos o idx original como globalIdx para não quebrar seus botões
+                                acc[stage].push({ ...step, globalIdx: idx }); 
+                                return acc;
+                            }, {})
+                        ).map(([stageName, stageSteps]) => {
+                            const isCollapsed = collapsedStages[stageName];
 
-                        // 👇 ESTILO ATUALIZADO PARA MOSTRAR A SELEÇÃO MÚLTIPLA 👇
-                        let rowBackground = 'transparent';
-                        if (isCurrent) rowBackground = darkMode ? 'rgba(0, 188, 212, 0.15)' : 'rgba(0, 188, 212, 0.1)';
-                        else if (isSelected) rowBackground = darkMode ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.08)';
-
-                        return (
-                            <div 
-                                key={idx} 
-                                data-active={isCurrent} 
-                                draggable 
-                                onDragStart={(e) => handleDragStart(e, idx)} 
-                                onDragOver={handleDragOver} 
-                                onDrop={(e) => handleDrop(e, idx)} 
-                                onClick={(e) => handleRowClick(e, idx, stepNum)} // 👈 Função de clique atualizada
-                                onMouseEnter={() => step.branchId !== undefined && onHoverBranch?.(step.branchId)} 
-                                onMouseLeave={() => onHoverBranch?.(null)} 
-                                style={{ display: 'flex', alignItems: 'center', gap: 15, padding: '10px 20px', cursor: 'pointer', background: rowBackground, borderLeft: isCurrent ? `4px solid #00bcd4` : (isSelected ? `4px solid ${border}` : '4px solid transparent'), borderBottom: `1px solid ${darkMode ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.03)'}`, opacity: isDone ? 1 : 0.45, transition: 'all 0.15s ease' }}
-                            >
-                                <div style={{ fontSize: '14px', color: isSelected ? text : muted, cursor: 'grab' }}>☰</div>
-                                <div style={{ minWidth: 28, height: 28, borderRadius: '50%', background: isDone ? color : surface, border: `2px solid ${isDone ? color : border}`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 'bold', color: isDone ? '#fff' : muted }}>{isDone ? (isCurrent ? stepNum : '✓') : stepNum}</div>
-                                
-                                <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: '15px' }}>
-                                    <div style={{ fontSize: 13, color: isDone || isSelected ? text : muted, fontWeight: isCurrent ? 'bold' : 'normal' }}>
-                                        {STEP_ICONS[step.type]} {step.description.split('→')[0]}
-                                    </div>
+                            return (
+                                <div key={stageName} style={{ marginBottom: '4px' }}>
                                     
-                                    {isTap && (
-                                        <div style={{ display: 'flex', alignItems: 'center', background: surface, borderRadius: '4px', border: `1px solid ${border}`, overflow: 'hidden' }}>
-                                            <button onClick={(e) => { e.stopPropagation(); onUpdateStepValue?.(idx, step.tapValue - 1); }} style={{ background: 'transparent', border: 'none', color: text, padding: '2px 8px', cursor: 'pointer' }}>-</button>
-                                            <div style={{ fontSize: '11px', width: '35px', textAlign: 'center', fontWeight: 'bold', color: color, borderLeft: `1px solid ${border}`, borderRight: `1px solid ${border}` }}>
-                                                {step.tapValue > 0 ? `+${step.tapValue}` : step.tapValue}
-                                            </div>
-                                            <button onClick={(e) => { e.stopPropagation(); onUpdateStepValue?.(idx, step.tapValue + 1); }} style={{ background: 'transparent', border: 'none', color: text, padding: '2px 8px', cursor: 'pointer' }}>+</button>
-                                        </div>
-                                    )}
-
-                                    {isShunt && (
-                                        <div style={{ display: 'flex', alignItems: 'center', background: surface, borderRadius: '4px', border: `1px solid ${border}`, overflow: 'hidden' }}>
-                                            <button onClick={(e) => { e.stopPropagation(); onUpdateStepValue?.(idx, step.steps - 1); }} style={{ background: 'transparent', border: 'none', color: text, padding: '2px 8px', cursor: 'pointer' }}>-</button>
-                                            <div style={{ fontSize: '11px', width: '35px', textAlign: 'center', fontWeight: 'bold', color: color, borderLeft: `1px solid ${border}`, borderRight: `1px solid ${border}` }}>
-                                                Est {step.steps}
-                                            </div>
-                                            <button onClick={(e) => { e.stopPropagation(); onUpdateStepValue?.(idx, step.steps + 1); }} style={{ background: 'transparent', border: 'none', color: text, padding: '2px 8px', cursor: 'pointer' }}>+</button>
-                                        </div>
-                                    )}
-                                </div>
-
-                                {canToggle && (
+                                    {/* CABEÇALHO DA PASTA */}
                                     <div 
-                                        onClick={(e) => { e.stopPropagation(); onToggleStepAction?.(idx); }}
-                                        title="Clique para alternar a manobra"
-                                        style={{ fontSize: 10, fontWeight: 'bold', color: color, background: `${color}18`, padding: '3px 8px', borderRadius: 6, textTransform: 'uppercase', letterSpacing: 0.5, cursor: 'pointer', border: `1px solid ${color}50`, transition: 'all 0.2s' }}
+                                        onClick={() => toggleStage(stageName)}
+                                        style={{ background: darkMode ? '#222' : '#eee', padding: '6px 15px', fontSize: '12px', fontWeight: 'bold', color: '#00bcd4', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px', borderTop: `1px solid ${border}`, borderBottom: `1px solid ${border}` }}
                                     >
-                                        {step.type.replace('_', ' ')}
+                                        <span style={{ fontSize: '10px' }}>{isCollapsed ? '▶' : '▼'}</span> 
+                                        {stageName} 
+                                        <span style={{color: muted, fontWeight: 'normal', fontSize: '11px'}}>({stageSteps.length} passos)</span>
                                     </div>
-                                )}
-                                
-                                {onDeleteStep && (
-                                    <button 
-                                        onClick={(e) => { e.stopPropagation(); onDeleteStep(idx); }}
-                                        title="Remover Manobra"
-                                        style={{ background: 'transparent', border: 'none', color: '#f44336', cursor: 'pointer', fontSize: '15px', padding: '4px', opacity: 0.7, transition: 'opacity 0.2s', ...(!isDone ? {} : { display: 'none' }) }}
-                                        onMouseOver={e => e.target.style.opacity = 1}
-                                        onMouseOut={e => e.target.style.opacity = 0.7}
-                                    >
-                                        🗑️
-                                    </button>
-                                )}
-                            </div>
-                        );
-                    })}
+
+                                    {/* CONTEÚDO DA PASTA (Suas linhas originais) */}
+                                    {!isCollapsed && stageSteps.map((stepWrapper) => {
+                                        
+                                        // Recuperamos o step original e o índice global dele
+                                        const step = stepWrapper;
+                                        const idx = stepWrapper.globalIdx; 
+                                        
+                                        // 👇 A PARTIR DAQUI É 100% O SEU CÓDIGO ORIGINAL 👇
+                                        const stepNum = idx + 1; 
+                                        const isDone = stepNum <= currentStep; 
+                                        const isCurrent = stepNum === currentStep; 
+                                        const isSelected = selectedIndices.includes(idx);
+                                        const color = STEP_COLORS[step.type] ?? '#888';
+                                        
+                                        const canToggle = step.type === 'open' || step.type === 'close' || step.type === 'fault_add' || step.type === 'fault_remove';
+                                        const isTap = step.type === 'tap';
+                                        const isShunt = step.type === 'shunt_step';
+
+                                        let rowBackground = 'transparent';
+                                        if (isCurrent) rowBackground = darkMode ? 'rgba(0, 188, 212, 0.15)' : 'rgba(0, 188, 212, 0.1)';
+                                        else if (isSelected) rowBackground = darkMode ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.08)';
+
+                                        return (
+                                            <div 
+                                                key={idx} 
+                                                data-active={isCurrent} 
+                                                draggable 
+                                                onDragStart={(e) => handleDragStart(e, idx)} 
+                                                onDragOver={handleDragOver} 
+                                                onDrop={(e) => handleDrop(e, idx)} 
+                                                onClick={(e) => handleRowClick(e, idx, stepNum)} 
+                                                onMouseEnter={() => step.branchId !== undefined && onHoverBranch?.(step.branchId)} 
+                                                onMouseLeave={() => onHoverBranch?.(null)} 
+                                                style={{ display: 'flex', alignItems: 'center', gap: 15, padding: '10px 20px', cursor: 'pointer', background: rowBackground, borderLeft: isCurrent ? `4px solid #00bcd4` : (isSelected ? `4px solid ${border}` : '4px solid transparent'), borderBottom: `1px solid ${darkMode ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.03)'}`, opacity: isDone ? 1 : 0.45, transition: 'all 0.15s ease' }}
+                                            >
+                                                <div style={{ fontSize: '14px', color: isSelected ? text : muted, cursor: 'grab' }}>☰</div>
+                                                <div style={{ minWidth: 28, height: 28, borderRadius: '50%', background: isDone ? color : surface, border: `2px solid ${isDone ? color : border}`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 'bold', color: isDone ? '#fff' : muted }}>{isDone ? (isCurrent ? stepNum : '✓') : stepNum}</div>
+                                                
+                                                <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: '15px' }}>
+                                                    <div style={{ fontSize: 13, color: isDone || isSelected ? text : muted, fontWeight: isCurrent ? 'bold' : 'normal' }}>
+                                                        {STEP_ICONS[step.type]} {step.description.split('→')[0]}
+                                                    </div>
+                                                    
+                                                    {isTap && (
+                                                        <div style={{ display: 'flex', alignItems: 'center', background: surface, borderRadius: '4px', border: `1px solid ${border}`, overflow: 'hidden' }}>
+                                                            <button onClick={(e) => { e.stopPropagation(); onUpdateStepValue?.(idx, step.tapValue - 1); }} style={{ background: 'transparent', border: 'none', color: text, padding: '2px 8px', cursor: 'pointer' }}>-</button>
+                                                            <div style={{ fontSize: '11px', width: '35px', textAlign: 'center', fontWeight: 'bold', color: color, borderLeft: `1px solid ${border}`, borderRight: `1px solid ${border}` }}>
+                                                                {step.tapValue > 0 ? `+${step.tapValue}` : step.tapValue}
+                                                            </div>
+                                                            <button onClick={(e) => { e.stopPropagation(); onUpdateStepValue?.(idx, step.tapValue + 1); }} style={{ background: 'transparent', border: 'none', color: text, padding: '2px 8px', cursor: 'pointer' }}>+</button>
+                                                        </div>
+                                                    )}
+
+                                                    {isShunt && (
+                                                        <div style={{ display: 'flex', alignItems: 'center', background: surface, borderRadius: '4px', border: `1px solid ${border}`, overflow: 'hidden' }}>
+                                                            <button onClick={(e) => { e.stopPropagation(); onUpdateStepValue?.(idx, step.steps - 1); }} style={{ background: 'transparent', border: 'none', color: text, padding: '2px 8px', cursor: 'pointer' }}>-</button>
+                                                            <div style={{ fontSize: '11px', width: '35px', textAlign: 'center', fontWeight: 'bold', color: color, borderLeft: `1px solid ${border}`, borderRight: `1px solid ${border}` }}>
+                                                                Est {step.steps}
+                                                            </div>
+                                                            <button onClick={(e) => { e.stopPropagation(); onUpdateStepValue?.(idx, step.steps + 1); }} style={{ background: 'transparent', border: 'none', color: text, padding: '2px 8px', cursor: 'pointer' }}>+</button>
+                                                        </div>
+                                                    )}
+                                                </div>
+
+                                                {canToggle && (
+                                                    <div 
+                                                        onClick={(e) => { e.stopPropagation(); onToggleStepAction?.(idx); }}
+                                                        title="Clique para alternar a manobra"
+                                                        style={{ fontSize: 10, fontWeight: 'bold', color: color, background: `${color}18`, padding: '3px 8px', borderRadius: 6, textTransform: 'uppercase', letterSpacing: 0.5, cursor: 'pointer', border: `1px solid ${color}50`, transition: 'all 0.2s' }}
+                                                    >
+                                                        {step.type.replace('_', ' ')}
+                                                    </div>
+                                                )}
+                                                
+                                                {onDeleteStep && (
+                                                    <button 
+                                                        onClick={(e) => { e.stopPropagation(); onDeleteStep(idx); }}
+                                                        title="Remover Manobra"
+                                                        style={{ background: 'transparent', border: 'none', color: '#f44336', cursor: 'pointer', fontSize: '15px', padding: '4px', opacity: 0.7, transition: 'opacity 0.2s', ...(!isDone ? {} : { display: 'none' }) }}
+                                                        onMouseOver={e => e.target.style.opacity = 1}
+                                                        onMouseOut={e => e.target.style.opacity = 0.7}
+                                                    >
+                                                        🗑️
+                                                    </button>
+                                                )}
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            );
+                        })
+                    )}
                 </div>
             </div>
             <style>{`@keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.5; } 100% { opacity: 1; } }`}</style>

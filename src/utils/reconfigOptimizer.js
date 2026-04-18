@@ -26,9 +26,16 @@ export async function runOptimizer(initialSequence, initialState, targetBranches
         targetState: b.state
     }));
 
-    let loopActive = false;
-    let iterations = 0;
+    // 👇 ADICIONE ESTE BLOCO DE LOG AQUI 👇
+    console.log("\n==================================");
+    console.log("📋 CHECKLIST INICIAL DE MANOBRAS");
+    console.log("==================================");
+    console.log(pendingMoves.map(m => `${m.targetState===1?'FECHAR':'ABRIR'} ${m.from}-${m.to}`).join('\n'));
+    console.log("==================================\n");
 
+    let justFormedLoop = false;
+    let iterations = 0;
+    
     // 2. Loop de Construção Gulosa
     while (pendingMoves.length > 0 && iterations < 50) {
         iterations++;
@@ -37,84 +44,90 @@ export async function runOptimizer(initialSequence, initialState, targetBranches
         let bestMoveIsLoop = false;
         let bestStepObj = null;
 
-        // 0. Define o espaço de busca (Tratamento focado no Loop)
-        let candidates = pendingMoves;
         
-        if (loopActive) {
-            const pendingOpens = pendingMoves.filter(m => m.targetState === 0);
-            const loopBreakers = [];
+        // 0. Espaço de busca total. A física e os desempates definem a ordem.
+        let candidates = pendingMoves;
+        const pendingOpens = pendingMoves.filter(m => m.targetState === 0);
 
-            // Testa quais aberturas pendentes realmente desfazem o loop atual
-            for (const openMove of pendingOpens) {
-                const testStep = { type: 'open', branchId: openMove.id, fromNode: openMove.from, toNode: openMove.to };
-                const testSnap = applyStepToSnapshot(testStep, currentSnapshot);
-                const ldfCheck = linDistFlowScreening(testSnap.branches, testSnap.faults, sysData.sources, sysData);
-                
-                // Se a rede parou de acusar "Loop detectado", essa chave quebra o loop!
-                if (ldfCheck.reason !== "Loop detectado") {
-                    loopBreakers.push(openMove);
-                }
-            }
-
-            // A SUA REGRA: Se houver chaves que desfazem ESTE loop, trava a busca nelas.
-            // Se não houver (loopBreakers vazio), ignora a restrição e segue em frente!
-            if (loopBreakers.length > 0) {
-                candidates = loopBreakers;
-            }
+        // A TRAVA DE SCADA: Se o passo anterior gerou loop, o foco agora é OBRIGATORIAMENTE abrir.
+        if (justFormedLoop && pendingOpens.length > 0) {
+            candidates = pendingOpens;
         }
-
-        // 👇 1. Descobre quem tem energia no momento
+        
+        // 1. Descobre quem tem energia no momento (mantém normal...)
         const poweredNodes = getPoweredNodes(currentSnapshot.branches, sysData.sources, currentSnapshot.faults);
 
+        console.log(`\n[DEBUG] --- Iteração ${iterations} ---`);
+        console.log(`[DEBUG] Pendências ativas:`, candidates.map(m => `${m.targetState===1?'Fechar':'Abrir'} ${m.from}-${m.to}`).join(', '));
+        
         for (const move of candidates) {
-            
-            // 👇 2. A REGRA DE OURO DA RESTAURAÇÃO
-            // Evita reconstruir ilhas mortas e desfazer o Modo SOS prematuramente
-            if (move.targetState === 1) { 
-                const fromPowered = poweredNodes.has(move.from);
-                const toPowered = poweredNodes.has(move.to);
-                if (!fromPowered && !toPowered) continue; // Ambos mortos? Pula!
-            }
-
             const step = {
                 type: move.targetState === 1 ? 'close' : 'open',
                 branchId: move.id,
                 fromNode: move.from,
                 toNode: move.to,
                 description: `${move.targetState === 1 ? 'Fechar' : 'Abrir'} chave ${move.from}–${move.to}`,
-                duration: move.targetState === 1 ? MANEUVER_TIMES.SWITCH_CLOSE : MANEUVER_TIMES.SWITCH_OPEN
+                duration: 1.0
             };
+
+            // 1. REGRA DO NÓ VIVO
+            if (move.targetState === 1) { 
+                const fromPowered = poweredNodes.has(move.from);
+                const toPowered = poweredNodes.has(move.to);
+                if (!fromPowered && !toPowered) {
+                    console.log(`❌ SKIP ${move.from}-${move.to}: Ambos os nós (${move.from} e ${move.to}) estão sem energia.`);
+                    continue; 
+                }
+            }
 
             const testSnapshot = applyStepToSnapshot(step, currentSnapshot);
             const pLoss = calculateDisconnectedP(testSnapshot.branches, testSnapshot.faults, sysData.sources, sysData.loads);
 
-            // REGRA DE OURO: Proibido desenergizar carga (Monotonicidade)
-            if (pLoss > currentPLoss + 0.001) continue; 
+            // 2. REGRA DE ENS (NÃO DERRUBAR CARGA)
+            if (pLoss > currentPLoss + 0.001) {
+                console.log(`❌ SKIP ${move.from}-${move.to}: Aumentaria a ENS de ${currentPLoss.toFixed(2)} para ${pLoss.toFixed(2)}`);
+                continue; 
+            }
 
-            // Validação Linear
+            // 3. VALIDAÇÃO LINEAR (LINDISTFLOW) - O FILTRO RÁPIDO
             const ldf = linDistFlowScreening(testSnapshot.branches, testSnapshot.faults, sysData.sources, sysData);
             let valid = ldf.valid;
             let isLoop = false;
 
-            // Tratamento de Loop (Make-Before-Break)
-            if (!valid && ldf.reason === "Loop detectado" && move.targetState === 1) {
-                // Roda Newton-Raphson para validar o loop temporário
+            if (!valid) {
+                if (ldf.reason === "Loop detectado") {
+                    const pfResult = runPowerFlow(testSnapshot.branches, testSnapshot.faults, 'NR', sysData);
+                    if (!checkViolations(pfResult, testSnapshot.branches)) {
+                        console.log(`⚠️ LOOP SEGURO (NR Aprovou): ${move.from}-${move.to}`);
+                        valid = true;
+                        isLoop = true;
+                    } else {
+                        console.log(`❌ NR REJEITOU LOOP: ${move.from}-${move.to} (Violação de Limites)`);
+                    }
+                } else {
+                    console.log(`❌ LDF REJEITOU: ${move.from}-${move.to} (${ldf.reason})`);
+                }
+            } else {
+                // 👇 A CORREÇÃO DO BUG OCULTO 👇
+                // LDF aprovou manobra radial. Mas LDF é impreciso! Vamos rodar o NR para carimbar.
                 const pfResult = runPowerFlow(testSnapshot.branches, testSnapshot.faults, 'NR', sysData);
-                if (!checkViolations(pfResult, testSnapshot.branches)) {
-                    valid = true;
-                    isLoop = true;
+                if (checkViolations(pfResult, testSnapshot.branches)) {
+                    console.log(`❌ FALSO POSITIVO LDF! NR Rejeitou ${move.from}-${move.to} por violação oculta.`);
+                    valid = false;
+                } else {
+                    console.log(`✅ LDF + NR APROVARAM: ${move.from}-${move.to}`);
                 }
             }
 
-            // Seleção Gulosa
+            // SELEÇÃO DO MELHOR MOVIMENTO
             if (valid) {
+                console.log(`✅ APROVADO: ${move.from}-${move.to} | ENS após manobra: ${pLoss.toFixed(2)}`);
                 if (pLoss < bestPLoss) {
                     bestPLoss = pLoss;
                     bestMove = move;
                     bestMoveIsLoop = isLoop;
                     bestStepObj = step;
                 } else if (Math.abs(pLoss - bestPLoss) < 0.001 && bestMove) {
-                    // Desempate: Se a ENS for igual, prefere "ABRIR" chaves para evitar loops prolongados
                     if (move.targetState === 0 && bestMove.targetState === 1) {
                         bestMove = move;
                         bestMoveIsLoop = false;
@@ -123,9 +136,27 @@ export async function runOptimizer(initialSequence, initialState, targetBranches
                 }
             }
         }
+        
+        if (bestMove) {
+            console.log(`🏆 VENCEDOR DA ITERAÇÃO: ${bestMove.targetState===1?'Fechar':'Abrir'} ${bestMove.from}-${bestMove.to}`);
+        } else {
+            console.log(`💀 DEAD END: Nenhum movimento aprovado nesta iteração.`);
+        }
 
         // Se não encontrou nenhum movimento válido pela Heurística Normal...
         if (!bestMove) {
+            // 👇 A FUGA DA TRAVA CORRIGIDA 👇
+            if (justFormedLoop) {
+                justFormedLoop = false; // Desativa a trava
+                if (onProgress) onProgress("Abertura retida. Soltando trava e buscando novas rotas...");
+                console.log("🔓 Trava solta. Reiniciando iteração para buscar fechamentos...");
+                await yieldToMain();
+                
+                // O comando 'continue' volta imediatamente para a linha 'while',
+                // o que vai recarregar todos os 'candidates' radiais de forma limpa!
+                continue; 
+            }
+
             if (onProgress) onProgress("Detonado limite de carga. Calculando fragmentação de ilha...");
             await yieldToMain();
 
@@ -163,8 +194,9 @@ export async function runOptimizer(initialSequence, initialState, targetBranches
         // Remove da lista de pendências
         pendingMoves = pendingMoves.filter(m => m.id !== bestMove.id);
         
-        // Atualiza a trava de loop
-        loopActive = bestMoveIsLoop;
+        // 👇 5. ATUALIZANDO A MEMÓRIA 👇
+        // (Note que a variável antiga 'loopActive' foi apagada daqui)
+        justFormedLoop = bestMoveIsLoop;
     }
 
     if (onProgress) onProgress(pendingMoves.length === 0 ? "Otimização Concluída com Sucesso!" : "Otimização Parcial (Restrições impediram o estado alvo).");
@@ -178,12 +210,47 @@ function updateProgressText(step, isLoop, remain, onProgress) {
 }
 
 function checkViolations(pfResult, branches) {
-    const V_MIN = 0.95; const V_MAX = 1.05;
-    const vViolation = Object.values(pfResult.nodes).some(n => n.v < V_MIN || n.v > V_MAX);
-    const iViolation = branches.some(b => {
-        const iMag = pfResult.lines[b.id] || 0;
-        return iMag > b.Imax;
-    });
+    // Se o NR divergiu, é violação instantânea
+    if (!pfResult || pfResult.converged === false) return true; 
+
+    const V_MIN = 0.95; 
+    const V_MAX = 1.05;
+    
+    let vViolation = false;
+    if (pfResult.nodes) {
+        vViolation = Object.values(pfResult.nodes).some(n => n.v < V_MIN || n.v > V_MAX);
+    }
+
+    let iViolation = false;
+    if (pfResult.lines) {
+        for (const b of branches) {
+            if (b.state === 0) continue; // Ignora chaves abertas
+
+            // Busca o valor bruto retornado pelo NR
+            const rawVal = pfResult.lines[b.id] ?? pfResult.lines[`${b.from}-${b.to}`] ?? pfResult.lines[`${b.to}-${b.from}`];
+            
+            let iMag = 0;
+            // Tenta extrair a corrente caso seja um objeto complexo
+            if (typeof rawVal === 'object' && rawVal !== null) {
+                iMag = rawVal.i ?? rawVal.current ?? rawVal.mag ?? rawVal.iMag ?? 0;
+            } else if (typeof rawVal === 'number') {
+                iMag = rawVal;
+            }
+
+            const limit = b.Imax || 5000;
+
+            // 🕵️ O NOSSO DETETIVE PARA A LINHA 30-43
+            if ((b.from === 30 && b.to === 43) || (b.from === 43 && b.to === 30)) {
+                console.log(`[DEBUG NR 30-43] RAW:`, rawVal, `| IMAG EXTRAÍDO:`, iMag, `| IMAX:`, limit);
+            }
+
+            if (iMag > limit) {
+                iViolation = true;
+                break;
+            }
+        }
+    }
+
     return vViolation || iViolation;
 }
 
