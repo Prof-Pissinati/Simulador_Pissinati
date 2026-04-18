@@ -163,13 +163,25 @@ export async function runOptimizer(initialSequence, initialState, targetBranches
             // Ativa o Modo SOS enviando a lista de manobras que acabaram de falhar (candidates)
             const sosResult = fragmentDeadIsland(candidates, currentSnapshot, sysData, targetBranches);
             
-            if (sosResult) {
+           if (sosResult) {
                 // Aplica a abertura de fragmentação na sequência imediatamente
                 sequence.push(sosResult.immediateStep);
                 currentSnapshot = applyStepToSnapshot(sosResult.immediateStep, currentSnapshot);
                 
-                // ADICIONA O FECHAMENTO À LISTA DE PENDÊNCIAS
-                pendingMoves.push(sosResult.debtMove);
+                // 1. Evita duplicar a fonte na lista (corrige o Fechar 10-38 aparecendo 2x)
+                if (!pendingMoves.some(m => m.id === sosResult.debtMove.id)) {
+                    pendingMoves.push(sosResult.debtMove);
+                }
+
+                // 👇 2. A CORREÇÃO DA AMNÉSIA 👇
+                // Como o SOS abriu uma chave que não estava nos planos abrir, temos que 
+                // obrigar o robô a fechá-la novamente no futuro!
+                pendingMoves.push({
+                    id: sosResult.immediateStep.branchId,
+                    from: sosResult.immediateStep.fromNode,
+                    to: sosResult.immediateStep.toNode,
+                    targetState: 1 // 1 = Ordem para fechar de volta
+                });
                 
                 if (onProgress) updateProgressText(sosResult.immediateStep, false, pendingMoves.length, onProgress);
                 await yieldToMain();
@@ -258,80 +270,108 @@ function checkViolations(pfResult, branches) {
  * MODO SOS: Identifica uma ilha desenergizada e abre uma chave interna
  * para fragmentar a carga e permitir a retomada (Cold Load Pick-up).
  */
-function fragmentDeadIsland(failedMoves, currentSnapshot, sysData, targetBranches) {
-    const { branches } = currentSnapshot;
+// Função auxiliar para o First-Accept: Calcula a potência ativa isolada e ordena
+function rankSwitchesByLostLoad(internalSwitches, currentBranches, sysData) {
+    return internalSwitches.map(sw => {
+        let isolatedLoadKW = 0;
+        
+        // Simula a abertura da chave no grafo puramente lógico (sem NR)
+        const testGraph = currentBranches.map(b => b.id === sw.id ? { ...b, state: 0 } : b);
+        
+        // Busca em Largura (BFS) rápida para descobrir quem ficou ilhado
+        // Partimos de um dos nós da chave (vamos testar o 'to', assumindo fluxo radial padrão)
+        // Nota: O ideal é rodar pros dois lados e pegar o lado que não tem caminho para a fonte.
+        const visited = new Set();
+        const queue = [sw.to];
+        visited.add(sw.to);
+        visited.add(sw.from); // Evita cruzar a própria chave de volta
 
-    // 1. Pega o primeiro fechamento que tentamos e falhou
-    const firstFailedClose = failedMoves.find(m => m.targetState === 1);
-    if (!firstFailedClose) return null;
-
-    // Função auxiliar (BFS) para mapear todos os nós conectados a um ponto de partida
-    const getIslandNodes = (startNode) => {
-        const visited = new Set([startNode]);
-        const queue = [startNode];
         while (queue.length > 0) {
-            const curr = queue.shift();
-            // Viaja apenas por chaves/linhas atualmente FECHADAS
-            const neighbors = branches.filter(b => b.state === 1 && (b.from === curr || b.to === curr));
-            for (const b of neighbors) {
-                const next = b.from === curr ? b.to : b.from;
-                if (!visited.has(next)) {
-                    visited.add(next);
-                    queue.push(next);
+            const current = queue.shift();
+            // Soma a carga ativa deste nó
+            if (sysData.loads && sysData.loads[current]) {
+                isolatedLoadKW += sysData.loads[current].P || 0;
+            }
+
+            // Acha os vizinhos conectados por chaves fechadas
+            const neighbors = testGraph.filter(b => b.state === 1 && (b.from === current || b.to === current));
+            for (const n of neighbors) {
+                const nextNode = n.from === current ? n.to : n.from;
+                if (!visited.has(nextNode)) {
+                    visited.add(nextNode);
+                    queue.push(nextNode);
                 }
             }
         }
-        return visited;
-    };
 
-    // Mapeia os nós dos dois lados da chave que tentamos fechar
-    const islandA = getIslandNodes(firstFailedClose.from);
-    const islandB = getIslandNodes(firstFailedClose.to);
+        return { branch: sw, lostLoad: isolatedLoadKW };
+    }).sort((a, b) => a.lostLoad - b.lostLoad); // ORDENAÇÃO CRESCENTE (Do menor corte para o maior)
+}
 
-    // A "Ilha Morta" é aquela que não tem conexão com nenhuma subestação (fonte)
-    const sources = new Set(sysData.sources);
-    const hasSource = (island) => Array.from(island).some(node => sources.has(node));
+function fragmentDeadIsland(failedClosures, currentSnapshot, sysData, targetBranches) {
+    // 1. Identifica os nós sem energia no momento
+    const poweredNodes = getPoweredNodes(currentSnapshot.branches, sysData.sources, currentSnapshot.faults);
     
-    let deadIsland = null;
-    if (!hasSource(islandA)) deadIsland = islandA;
-    else if (!hasSource(islandB)) deadIsland = islandB;
-
-    if (!deadIsland) return null; // Prevenção de erro se não achar a ilha
-
-    // 2. Procurar chaves manobráveis DENTRO dessa ilha morta
-    // Precisa ser uma chave operável (estar em targetBranches) e estar FECHADA agora.
-    const internalSwitches = branches.filter(b => 
-        b.state === 1 && 
-        deadIsland.has(b.from) && 
-        deadIsland.has(b.to) &&
-        targetBranches.some(tb => tb.id === b.id)
+    // 2. Mapeia as chaves "internas" (fechadas e dentro da área desenergizada)
+    const internalSwitches = currentSnapshot.branches.filter(b => 
+        b.state === 1 && !poweredNodes.has(b.from) && !poweredNodes.has(b.to)
     );
 
-    if (internalSwitches.length === 0) return null; // Não há como fragmentar mais
+    if (internalSwitches.length === 0) return null;
 
-    // 3. Escolhe qual abrir. 
-    // Para simplificar o MVP, pegamos a primeira chave da lista. Como a ilha é radial,
-    // qualquer chave aberta vai dividir a carga e ajudar no fechamento posterior.
-    const switchToOpen = internalSwitches[0];
+    // 👇 3. APLICA A HEURÍSTICA DE ORDENAÇÃO (FIRST-ACCEPT) 👇
+    const rankedSwitches = rankSwitchesByLostLoad(internalSwitches, currentSnapshot.branches, sysData);
+    
+    if (console) console.log("🔍 SOS: Testando chaves ranqueadas por menor perda de carga:", rankedSwitches.map(r => `${r.branch.from}-${r.branch.to} (${r.lostLoad.toFixed(1)}kW)`));
 
-    return {
-        // Passo a ser executado agora
-        immediateStep: {
-            type: 'open',
-            branchId: switchToOpen.id,
-            fromNode: switchToOpen.from,
-            toNode: switchToOpen.to,
-            description: `[ALÍVIO] Abrir chave ${switchToOpen.from}–${switchToOpen.to} para dividir a carga`,
-            duration: 1.0 // Usa 1 minuto padrão para abertura
-        },
-        // Passo a ser adicionado nas pendências (O "empréstimo")
-        debtMove: {
-            id: switchToOpen.id,
-            from: switchToOpen.from,
-            to: switchToOpen.to,
-            targetState: 1 // Terá que ser fechada de novo lá na frente
+    // 4. A Busca com Antevisão (Lookahead)
+    for (const candidate of rankedSwitches) {
+        const switchToOpen = candidate.branch;
+
+        for (const sourceMove of failedClosures) {
+            // A Simulação Emparelhada: Abre a chave interna e tenta Fechar a fonte
+            let testSnapshot = applyStepToSnapshot({ 
+                type: 'open', branchId: switchToOpen.id, fromNode: switchToOpen.from, toNode: switchToOpen.to 
+            }, currentSnapshot);
+            
+            testSnapshot = applyStepToSnapshot({ 
+                type: 'close', branchId: sourceMove.id, fromNode: sourceMove.from, toNode: sourceMove.to 
+            }, testSnapshot);
+
+            // Validação linear preliminar
+            const ldf = linDistFlowScreening(testSnapshot.branches, testSnapshot.faults, sysData.sources, sysData);
+
+            // Se o LDF passar ou der loop (que sabemos que a interface resolve), carimbamos com o NR
+            if (ldf.valid || ldf.reason === "Loop detectado") {
+                const pfResult = runPowerFlow(testSnapshot.branches, testSnapshot.faults, 'NR', sysData);
+                
+                if (!checkViolations(pfResult, testSnapshot.branches)) {
+                    // 🎉 BINGO! Primeira Aceitação ativada. Paramos a busca imediatamente.
+                    console.log(`✅ SOS FIRST-ACCEPT APROVOU: Abrir ${switchToOpen.from}-${switchToOpen.to} viabiliza fechar ${sourceMove.from}-${sourceMove.to}`);
+                    
+                    return {
+                        immediateStep: {
+                            type: 'open',
+                            branchId: switchToOpen.id,
+                            fromNode: switchToOpen.from,
+                            toNode: switchToOpen.to,
+                            description: `[Alívio de Carga] Abertura prévia da chave ${switchToOpen.from}-${switchToOpen.to}`,
+                            targetState: 0
+                        },
+                        debtMove: {
+                            id: sourceMove.id,
+                            from: sourceMove.from,
+                            to: sourceMove.to,
+                            targetState: 1
+                        }
+                    };
+                }
+            }
         }
-    };
+    }
+
+    // Se varreu toda a lista e nada viabilizou o fechamento da fonte, a ilha está realmente travada.
+    return null;
 }
 
 // O FILTRO DE VIABILIDADE LINEAR (Mantido idêntico)
