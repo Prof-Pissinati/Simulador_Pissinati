@@ -1193,10 +1193,18 @@ const handleShuntChange = useCallback((nodeId, increment) => {
                     onActiveStepChange={(step) => {
                         if (!step) {
                             setSelectedElement(null); 
-                        } else if (step.branchId !== undefined) {
-                            setSelectedElement({ type: 'edge', data: { id: step.branchId } });
-                        } else if (step.nodeId !== undefined) {
-                            setSelectedElement({ type: 'node', id: step.nodeId });
+                        } else {
+                            // Marca o elemento no mapa
+                            if (step.branchId !== undefined) {
+                                setSelectedElement({ type: 'edge', data: { id: step.branchId } });
+                            } else if (step.nodeId !== undefined) {
+                                setSelectedElement({ type: 'node', id: step.nodeId });
+                            }
+                            
+                            // 👇 POPUP DE ALÍVIO DE CARGA / BBM 👇
+                            if (step.isLoadShedding && step.alertMessage) {
+                                showToast(step.alertMessage, 'warning');
+                            }
                         }
                     }}
                     optimizerStatus={optimizerStatus}

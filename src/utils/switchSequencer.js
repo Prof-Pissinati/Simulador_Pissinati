@@ -200,7 +200,10 @@ export function parseSequenceFile(content, currentBranches) {
         if (l.includes('Circuitos Ativos')) { mode = 'active'; continue; }
         if (l.includes('Circuitos Desconectados')) { mode = 'disconnected'; continue; }
         if (/^Sequenciamento/i.test(l)) { mode = 'sequence'; continue; }
+        // 👇 NOVA SEÇÃO ADICIONADA AQUI 👇
+        if (l.includes('Barras em Falta')) { mode = 'faults'; continue; }
 
+        // Mantém a compatibilidade com o formato legado "set BF :="
         if (/^set\s+BF\s*:=/.test(l)) {
             const match = l.match(/set\s+BF\s*:=\s*([\d\s]+);?/);
             if (match?.[1]) {
@@ -212,7 +215,13 @@ export function parseSequenceFile(content, currentBranches) {
             continue;
         }
 
-        // 👇 INSIRA ESTE BLOCO DE VOLTA 👇
+        // 👇 LEITURA DO NOVO FORMATO VERTICAL DE FALTAS 👇
+        if (mode === 'faults') {
+            const id = parseInt(l, 10);
+            if (!isNaN(id)) newFaults.add(id);
+            continue;
+        }
+
         if (mode === 'active' || mode === 'disconnected') {
             // Ignora linhas de controle e o artefato ""
             if (l.startsWith('i') || l.startsWith('set') || l.startsWith('[')) continue;
@@ -230,7 +239,6 @@ export function parseSequenceFile(content, currentBranches) {
             }
             continue;
         }
-        // 👆 FIM DO BLOCO INSERIDO 👆
 
         if (mode === 'sequence') {
             const parts = l.split(/\s+/).filter(p => p !== '');

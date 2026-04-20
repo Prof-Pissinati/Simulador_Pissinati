@@ -144,54 +144,84 @@ export async function runOptimizer(initialSequence, initialState, targetBranches
         }
 
         // Se não encontrou nenhum movimento válido pela Heurística Normal...
+        // Se não encontrou nenhum movimento válido pela Heurística Normal...
         if (!bestMove) {
-            // 👇 A FUGA DA TRAVA CORRIGIDA 👇
             if (justFormedLoop) {
                 justFormedLoop = false; // Desativa a trava
                 if (onProgress) onProgress("Abertura retida. Soltando trava e buscando novas rotas...");
                 console.log("🔓 Trava solta. Reiniciando iteração para buscar fechamentos...");
                 await yieldToMain();
-                
-                // O comando 'continue' volta imediatamente para a linha 'while',
-                // o que vai recarregar todos os 'candidates' radiais de forma limpa!
                 continue; 
             }
 
-            if (onProgress) onProgress("Detonado limite de carga. Calculando fragmentação de ilha...");
-            await yieldToMain();
-
-            // Ativa o Modo SOS enviando a lista de manobras que acabaram de falhar (candidates)
-            const sosResult = fragmentDeadIsland(candidates, currentSnapshot, sysData, targetBranches);
+            // 👇 NOVA LÓGICA: Break-Before-Make (BBM) Oficial 👇
+            // Se travamos por restrição de ENS e temos chaves OFICIAIS para abrir, forçamos a abertura!
+            const pendingOpens = pendingMoves.filter(m => m.targetState === 0);
+            let forcedOpen = null;
             
-           if (sosResult) {
-                // Aplica a abertura de fragmentação na sequência imediatamente
-                sequence.push(sosResult.immediateStep);
-                currentSnapshot = applyStepToSnapshot(sosResult.immediateStep, currentSnapshot);
+            for (const move of pendingOpens) {
+                let testSnapshot = applyStepToSnapshot({ type: 'open', branchId: move.id, fromNode: move.from, toNode: move.to }, currentSnapshot);
+                const ldf = linDistFlowScreening(testSnapshot.branches, testSnapshot.faults, sysData.sources, sysData);
                 
-                // 1. Evita duplicar a fonte na lista (corrige o Fechar 10-38 aparecendo 2x)
-                if (!pendingMoves.some(m => m.id === sosResult.debtMove.id)) {
-                    pendingMoves.push(sosResult.debtMove);
+                // Se for fisicamente seguro (ignora que a ENS aumentou)
+                if (ldf.valid || ldf.reason === "Loop detectado") {
+                    const pfResult = runPowerFlow(testSnapshot.branches, testSnapshot.faults, 'NR', sysData);
+                    if (!checkViolations(pfResult, testSnapshot.branches)) {
+                        forcedOpen = move;
+                        break; // Pega a primeira abertura segura
+                    }
                 }
+            }
 
-                // 👇 2. A CORREÇÃO DA AMNÉSIA 👇
-                // Como o SOS abriu uma chave que não estava nos planos abrir, temos que 
-                // obrigar o robô a fechá-la novamente no futuro!
-                pendingMoves.push({
-                    id: sosResult.immediateStep.branchId,
-                    from: sosResult.immediateStep.fromNode,
-                    to: sosResult.immediateStep.toNode,
-                    targetState: 1 // 1 = Ordem para fechar de volta
-                });
+            if (forcedOpen) {
+                if (onProgress) onProgress(`Break-Before-Make ativado na chave ${forcedOpen.from}-${forcedOpen.to}...`);
+                console.log(`⚠️ BBM ATIVADO: Forçando abertura de ${forcedOpen.from}-${forcedOpen.to} para aliviar o sistema.`);
                 
-                if (onProgress) updateProgressText(sosResult.immediateStep, false, pendingMoves.length, onProgress);
-                await yieldToMain();
-                
-                // Volta para o começo do `while` para tentar a heurística gulosa de novo com a rede mais leve
-                continue; 
+                bestMove = forcedOpen;
+                bestMoveIsLoop = false;
+                bestPLoss = currentPLoss; 
+                bestStepObj = {
+                    type: 'open',
+                    branchId: forcedOpen.id,
+                    fromNode: forcedOpen.from,
+                    toNode: forcedOpen.to,
+                    description: `Abrir chave ${forcedOpen.from}-${forcedOpen.to} (Break-Before-Make)`,
+                    targetState: 0,
+
+                    isLoadShedding: true, 
+                    alertMessage: `⚠️ Alívio de Carga: Abertura forçada da chave ${forcedOpen.from}-${forcedOpen.to} para prevenir sobrecarga no sistema.`
+                };
             } else {
-                // Se o SOS retornar null, significa que a ilha não tem mais chaves para abrir. Aí sim é um Dead End.
-                if (onProgress) onProgress("Busca encerrada: Carga excessiva e sem chaves para seccionamento.");
-                break; 
+                // 👇 CORREÇÃO DA ALUCINAÇÃO DO SOS 👇
+                if (onProgress) onProgress("Detonado limite de carga. Calculando fragmentação de ilha (SOS)...");
+                await yieldToMain();
+
+                // Garante que o SOS só vai tentar ajudar manobras de FECHAR
+                const failedClosures = candidates.filter(m => m.targetState === 1);
+                const sosResult = fragmentDeadIsland(failedClosures, currentSnapshot, sysData, targetBranches);
+                
+                if (sosResult) {
+                    sequence.push(sosResult.immediateStep);
+                    currentSnapshot = applyStepToSnapshot(sosResult.immediateStep, currentSnapshot);
+                    
+                    if (!pendingMoves.some(m => m.id === sosResult.debtMove.id)) {
+                        pendingMoves.push(sosResult.debtMove);
+                    }
+
+                    pendingMoves.push({
+                        id: sosResult.immediateStep.branchId,
+                        from: sosResult.immediateStep.fromNode,
+                        to: sosResult.immediateStep.toNode,
+                        targetState: 1 
+                    });
+                    
+                    if (onProgress) updateProgressText(sosResult.immediateStep, false, pendingMoves.length, onProgress);
+                    await yieldToMain();
+                    continue; 
+                } else {
+                    if (onProgress) onProgress("Busca encerrada: Carga excessiva e sem chaves para seccionamento.");
+                    break; 
+                }
             }
         }
 
@@ -356,7 +386,10 @@ function fragmentDeadIsland(failedClosures, currentSnapshot, sysData, targetBran
                             fromNode: switchToOpen.from,
                             toNode: switchToOpen.to,
                             description: `[Alívio de Carga] Abertura prévia da chave ${switchToOpen.from}-${switchToOpen.to}`,
-                            targetState: 0
+                            targetState: 0,
+
+                            isLoadShedding: true,
+                            alertMessage: `⚠️ Tomada de Carga a Frio: A chave ${switchToOpen.from}-${switchToOpen.to} foi aberta para permitir a energização segura do trecho principal.`
                         },
                         debtMove: {
                             id: sourceMove.id,
