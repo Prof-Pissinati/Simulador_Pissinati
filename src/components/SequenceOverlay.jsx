@@ -13,11 +13,13 @@ export default function SequenceOverlay({
     onToggleStepAction,
     onUpdateStepValue,
     onActiveStepChange, 
-    onExportSequence, // 👈 Nova propriedade recebida
-    onOptimizeSequence, // 👈 Nova prop para o botão
-    optimizerStatus,    // 👈 Nova prop para o texto de progresso
+    onExportSequence, 
+    onOptimizeSequence, 
+    optimizerStatus,    
     onClose,
     darkMode    = true,
+    onMoveStage,   // 👈 Nova Prop: Mover etapa
+    onDeleteStage  // 👈 Nova Prop: Deletar etapa
 }) {
 
     const [collapsedStages, setCollapsedStages] = useState({});
@@ -32,7 +34,6 @@ export default function SequenceOverlay({
     const [isExpanded,   setIsExpanded]   = useState(false); 
     const [draggedIdx,   setDraggedIdx]   = useState(null);
     
-    // 👇 NOVOS ESTADOS PARA MULTI-SELECT 👇
     const [selectedIndices, setSelectedIndices] = useState([]);
     const [lastClickedIdx, setLastClickedIdx]   = useState(null);
 
@@ -77,31 +78,25 @@ export default function SequenceOverlay({
         if (active) active.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     }, [currentStep, isExpanded]);
 
-    // 👇 NOVA LÓGICA DE CLIQUE (Ctrl, Shift, Normal) 👇
     const handleRowClick = (e, idx, stepNum) => {
         if (e.shiftKey && lastClickedIdx !== null) {
-            // Seleciona do último clicado até o atual
             const start = Math.min(lastClickedIdx, idx);
             const end = Math.max(lastClickedIdx, idx);
             const range = [];
             for (let i = start; i <= end; i++) range.push(i);
             setSelectedIndices(range);
         } else if (e.ctrlKey || e.metaKey) {
-            // Adiciona/Remove individualmente
             if (selectedIndices.includes(idx)) setSelectedIndices(selectedIndices.filter(i => i !== idx));
             else setSelectedIndices([...selectedIndices, idx]);
             setLastClickedIdx(idx);
         } else {
-            // Clique Normal: Toca a animação e reseta seleção
             setSelectedIndices([idx]);
             setLastClickedIdx(idx);
             goToStep(stepNum);
         }
     };
 
-    // 👇 NOVA LÓGICA DE ARRASTO EM LOTE 👇
     const handleDragStart = (e, index) => { 
-        // Se o cara arrastar um item que NÃO está selecionado, a seleção reseta só pra ele
         if (!selectedIndices.includes(index)) {
             setSelectedIndices([index]);
         }
@@ -117,23 +112,18 @@ export default function SequenceOverlay({
         if (selectedIndices.length === 0) return;
 
         const indicesToMove = [...selectedIndices].sort((a, b) => a - b);
-        if (indicesToMove.includes(dropIdx)) return; // Evita soltar dentro da própria seleção
+        if (indicesToMove.includes(dropIdx)) return; 
 
         const newSteps = [...steps];
         const itemsToMove = indicesToMove.map(i => newSteps[i]);
 
-        // Remove os itens de trás pra frente para não bagunçar os índices
         for (let i = indicesToMove.length - 1; i >= 0; i--) {
             newSteps.splice(indicesToMove[i], 1);
         }
 
-        // Ajusta o ponto de soltura baseado em quantos itens antes dele foram removidos
         const adjustedDropIdx = dropIdx - indicesToMove.filter(i => i < dropIdx).length;
-
-        // Insere os itens na nova posição
         newSteps.splice(adjustedDropIdx, 0, ...itemsToMove);
 
-        // Atualiza a seleção visual para as novas posições
         const newSelection = itemsToMove.map((_, i) => adjustedDropIdx + i);
         setSelectedIndices(newSelection);
         setDraggedIdx(null);
@@ -186,15 +176,11 @@ export default function SequenceOverlay({
                     </div>
 
                     <div style={{ flex: 1, display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 15 }}>
-                        
-                        {/* 👇 MENSAGEM DO OTIMIZADOR 👇 */}
                         {optimizerStatus && (
                             <div style={{ fontSize: '11px', color: '#00bcd4', marginRight: 'auto', fontStyle: 'italic', animation: 'pulse 1.5s infinite' }}>
                                 {optimizerStatus}
                             </div>
                         )}
-
-                        {/* 👇 NOVO BOTÃO DE RECONFIGURAR 👇 */}
                         {onOptimizeSequence && (
                             <button 
                                 onClick={onOptimizeSequence}
@@ -206,7 +192,6 @@ export default function SequenceOverlay({
                                 ✨ Otimizar
                             </button>
                         )}
-                        {/* 👇 NOVO BOTÃO DE EXPORTAR 👇 */}
                         {onExportSequence && (
                             <button 
                                 onClick={onExportSequence}
@@ -238,12 +223,10 @@ export default function SequenceOverlay({
                     {steps.length === 0 ? (
                         <div style={{ padding: 20, color: muted, textAlign: 'center', fontSize: 13 }}>Lista vazia. Ative a gravação e clique no diagrama para injetar manobras.</div>
                     ) : (
-                        // 👇 O NOVO AGRUPAMENTO POR ETAPAS 👇
                         Object.entries(
                             steps.reduce((acc, step, idx) => {
-                                const stage = step.stage || 'Etapa 1'; // Se não tiver etapa, cai na Etapa 1
+                                const stage = step.stage || 'Etapa 1'; 
                                 if (!acc[stage]) acc[stage] = [];
-                                // Salvamos o idx original como globalIdx para não quebrar seus botões
                                 acc[stage].push({ ...step, globalIdx: idx }); 
                                 return acc;
                             }, {})
@@ -253,24 +236,51 @@ export default function SequenceOverlay({
                             return (
                                 <div key={stageName} style={{ marginBottom: '4px' }}>
                                     
-                                    {/* CABEÇALHO DA PASTA */}
+                                    {/* 👇 O NOVO CABEÇALHO DA PASTA COM OS BOTÕES 👇 */}
                                     <div 
                                         onClick={() => toggleStage(stageName)}
-                                        style={{ background: darkMode ? '#222' : '#eee', padding: '6px 15px', fontSize: '12px', fontWeight: 'bold', color: '#00bcd4', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px', borderTop: `1px solid ${border}`, borderBottom: `1px solid ${border}` }}
+                                        style={{ background: darkMode ? '#222' : '#eee', padding: '6px 15px', fontSize: '12px', fontWeight: 'bold', color: '#00bcd4', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderTop: `1px solid ${border}`, borderBottom: `1px solid ${border}` }}
                                     >
-                                        <span style={{ fontSize: '10px' }}>{isCollapsed ? '▶' : '▼'}</span> 
-                                        {stageName} 
-                                        <span style={{color: muted, fontWeight: 'normal', fontSize: '11px'}}>({stageSteps.length} passos)</span>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                            <span style={{ fontSize: '10px' }}>{isCollapsed ? '▶' : '▼'}</span> 
+                                            {stageName} 
+                                            <span style={{color: muted, fontWeight: 'normal', fontSize: '11px'}}>({stageSteps.length} passos)</span>
+                                        </div>
+
+                                        <div style={{ display: 'flex', gap: '4px' }}>
+                                            {onMoveStage && (
+                                                <>
+                                                    <button 
+                                                        onClick={(e) => { e.stopPropagation(); onMoveStage(stageName, -1); }} 
+                                                        title="Mover Etapa para Cima" 
+                                                        style={{ background: 'transparent', border: 'none', color: text, cursor: 'pointer', padding: '2px 8px', borderRadius: '4px', transition: 'background 0.2s' }}
+                                                        onMouseOver={e => e.target.style.background = surface}
+                                                        onMouseOut={e => e.target.style.background = 'transparent'}
+                                                    >↑</button>
+                                                    <button 
+                                                        onClick={(e) => { e.stopPropagation(); onMoveStage(stageName, 1); }} 
+                                                        title="Mover Etapa para Baixo" 
+                                                        style={{ background: 'transparent', border: 'none', color: text, cursor: 'pointer', padding: '2px 8px', borderRadius: '4px', transition: 'background 0.2s' }}
+                                                        onMouseOver={e => e.target.style.background = surface}
+                                                        onMouseOut={e => e.target.style.background = 'transparent'}
+                                                    >↓</button>
+                                                </>
+                                            )}
+                                            {onDeleteStage && (
+                                                <button 
+                                                    onClick={(e) => { e.stopPropagation(); onDeleteStage(stageName); }} 
+                                                    title="Excluir Etapa Inteira" 
+                                                    style={{ background: 'transparent', border: 'none', color: '#f44336', cursor: 'pointer', padding: '2px 8px', borderRadius: '4px', marginLeft: '4px', transition: 'background 0.2s' }}
+                                                    onMouseOver={e => e.target.style.background = 'rgba(244, 67, 54, 0.15)'}
+                                                    onMouseOut={e => e.target.style.background = 'transparent'}
+                                                >✕</button>
+                                            )}
+                                        </div>
                                     </div>
 
-                                    {/* CONTEÚDO DA PASTA (Suas linhas originais) */}
                                     {!isCollapsed && stageSteps.map((stepWrapper) => {
-                                        
-                                        // Recuperamos o step original e o índice global dele
                                         const step = stepWrapper;
                                         const idx = stepWrapper.globalIdx; 
-                                        
-                                        // 👇 A PARTIR DAQUI É 100% O SEU CÓDIGO ORIGINAL 👇
                                         const stepNum = idx + 1; 
                                         const isDone = stepNum <= currentStep; 
                                         const isCurrent = stepNum === currentStep; 

@@ -538,6 +538,10 @@ export default function Sidebar({
                                         
                                         {liveBranch.state === 1 && (
                                             <>
+                                                {/* 👇 POTÊNCIAS INSERIDAS AQUI (Magnitude em kW/kVAr) 👇 */}
+                                                <div className="inspector-row"><span>Potência P:</span><b>{Math.abs(currentInfo.pFlow).toFixed(2)} kW</b></div>
+                                                <div className="inspector-row"><span>Potência Q:</span><b>{Math.abs(currentInfo.qFlow).toFixed(2)} kVAr</b></div>
+                                                
                                                 <div className="inspector-row"><span>Corrente:</span><b>{currentInfo.current.toFixed(1)} A</b></div>
                                                 <div className="inspector-row"><span>Perdas (I²R):</span><b>{(3 * Math.pow(currentInfo.current, 2) * liveBranch.r / 1000).toFixed(2)} kW</b></div>
                                             </>
