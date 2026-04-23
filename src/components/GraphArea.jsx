@@ -316,7 +316,7 @@ export default function GraphArea({
             setPinnedCards(prev => {
                 const exists = prev.find(p => p.id === branchId && p.type === 'line');
                 if (exists) return prev.filter(p => !(p.id === branchId && p.type === 'line')); 
-                return [...prev, { id: branchId, type: 'line', x: spawnX, y: spawnY }]; 
+                return [...prev, { id: branchId, type: 'line', x: spawnX + 20, y: spawnY + 20 }]; 
             });
             return; 
         }
