@@ -5,6 +5,7 @@ const yieldToMain = () => new Promise(resolve => setTimeout(resolve, 0));
 
 /**
  * Heurística Gulosa Construtiva com Make-Before-Break (Anel Fechado)
+ * Atualizada com Tagueador de Pacotes para o motor VNS
  */
 export async function runOptimizer(initialSequence, initialState, targetBranches, sysData, onProgress) {
     if (onProgress) onProgress("Iniciando Otimização Gulosa...");
@@ -36,6 +37,11 @@ export async function runOptimizer(initialSequence, initialState, targetBranches
     let justFormedLoop = false;
     let iterations = 0;
     
+    // RASTREADORES DE BLOCO PARA O VNS
+    let isSosMode = false;
+    let currentBbmId = null;
+    let pendingPreps = []; // 👈 NOVA SALA DE ESPERA
+
     // 2. Loop de Construção Gulosa
     while (pendingMoves.length > 0 && iterations < 50) {
         iterations++;
@@ -44,7 +50,6 @@ export async function runOptimizer(initialSequence, initialState, targetBranches
         let bestMoveIsLoop = false;
         let bestStepObj = null;
 
-        
         // 0. Espaço de busca total. A física e os desempates definem a ordem.
         let candidates = pendingMoves;
         const pendingOpens = pendingMoves.filter(m => m.targetState === 0);
@@ -144,15 +149,18 @@ export async function runOptimizer(initialSequence, initialState, targetBranches
         }
 
         // Se não encontrou nenhum movimento válido pela Heurística Normal...
-        // Se não encontrou nenhum movimento válido pela Heurística Normal...
         if (!bestMove) {
             if (justFormedLoop) {
                 justFormedLoop = false; // Desativa a trava
+                currentBbmId = null; // Failsafe para limpar o rastreador
                 if (onProgress) onProgress("Abertura retida. Soltando trava e buscando novas rotas...");
                 console.log("🔓 Trava solta. Reiniciando iteração para buscar fechamentos...");
                 await yieldToMain();
                 continue; 
             }
+
+            // 👇 O SISTEMA BATEU NA PAREDE. ATIVA MODO SOS GLOBAL! 👇
+            isSosMode = true; 
 
             // 👇 NOVA LÓGICA: Break-Before-Make (BBM) Oficial 👇
             // Se travamos por restrição de ENS e temos chaves OFICIAIS para abrir, forçamos a abertura!
@@ -201,6 +209,8 @@ export async function runOptimizer(initialSequence, initialState, targetBranches
                 const sosResult = fragmentDeadIsland(failedClosures, currentSnapshot, sysData, targetBranches);
                 
                 if (sosResult) {
+                    // 👇 MARCA O PASSO IMEDIATO DO SOS COM A TAG 👇
+                    sosResult.immediateStep.groupId = 'SOS_BLOCK';
                     sequence.push(sosResult.immediateStep);
                     currentSnapshot = applyStepToSnapshot(sosResult.immediateStep, currentSnapshot);
                     
@@ -228,6 +238,36 @@ export async function runOptimizer(initialSequence, initialState, targetBranches
         if (onProgress) updateProgressText(bestStepObj, bestMoveIsLoop, pendingMoves.length, onProgress);
         await yieldToMain();
 
+        // 👇 A MÁGICA DO TAGUEAMENTO DO VNS 👇
+        if (bestStepObj) {
+            if (isSosMode) {
+                // Modo Exceção: Engessa num blocão só
+                bestStepObj.groupId = 'SOS_BLOCK';
+            } else if (justFormedLoop) {
+                // Fechamento de BBM
+                bestStepObj.groupId = currentBbmId;
+                currentBbmId = null; 
+            } else if (bestMoveIsLoop) {
+                // Abertura de BBM
+                currentBbmId = 'BBM-' + iterations;
+                bestStepObj.groupId = currentBbmId;
+            } else if (bestStepObj.type === 'open') {
+                // Abertura solta preparatória -> Vai para a sala de espera
+                bestStepObj.groupId = 'PREP-' + iterations; 
+                pendingPreps.push(bestStepObj); // 👈 GUARDA AQUI
+            } else {
+                // Fechamento radial puro e limpo
+                const restoreId = 'RESTORE-' + iterations;
+                bestStepObj.groupId = restoreId;
+                
+                // 👇 O PULO DO GATO: O Restore adota as preparações órfãs 👇
+                pendingPreps.forEach(prepStep => {
+                    prepStep.groupId = restoreId; // Muda a etiqueta para formar o par!
+                });
+                pendingPreps = []; // Limpa a sala de espera
+            }
+        }
+
         // Aplica o movimento vencedor
         sequence.push(bestStepObj);
         currentSnapshot = applyStepToSnapshot(bestStepObj, currentSnapshot);
@@ -237,9 +277,27 @@ export async function runOptimizer(initialSequence, initialState, targetBranches
         pendingMoves = pendingMoves.filter(m => m.id !== bestMove.id);
         
         // 👇 5. ATUALIZANDO A MEMÓRIA 👇
-        // (Note que a variável antiga 'loopActive' foi apagada daqui)
         justFormedLoop = bestMoveIsLoop;
     }
+
+    // 👇 ADICIONE ESTE BLOCO FINAL DE LOG 👇
+    console.log("\n========================================================");
+    console.log("🎉 OTIMIZAÇÃO CONCLUÍDA!");
+    console.log("========================================================");
+    console.log("Resumo das Macro-manobras (Pacotes VNS gerados):");
+    
+    // Imprime uma tabela bem formatada no console do navegador
+    console.table(sequence.map((s, index) => {
+        const isFault = s.type.includes('fault');
+        return {
+            Ordem: index + 1,
+            Ação: isFault ? 'FALTA/PROTEÇÃO' : (s.type === 'close' ? 'FECHAR' : 'ABRIR'),
+            Alvo: isFault ? `Barra ${s.nodeId}` : `${s.fromNode}-${s.toNode}`,
+            Pacote_VNS: s.groupId || 'COND_INICIAL',
+            SOS_Alívio: s.isLoadShedding ? 'SIM' : '-'
+        };
+    }));
+    console.log("========================================================\n");
 
     if (onProgress) onProgress(pendingMoves.length === 0 ? "Otimização Concluída com Sucesso!" : "Otimização Parcial (Restrições impediram o estado alvo).");
     return { steps: sequence, method: `Heurística Gulosa (${sequence.length} manobras)` };
@@ -301,110 +359,164 @@ function checkViolations(pfResult, branches) {
  * para fragmentar a carga e permitir a retomada (Cold Load Pick-up).
  */
 // Função auxiliar para o First-Accept: Calcula a potência ativa isolada e ordena
+/**
+ * MODO SOS: Identifica uma ilha desenergizada e abre uma chave interna
+ * para fragmentar a carga e permitir a retomada (Cold Load Pick-up).
+ */
 function rankSwitchesByLostLoad(internalSwitches, currentBranches, sysData) {
     return internalSwitches.map(sw => {
-        let isolatedLoadKW = 0;
-        
-        // Simula a abertura da chave no grafo puramente lógico (sem NR)
-        const testGraph = currentBranches.map(b => b.id === sw.id ? { ...b, state: 0 } : b);
-        
-        // Busca em Largura (BFS) rápida para descobrir quem ficou ilhado
-        // Partimos de um dos nós da chave (vamos testar o 'to', assumindo fluxo radial padrão)
-        // Nota: O ideal é rodar pros dois lados e pegar o lado que não tem caminho para a fonte.
-        const visited = new Set();
-        const queue = [sw.to];
-        visited.add(sw.to);
-        visited.add(sw.from); // Evita cruzar a própria chave de volta
-
-        while (queue.length > 0) {
-            const current = queue.shift();
-            // Soma a carga ativa deste nó
-            if (sysData.loads && sysData.loads[current]) {
-                isolatedLoadKW += sysData.loads[current].P || 0;
-            }
-
-            // Acha os vizinhos conectados por chaves fechadas
-            const neighbors = testGraph.filter(b => b.state === 1 && (b.from === current || b.to === current));
+        // 1. Conta a carga do fragmento do lado FROM
+        let loadFrom = 0;
+        let visitedFrom = new Set([sw.from]);
+        let queueFrom = [sw.from];
+        while (queueFrom.length > 0) {
+            let curr = queueFrom.shift();
+            // 👇 CORREÇÃO DO BUG: Buscando 'p' minúsculo e 'P' maiúsculo por segurança
+            loadFrom += (sysData.loads[curr]?.p || sysData.loads[curr]?.P || 0);
+            const neighbors = currentBranches.filter(b => b.state === 1 && b.id !== sw.id && (b.from === curr || b.to === curr));
             for (const n of neighbors) {
-                const nextNode = n.from === current ? n.to : n.from;
-                if (!visited.has(nextNode)) {
-                    visited.add(nextNode);
-                    queue.push(nextNode);
-                }
+                const next = n.from === curr ? n.to : n.from;
+                if (!visitedFrom.has(next)) { visitedFrom.add(next); queueFrom.push(next); }
             }
         }
 
-        return { branch: sw, lostLoad: isolatedLoadKW };
-    }).sort((a, b) => a.lostLoad - b.lostLoad); // ORDENAÇÃO CRESCENTE (Do menor corte para o maior)
+        // 2. Conta a carga do fragmento do lado TO
+        let loadTo = 0;
+        let visitedTo = new Set([sw.to]);
+        let queueTo = [sw.to];
+        while (queueTo.length > 0) {
+            let curr = queueTo.shift();
+            loadTo += (sysData.loads[curr]?.p || sysData.loads[curr]?.P || 0);
+            const neighbors = currentBranches.filter(b => b.state === 1 && b.id !== sw.id && (b.from === curr || b.to === curr));
+            for (const n of neighbors) {
+                const next = n.from === curr ? n.to : n.from;
+                if (!visitedTo.has(next)) { visitedTo.add(next); queueTo.push(next); }
+            }
+        }
+
+        // A carga que será potencialmente "aliviada" é a menor fatia
+        const shedLoad = Math.min(loadFrom, loadTo);
+        
+        return { branch: sw, shedLoad: shedLoad };
+    })
+    // 👇 O FILTRO DE PODA: Remove sumariamente chaves que não aliviam nada (Zero kW) 👇
+    .filter(item => item.shedLoad > 0.001)
+    // 👇 ORDENAÇÃO: Tenta os menores cortes primeiro (Salva mais carga) 👇
+    .sort((a, b) => a.shedLoad - b.shedLoad);
 }
 
 function fragmentDeadIsland(failedClosures, currentSnapshot, sysData, targetBranches) {
-    // 1. Identifica os nós sem energia no momento
-    const poweredNodes = getPoweredNodes(currentSnapshot.branches, sysData.sources, currentSnapshot.faults);
+    // 1. Identifica quem tem energia AGORA
+    const currentPoweredNodes = getPoweredNodes(currentSnapshot.branches, sysData.sources, currentSnapshot.faults);
     
-    // 2. Mapeia as chaves "internas" (fechadas e dentro da área desenergizada)
+    // 2. Identifica quem terá energia NO FINAL (Zona Alvo)
+    const targetPoweredNodes = getPoweredNodes(targetBranches, sysData.sources, currentSnapshot.faults);
+    
+    // 3. Mapeia as chaves "internas" (Poda Alvo)
     const internalSwitches = currentSnapshot.branches.filter(b => 
-        b.state === 1 && !poweredNodes.has(b.from) && !poweredNodes.has(b.to)
+        b.state === 1 && 
+        !currentPoweredNodes.has(b.from) && 
+        !currentPoweredNodes.has(b.to) &&
+        (targetPoweredNodes.has(b.from) || targetPoweredNodes.has(b.to))
     );
 
     if (internalSwitches.length === 0) return null;
 
-    // 👇 3. APLICA A HEURÍSTICA DE ORDENAÇÃO (FIRST-ACCEPT) 👇
+    // 4. Aplica o ranqueamento
     const rankedSwitches = rankSwitchesByLostLoad(internalSwitches, currentSnapshot.branches, sysData);
-    
-    if (console) console.log("🔍 SOS: Testando chaves ranqueadas por menor perda de carga:", rankedSwitches.map(r => `${r.branch.from}-${r.branch.to} (${r.lostLoad.toFixed(1)}kW)`));
+    if (console) console.log("🔍 SOS: Testando chaves ranqueadas (PÓS-PODA ALVO):", rankedSwitches.map(r => `${r.branch.from}-${r.branch.to} (${r.shedLoad.toFixed(1)}kW)`));
 
-    // 4. A Busca com Antevisão (Lookahead)
-    for (const candidate of rankedSwitches) {
-        const switchToOpen = candidate.branch;
+    // 👇 5. A NOVA LÓGICA BEST-ACCEPT OTIMIZADA (Pré-Ordenação Topológica) 👇
+    const candidatePairs = [];
 
-        for (const sourceMove of failedClosures) {
-            // A Simulação Emparelhada: Abre a chave interna e tenta Fechar a fonte
-            let testSnapshot = applyStepToSnapshot({ 
-                type: 'open', branchId: switchToOpen.id, fromNode: switchToOpen.from, toNode: switchToOpen.to 
-            }, currentSnapshot);
-            
-            testSnapshot = applyStepToSnapshot({ 
-                type: 'close', branchId: sourceMove.id, fromNode: sourceMove.from, toNode: sourceMove.to 
-            }, testSnapshot);
+    // 5.1 PREPARAÇÃO: Gera todos os pares e calcula a carga topológica (Rápido, sem NR)
+    for (const sourceMove of failedClosures) {
+        for (const candidate of rankedSwitches) {
+            const switchToOpen = candidate.branch;
 
-            // Validação linear preliminar
-            const ldf = linDistFlowScreening(testSnapshot.branches, testSnapshot.faults, sysData.sources, sysData);
+            if (switchToOpen.id === sourceMove.id) continue;
 
-            // Se o LDF passar ou der loop (que sabemos que a interface resolve), carimbamos com o NR
-            if (ldf.valid || ldf.reason === "Loop detectado") {
-                const pfResult = runPowerFlow(testSnapshot.branches, testSnapshot.faults, 'NR', sysData);
-                
-                if (!checkViolations(pfResult, testSnapshot.branches)) {
-                    // 🎉 BINGO! Primeira Aceitação ativada. Paramos a busca imediatamente.
-                    console.log(`✅ SOS FIRST-ACCEPT APROVOU: Abrir ${switchToOpen.from}-${switchToOpen.to} viabiliza fechar ${sourceMove.from}-${sourceMove.to}`);
-                    
-                    return {
-                        immediateStep: {
-                            type: 'open',
-                            branchId: switchToOpen.id,
-                            fromNode: switchToOpen.from,
-                            toNode: switchToOpen.to,
-                            description: `[Alívio de Carga] Abertura prévia da chave ${switchToOpen.from}-${switchToOpen.to}`,
-                            targetState: 0,
+            // Aplica os movimentos apenas no grafo
+            let testSnapshot = applyStepToSnapshot({ type: 'open', branchId: switchToOpen.id, fromNode: switchToOpen.from, toNode: switchToOpen.to }, currentSnapshot);
+            testSnapshot = applyStepToSnapshot({ type: 'close', branchId: sourceMove.id, fromNode: sourceMove.from, toNode: sourceMove.to }, testSnapshot);
 
-                            isLoadShedding: true,
-                            alertMessage: `⚠️ Tomada de Carga a Frio: A chave ${switchToOpen.from}-${switchToOpen.to} foi aberta para permitir a energização segura do trecho principal.`
-                        },
-                        debtMove: {
-                            id: sourceMove.id,
-                            from: sourceMove.from,
-                            to: sourceMove.to,
-                            targetState: 1
-                        }
-                    };
-                }
+            // Mede a carga topológica (sem perdas elétricas, só soma de potência)
+            const poweredNodes = getPoweredNodes(testSnapshot.branches, sysData.sources, testSnapshot.faults);
+            let energizedLoad = 0;
+            for (const node of poweredNodes) {
+                energizedLoad += (sysData.loads[node]?.p || sysData.loads[node]?.P || 0);
             }
+            
+            candidatePairs.push({
+                openMove: switchToOpen,
+                closeMove: sourceMove,
+                energizedLoad: energizedLoad,
+                testSnapshot: testSnapshot // Guarda o estado para testar a física depois
+            });
         }
     }
 
-    // Se varreu toda a lista e nada viabilizou o fechamento da fonte, a ilha está realmente travada.
-    return null;
+    // 5.2 ORDENAÇÃO: Coloca as manobras que salvam mais carga no topo da fila
+    candidatePairs.sort((a, b) => b.energizedLoad - a.energizedLoad);
+    
+    if (console) {
+        console.log("\n========================================================");
+        console.log("📊 [FILA DE PRIORIDADE SOS] (Ordenada por Topologia):");
+        console.table(candidatePairs.map((p, i) => ({
+            "Fila": i + 1,
+            "Fechar (Fonte)": `${p.closeMove.from}-${p.closeMove.to}`,
+            "Abrir (Alívio)": `${p.openMove.from}-${p.openMove.to}`,
+            "Carga Alvo (kW)": p.energizedLoad.toFixed(2)
+        })));
+        console.log("========================================================\n");
+    }
+
+    // 5.3 O TESTE FÍSICO (First-Accept na fila inteligente)
+    for (const pair of candidatePairs) {
+        // 1º Escudo: LDF (Rápido)
+        const ldf = linDistFlowScreening(pair.testSnapshot.branches, pair.testSnapshot.faults, sysData.sources, sysData);
+        
+        if (ldf.valid) {
+            // 2º Escudo: Newton-Raphson (Pesado)
+            const pfResult = runPowerFlow(pair.testSnapshot.branches, pair.testSnapshot.faults, 'NR', sysData);
+            
+            if (!checkViolations(pfResult, pair.testSnapshot.branches)) {
+                // 🎉 BINGO! O primeiro que passa é o melhor, pois a fila já está ordenada!
+                console.log(`🏆 SOS BEST-ACCEPT APROVOU: Abrir ${pair.openMove.from}-${pair.openMove.to} para fechar a ${pair.closeMove.from}-${pair.closeMove.to} (Mantém ${pair.energizedLoad.toFixed(1)}kW vivos)`);
+                
+                // Mapeia alternativas para o VNS N3 varrendo as chaves abaixo do vencedor na fila
+                const alternativeIds = candidatePairs
+                    .filter(p => p.closeMove.id === pair.closeMove.id && p.openMove.id !== pair.openMove.id)
+                    .map(p => p.openMove.id);
+
+                return {
+                    immediateStep: {
+                        type: 'open',
+                        branchId: pair.openMove.id,
+                        fromNode: pair.openMove.from,
+                        toNode: pair.openMove.to,
+                        description: `[Alívio de Carga] Abertura prévia da chave ${pair.openMove.from}-${pair.openMove.to}`,
+                        targetState: 0,
+                        isLoadShedding: true,
+                        alertMessage: `⚠️ Tomada de Carga a Frio: A chave ${pair.openMove.from}-${pair.openMove.to} foi aberta para permitir a energização segura do trecho principal.`,
+                        alternatives: alternativeIds
+                    },
+                    debtMove: {
+                        id: pair.closeMove.id,
+                        from: pair.closeMove.from,
+                        to: pair.closeMove.to,
+                        targetState: 1
+                    }
+                };
+            } else {
+                 console.log(`❌ Rejeitado no NR (Violou limites): Abrir ${pair.openMove.from}-${pair.openMove.to}`);
+            }
+        } else {
+             // console.log(`🚫 Rejeitado no LDF (Sobrecarga bruta): Abrir ${pair.openMove.from}-${pair.openMove.to}`);
+        }
+    }
+
+    return null; // Nenhum par da lista sobreviveu à física.
 }
 
 // O FILTRO DE VIABILIDADE LINEAR (Mantido idêntico)

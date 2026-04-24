@@ -19,6 +19,7 @@ import { parseSequenceFile, buildSnapshots, findProtectionSwitches, applyStepToS
 import SequenceOverlay from './components/SequenceOverlay';
 
 import { runOptimizer } from './utils/reconfigOptimizer';
+import { runVNS } from './utils/vnsOptimizer';
 
 function App() {
     const [showReportModal, setShowReportModal] = useState(false);
@@ -387,11 +388,17 @@ function App() {
                         postFaultSnapshot = applyStepToSnapshot(step, postFaultSnapshot); 
                     });
 
+                    // 1. Roda o Guloso para achar a solução inicial
                     const optResult = await runOptimizer(faultSteps, postFaultSnapshot, targetBranches, sysData, setOptimizerStatus);
+
+                    // 2. Roda o VNS sobre a solução do Guloso
+                    const vnsOptimizedSteps = await runVNS(optResult.steps, postFaultSnapshot, sysData, setOptimizerStatus);
                     
-                    optResult.steps.forEach(s => { if(!s.stage) s.stage = stageName; });
-                    finalSteps = optResult.steps;
-                    methodTag = optResult.method;
+                    // 👇 3. A CORREÇÃO: Aplica a etapa na lista do VNS e entrega ela para a Interface 👇
+                    vnsOptimizedSteps.forEach(s => { if(!s.stage) s.stage = stageName; });
+                    
+                    finalSteps = vnsOptimizedSteps; // ✅ AGORA SIM! A interface recebe os blocos agrupados
+                    methodTag = optResult.method + " + VNS"; // Mostra na UI que o VNS atuou!
                 }
 
                 const allSteps = isAppending ? [...sequenceData.steps, ...finalSteps] : finalSteps;
@@ -1285,20 +1292,17 @@ const handleShuntChange = useCallback((nodeId, increment) => {
                     }}
                     optimizerStatus={optimizerStatus}
                     onOptimizeSequence={async () => {
-                        setOptimizerStatus("Iniciando Otimização Manual...");
+                        setOptimizerStatus("Iniciando Otimização VNS (Reordenamento)...");
                         
-                        // 👇 A CORREÇÃO: Pega o estado original (Passo 0) da memória, não da tela!
                         const trueInitialSnapshot = sequenceData.snapshots[0]; 
                         
-                        // Opcional: Se quiser que a interface volte para o início automaticamente para o usuário ver
-                        // setCurrentStep(0); // (Se você tiver acesso ao estado ou quiser passar via prop)
-
-                        const vndResult = await runVND(sequenceData.steps, trueInitialSnapshot, sysData, setOptimizerStatus);
+                        // 👇 3. Chama o VNS manualmente pelo botão 👇
+                        const vnsResultSteps = await runVNS(sequenceData.steps, trueInitialSnapshot, sysData, setOptimizerStatus);
                         
                         setSequenceData({
-                            steps: vndResult.steps,
-                            snapshots: buildSnapshots(trueInitialSnapshot, vndResult.steps, allBoundaryNodes, systemLoads),
-                            method: vndResult.method
+                            steps: vnsResultSteps,
+                            snapshots: buildSnapshots(trueInitialSnapshot, vnsResultSteps, allBoundaryNodes, systemLoads),
+                            method: sequenceData.method.replace(' + VNS', '') + ' + VNS (Manual)'
                         });
                         setTimeout(() => setOptimizerStatus(""), 3000);
                     }}
