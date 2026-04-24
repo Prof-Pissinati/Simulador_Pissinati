@@ -27,7 +27,7 @@ export default function GraphArea({
     selectedElement, hoveredLineId, setHoveredLineId, hoveredNodeId, setHoveredNodeId, maintenanceMode,
     activePositions = {}, activeWaypoints = {}, lineCurrents = {}, nodeData = {}, isEditMode, setIsEditMode, darkMode,
     printFrameMode, isFaultSidebarOpen, onSaveLayoutToHistory, children, onExportRequest, loads,
-    systemLoads, sses, feedersList = [], systemShunts
+    systemLoads, sses, feedersList = [], systemShunts, nodeFeeds
 }) {
     const svgRef = useRef(null);
     const measureRef = useRef(null); 
@@ -771,8 +771,20 @@ export default function GraphArea({
     };
 
     const hoveredBranch = localHoveredLine !== null ? branches.find(b => b.id === localHoveredLine) : null;
-    const hoveredLineData = localHoveredLine !== null ? lineCurrents[localHoveredLine] : null;
-    const hoveredNodeInfo = localHoveredNode !== null && nodeData[localHoveredNode] ? nodeData[localHoveredNode] : null;
+    const hoveredLineData = localHoveredLine !== null ? (lineCurrents[localHoveredLine] || { current: 0, percentage: 0, pFlow: 0, qFlow: 0 }) : null;
+    // 👇 FILTRO DE TENSÃO PARA BARRAS DESENERGIZADAS 👇
+    const isHoveredDead = nodeFeeds && (!nodeFeeds[localHoveredNode] || nodeFeeds[localHoveredNode].size === 0);
+    
+    let hoveredNodeInfo = null;
+    if (localHoveredNode !== null) {
+        // Clona os dados do Newton-Raphson
+        hoveredNodeInfo = { ...(nodeData[localHoveredNode] || { v: 0, ang: 0, p: 0, q: 0 }) };
+        // Se a barra estiver morta, zera a tensão para ignorar o "Flat Start" do algoritmo
+        if (isHoveredDead) {
+            hoveredNodeInfo.v = 0;
+            hoveredNodeInfo.ang = 0;
+        }
+    }
 
     const svgWorldBounds = {
         left:   (-transform.x) / transform.scale,

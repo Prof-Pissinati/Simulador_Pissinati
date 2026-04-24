@@ -7,7 +7,7 @@ const TOOLTIP_H_NODE_LOAD = 90;
 const TOOLTIP_H_NODE_SOURCE = 120; // 👈 Altura extra para caber a tensão nas Subestações e Alimentadores
 
 function smartOffset(anchorX, anchorY, tooltipW, tooltipH, bounds) {
-    //if (!bounds) return { dx: 20, dy: 20 };
+    if (!bounds) return { dx: 20, dy: 20 };
     const dx = (anchorX + 20 + tooltipW > bounds.right)  ? -(tooltipW + 20) : 20;
     const dy = (anchorY + 20 + tooltipH > bounds.bottom) ? -(tooltipH + 20) : 20;
     return { dx, dy };
@@ -137,8 +137,8 @@ export default function SvgTooltips({
 
         const cardH = isSource ? TOOLTIP_H_NODE_SOURCE : (hoveredLoad ? TOOLTIP_H_NODE_LOAD : TOOLTIP_H_NODE_SM);
 
-        const vPu      = nodeInfo.v     ? nodeInfo.v.toFixed(3)     : '1.000';
-        const angle    = nodeInfo.angle ? nodeInfo.angle.toFixed(2)  : '0.00';
+        const vPu      = nodeInfo.v !== undefined ? nodeInfo.v.toFixed(3)     : '1.000';
+        const angle    = nodeInfo.angle !== undefined ? nodeInfo.angle.toFixed(2)  : '0.00';
         const vColor   = (nodeInfo.v < 0.93 || nodeInfo.v > 1.05) ? '#ff5252' : (nodeInfo.v < 0.95 ? '#ffd600' : '#4caf50');
         const loadColor = loadingPercent > 100 ? '#f44336' : (loadingPercent > 80 ? '#ff9800' : '#4caf50');
 

@@ -848,7 +848,20 @@ const handleShuntChange = useCallback((nodeId, increment) => {
 
     const handleDeleteStage = (stageName) => {
         if (!window.confirm(`Deseja excluir toda a "${stageName}"?`)) return;
-        const newSteps = sequenceData.steps.filter(s => s.stage !== stageName);
+        
+        // 👇 PULO DO GATO: Se a etapa for manual, assume 'Etapa 1' para o filtro funcionar
+        const newSteps = sequenceData.steps.filter(s => {
+            const stepStage = s.stage || 'Etapa 1';
+            return stepStage !== stageName;
+        });
+
+        // Se o usuário apagou a última etapa restante, fecha o sequenciador de vez
+        if (newSteps.length === 0) {
+            setSequenceData(null);
+            setSeqOverlayOpen(false);
+            return;
+        }
+
         const baseSnapshot = sequenceData.snapshots[0];
         setSequenceData({
             ...sequenceData,
@@ -1032,6 +1045,7 @@ const handleShuntChange = useCallback((nodeId, increment) => {
                         activeWaypoints={activeWaypoints} 
                         lineCurrents={lineCurrents} 
                         nodeData={nodeData} 
+                        nodeFeeds={nodeFeeds}
                         isEditMode={isEditMode} 
                         setIsEditMode={setIsEditMode} 
                         onSaveLayoutToHistory={saveLayoutToHistory} 
@@ -1183,7 +1197,18 @@ const handleShuntChange = useCallback((nodeId, increment) => {
                     darkMode={darkMode}
                     isRecording={isRecordingSeq}
                     onToggleRecording={() => setIsRecordingSeq(!isRecordingSeq)}
-                    onClose={() => { setSeqOverlayOpen(false); setIsRecordingSeq(false); }}
+                    onClose={() => { 
+                        setSeqOverlayOpen(false); 
+                        setIsRecordingSeq(false); 
+                        setSequenceData(null); // 👈 ISSO MATA A MEMÓRIA DA SEQUÊNCIA MANUAL
+                        
+                        // Retorna o sistema ao normal ao fechar
+                        if (initialBranchesRef.current && initialBranchesRef.current.length > 0) {
+                            setBranches(JSON.parse(JSON.stringify(initialBranchesRef.current)));
+                        } else {
+                            setBranches(prev => prev.map(b => ({ ...b, state: 1 })));
+                        }
+                    }}
                     onHoverBranch={setHoveredSeqBranch}
                     onApplySnapshot={(snapshot) => {
                         setBranches(snapshot.branches);

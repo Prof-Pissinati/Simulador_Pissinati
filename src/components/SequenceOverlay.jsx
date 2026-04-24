@@ -149,7 +149,35 @@ export default function SequenceOverlay({
                     <div style={{ height: '100%', background: '#00bcd4', width: `${progress}%`, transition: 'width 0.3s ease', boxShadow: '0 0 10px rgba(0, 188, 212, 0.8)' }} />
                 </div>
 
+                {/* 👇 NOVA PÍLULA FLUTUANTE DE STATUS 👇 */}
+                {optimizerStatus && (
+                    <div style={{ 
+                        position: 'absolute', 
+                        top: '0px', 
+                        left: '50%', 
+                        transform: 'translateX(-50%)', 
+                        fontSize: '11px', 
+                        color: '#00bcd4', 
+                        fontWeight: 'bold',
+                        fontStyle: 'italic', 
+                        animation: 'pulse 1.5s infinite', 
+                        pointerEvents: 'none',
+                        background: darkMode ? 'rgba(20,20,20,0.85)' : 'rgba(255,255,255,0.9)',
+                        padding: '4px 16px',
+                        borderRadius: '12px',
+                        border: `1px solid ${border}`,
+                        boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
+                        zIndex: 10,
+                        whiteSpace: 'nowrap'
+                    }}>
+                        ✨ {optimizerStatus}
+                    </div>
+                )}
+                {/* 👆 FIM DA PÍLULA 👆 */}
+
+                {/* 👇 INÍCIO DA SUBSTITUIÇÃO DO CABEÇALHO 👇 */}
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 20px', gap: '20px' }}>
+                    {/* ESQUERDA: Textos de Passo e Método */}
                     <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                             <span style={{ fontSize: 11, color: muted, background: surface, padding: '2px 8px', borderRadius: '12px' }}>Passo {currentStep} de {steps.length}</span>
@@ -160,64 +188,41 @@ export default function SequenceOverlay({
                         </div>
                     </div>
 
-                    <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                        <button onClick={() => { setIsPlaying(false); goToStep(currentStep - 1); }} disabled={currentStep === 0} title="Anterior" style={ctrlBtnStyle(darkMode, currentStep === 0)}>◀</button>
-                        <button onClick={() => setIsPlaying(p => !p)} disabled={currentStep === steps.length} style={{...ctrlBtnStyle(darkMode, currentStep === steps.length), background: isPlaying ? '#f44336' : '#00bcd4', color: '#000', fontWeight: 'bold', width: '110px'}}> {isPlaying ? '⏸ Pausar' : '▶ Play'} </button>
-                        <button onClick={() => { setIsPlaying(false); goToStep(currentStep + 1); }} disabled={currentStep === steps.length} title="Próximo" style={ctrlBtnStyle(darkMode, currentStep === steps.length)}>▶</button>
-                        
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: muted, marginLeft: 10 }}>
-                            <span>{(playInterval / 1000).toFixed(1)}s</span>
-                            <input type="range" min={400} max={3000} step={100} value={playInterval} onChange={e => setPlayInterval(Number(e.target.value))} style={{ width: '50px', cursor: 'pointer' }} title="Velocidade" />
+                    {/* CENTRO: Player e ENS (Tamanho Fixo Blindado) */}
+                    <div style={{ display: 'flex', alignItems: 'center', width: '360px', flexShrink: 0, justifyContent: 'center' }}>
+                        <div style={{ display: 'flex', gap: 8, alignItems: 'center', width: '200px' }}>
+                            <button onClick={() => { setIsPlaying(false); goToStep(currentStep - 1); }} disabled={currentStep === 0} title="Anterior" style={ctrlBtnStyle(darkMode, currentStep === 0)}>◀</button>
+                            <button onClick={() => setIsPlaying(p => !p)} disabled={currentStep === steps.length} style={{...ctrlBtnStyle(darkMode, currentStep === steps.length), background: isPlaying ? '#f44336' : '#00bcd4', color: '#000', fontWeight: 'bold', width: '95px'}}> {isPlaying ? '⏸ Pausa' : '▶ Play'} </button>
+                            <button onClick={() => { setIsPlaying(false); goToStep(currentStep + 1); }} disabled={currentStep === steps.length} title="Próximo" style={ctrlBtnStyle(darkMode, currentStep === steps.length)}>▶</button>
+                        </div>
+                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', width: '150px', borderLeft: `1px solid ${border}`, paddingLeft: '15px' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 10, color: muted, marginBottom: '2px' }}>
+                                <span>{(playInterval / 1000).toFixed(1)}s</span>
+                                <input type="range" min={400} max={3000} step={100} value={playInterval} onChange={e => setPlayInterval(Number(e.target.value))} style={{ width: '40px', cursor: 'pointer' }} title="Velocidade" />
+                            </div>
+                            <div style={{ fontSize: '11px', color: muted, whiteSpace: 'nowrap' }}>
+                                Penalidade ENS: <span style={{ color: '#ff9800', fontWeight: 'bold', fontSize: '12px' }}>{currentSnapshot.accumulatedENS.toFixed(0)} kW</span>
+                            </div>
                         </div>
                     </div>
 
-                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '2px', borderLeft: `1px solid ${border}`, paddingLeft: '15px' }}>
-                        <div style={{ fontSize: '12px', color: muted }}>Penalidade ENS: <span style={{ color: '#ff9800', fontWeight: 'bold' }}>{currentSnapshot.accumulatedENS.toFixed(0)} kW</span></div>
-                    </div>
-
-                    <div style={{ flex: 1, display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 15 }}>
-                        {optimizerStatus && (
-                            <div style={{ fontSize: '11px', color: '#00bcd4', marginRight: 'auto', fontStyle: 'italic', animation: 'pulse 1.5s infinite' }}>
-                                {optimizerStatus}
-                            </div>
-                        )}
+                    {/* DIREITA: Botões de Ação */}
+                    <div style={{ flex: 1, display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 10, position: 'relative' }}>
                         {onOptimizeSequence && (
-                            <button 
-                                onClick={onOptimizeSequence}
-                                style={{ background: 'rgba(0, 188, 212, 0.15)', border: `1px solid #00bcd4`, color: '#00bcd4', padding: '4px 10px', borderRadius: '6px', fontSize: '12px', fontWeight: 'bold', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '5px', transition: 'all 0.2s' }}
-                                title="Rodar Algoritmo de Otimização (VND)"
-                                onMouseOver={e => e.target.style.background = 'rgba(0, 188, 212, 0.3)'}
-                                onMouseOut={e => e.target.style.background = 'rgba(0, 188, 212, 0.15)'}
-                            >
-                                ✨ Otimizar
-                            </button>
+                            <button onClick={onOptimizeSequence} style={{ background: 'rgba(0, 188, 212, 0.15)', border: `1px solid #00bcd4`, color: '#00bcd4', padding: '4px 10px', borderRadius: '6px', fontSize: '12px', fontWeight: 'bold', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '5px', transition: 'all 0.2s' }} title="Rodar Algoritmo de Otimização">✨ Otimizar</button>
                         )}
                         {onExportSequence && (
-                            <button 
-                                onClick={onExportSequence}
-                                style={{ background: 'transparent', border: `1px solid ${border}`, color: text, padding: '4px 10px', borderRadius: '6px', fontSize: '12px', fontWeight: 'bold', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '5px', transition: 'all 0.2s' }}
-                                title="Exportar Sequência Modificada (.txt)"
-                                onMouseOver={e => e.target.style.background = surface}
-                                onMouseOut={e => e.target.style.background = 'transparent'}
-                            >
-                                Exportar
-                            </button>
+                            <button onClick={onExportSequence} style={{ background: 'transparent', border: `1px solid ${border}`, color: text, padding: '4px 10px', borderRadius: '6px', fontSize: '12px', fontWeight: 'bold', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '5px' }}>Exportar</button>
                         )}
-
-                        <button 
-                            onClick={onToggleRecording}
-                            style={{ background: isRecording ? 'rgba(244, 67, 54, 0.15)' : 'transparent', border: `1px solid ${isRecording ? '#f44336' : border}`, color: isRecording ? '#f44336' : muted, padding: '4px 10px', borderRadius: '6px', fontSize: '12px', fontWeight: 'bold', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '5px', transition: 'all 0.2s' }}
-                            title="Ativar/Desativar Gravação de Cliques no Diagrama"
-                        >
-                            <span style={{ animation: isRecording ? 'pulse 1.5s infinite' : 'none' }}>⏺</span>
-                            {isRecording ? 'Gravando' : 'Gravar'}
+                        <button onClick={onToggleRecording} style={{ background: isRecording ? 'rgba(244, 67, 54, 0.15)' : 'transparent', border: `1px solid ${isRecording ? '#f44336' : border}`, color: isRecording ? '#f44336' : muted, padding: '4px 10px', borderRadius: '6px', fontSize: '12px', fontWeight: 'bold', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '5px' }}>
+                            <span style={{ animation: isRecording ? 'pulse 1.5s infinite' : 'none' }}>⏺</span> {isRecording ? 'Gravando' : 'Gravar'}
                         </button>
-                        
                         <div style={{ width: '1px', height: '24px', background: border }}></div>
-                        <button onClick={() => setIsExpanded(!isExpanded)} style={iconBtnStyle(darkMode)} title={isExpanded ? "Ocultar Lista" : "Mostrar Lista"}>{isExpanded ? '🔽' : '🔼'}</button>
+                        <button onClick={() => setIsExpanded(!isExpanded)} style={iconBtnStyle(darkMode)} title="Lista de Manobras">{isExpanded ? '🔽' : '🔼'}</button>
                         <button onClick={onClose} style={{...iconBtnStyle(darkMode), color: '#f44336'}} title="Fechar (Esc)">✖</button>
                     </div>
                 </div>
+                {/* 👆 FIM DA SUBSTITUIÇÃO 👆 */}
 
                 <div style={{ maxHeight: isExpanded ? '45vh' : '0px', opacity: isExpanded ? 1 : 0, overflowY: 'auto', transition: 'max-height 0.3s ease, opacity 0.3s ease', borderTop: isExpanded ? `1px solid ${border}` : 'none', background: darkMode ? 'rgba(0,0,0,0.4)' : 'rgba(0,0,0,0.02)' }} ref={listRef}>
                     {steps.length === 0 ? (
