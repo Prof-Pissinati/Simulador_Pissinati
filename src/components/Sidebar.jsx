@@ -1,5 +1,4 @@
 import React, { useRef } from 'react';
-import { SYSTEM_DATA } from '../data/systemData';
 
 // Função para converter grandezas de potência automaticamente
 const formatPower = (kw, isMini = false) => {
@@ -33,6 +32,9 @@ export default function Sidebar({
     nodeData,
     systemLoads,
     systemShunts,
+    vBase,
+    sBase,
+    sses,
     handleTapChange,
     handleShuntChange,
     viewMode,
@@ -133,42 +135,13 @@ export default function Sidebar({
                             }
                         }
 
-                        const vbase = SYSTEM_DATA?.Vbase || 13.8; 
+                        const currentVBase = vBase || 13.8; 
                         const S = Math.sqrt((totalP)**2 + (totalQ)**2);
-                        const I = S / (Math.sqrt(3) * vbase);
+                        const I = S / (Math.sqrt(3) * currentVBase);
                         const inFault = faultNodes.has(subId);
                         const cardColor = getNodeColor ? getNodeColor(subId) : 'var(--eng-orange)';
                         
-                        // 👇 INÍCIO DA NOVA LÓGICA PARA OS ALIMENTADORES 👇
-                        // Essa lógica faz um "raio-x" seguindo o fluxo de energia
-                        let nodeCount = 0;
-                        if (isFeeder) {
-                            const visited = new Set([subId]);
-                            const queue = [subId];
-                            while (queue.length > 0) {
-                                const current = queue.shift();
-                                branches.forEach(b => {
-                                    // Só avança se a linha estiver fechada e com energia
-                                    if (b.state === 1 && lineCurrents && lineCurrents[b.id]) {
-                                        const flow = lineCurrents[b.id].pFlow;
-                                        let nextNode = null;
-                                        
-                                        // Se a energia flui do nó atual para o próximo, ele é um filho (downstream)
-                                        if (b.from === current && flow > 0.001) nextNode = b.to;
-                                        if (b.to === current && flow < -0.001) nextNode = b.from;
-                                        
-                                        if (nextNode && !visited.has(nextNode) && !faultNodes.has(nextNode)) {
-                                            visited.add(nextNode);
-                                            queue.push(nextNode);
-                                            nodeCount++;
-                                        }
-                                    }
-                                });
-                            }
-                        } else {
-                            nodeCount = loads[subId]?.nodes || 0; // A SUB Principal pega o valor corrigido do motor
-                        }
-                        // 👆 FIM DA NOVA LÓGICA 👇
+                        const nodeCount = loads[subId]?.nodes || 0;
 
                         return (
                             <div key={subId} className={`load-card lc-${subId}`} style={{ borderTop: `4px solid ${cardColor}` }} title={`${isFeeder ? 'ALIM' : 'SUB'} ${subId}`}>
@@ -261,7 +234,7 @@ export default function Sidebar({
 
                         let sLimit = 1000, loadingPercent = 0, loadColor = vColor;
                         if (isSource) {
-                            sLimit = (SYSTEM_DATA.sses && SYSTEM_DATA.sses[selectedElement.id]) ? SYSTEM_DATA.sses[selectedElement.id] : 1000;
+                            sLimit = (sses && sses[selectedElement.id]) ? sses[selectedElement.id] : 1000;
                             loadingPercent = (totalS / sLimit) * 100;
                             loadColor = loadingPercent > 100 ? '#d50000' : (loadingPercent > 75 ? '#ff9800' : '#4caf50');
                         }

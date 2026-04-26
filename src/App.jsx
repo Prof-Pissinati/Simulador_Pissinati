@@ -22,22 +22,34 @@ import { runOptimizer } from './utils/reconfigOptimizer';
 import { runVNS } from './utils/vnsOptimizer';
 
 function App() {
+    
+    // Configurações Base do Sistema (Unificadas)
+    const [vBase, setVBase] = useState(13.8);
+    const [sBase, setSBase] = useState(1000);
+    const [sses, setSses] = useState({});
+
     const [showReportModal, setShowReportModal] = useState(false);
-    const [activeSources, setActiveSources] = useState([101, 102, 104]);
+    const [activeSources, setActiveSources] = useState(SYSTEM_DATA.sources || []);
     const [darkMode, setDarkMode] = useState(true); 
     // Controle de Visualização: 'schematic' (Diagrama SVG) ou 'map' (Georreferenciado Leaflet)
     const [viewMode, setViewMode] = useState('schematic');
-    const [branches, setBranches] = useState(() => SYSTEM_DATA.branches.map((b, idx) => ({ 
-        ...b, id: idx, state: (b.initialState !== undefined ? b.initialState : (b.state !== undefined ? b.state : 1)) 
-    })));
-
-    const initialBranchesRef = useRef(SYSTEM_DATA.branches.map((b, idx) => ({ 
-        ...b, id: idx, state: (b.initialState !== undefined ? b.initialState : (b.state !== undefined ? b.state : 1)) 
-    })));
     
+    // condições iniciais do sistema são carregadas a partir do SYSTEM_DATA, mas podem ser alteradas pelo usuário.
+    //const [branches, setBranches] = useState(() => SYSTEM_DATA.branches.map((b, idx) => ({ ...b, id: idx, state: (b.initialState !== undefined ? b.initialState : (b.state !== undefined ? b.state : 1)) })));
+    //const initialBranchesRef = useRef(SYSTEM_DATA.branches.map((b, idx) => ({ ...b, id: idx, state: (b.initialState !== undefined ? b.initialState : (b.state !== undefined ? b.state : 1)) })));
+    
+    // O sistema agora nasce vazio, sem chaves e sem peso na memória
+    const [branches, setBranches] = useState([]);
+    const initialBranchesRef = useRef([]);
+
+
     const [faultNodes, setFaultNodes] = useState(new Set());
 
+    // Implementação para o sistema de redução de calculo NR
+    const [lastEventNodes, setLastEventNodes] = useState(new Set());
+
     const [systemShunts, setSystemShunts] = useState(SYSTEM_DATA.shunts || {});
+    const [systemFeeders, setSystemFeeders] = useState(SYSTEM_DATA.feeders || []);
     
     const [sequenceData, setSequenceData] = useState(null);
     const [seqOverlayOpen, setSeqOverlayOpen] = useState(false);
@@ -81,7 +93,7 @@ function App() {
     const loadNodes = allNodes.filter(n => !sources.includes(n));
 
     // 👇 IMPORTANTE: Esta lista mista blinda os barramentos para o Sequenciador 👇
-    const allBoundaryNodes = useMemo(() => [...sources, ...(SYSTEM_DATA.feeders || [])], [sources]);
+    const allBoundaryNodes = useMemo(() => [...sources, ...systemFeeders], [sources, systemFeeders]);
 
     const [optimizerStatus, setOptimizerStatus] = useState("");
 
@@ -160,12 +172,13 @@ function App() {
 
     const sysData = useMemo(() => ({
         sources: activeSources, 
+        feeders: systemFeeders,
         loads: systemLoads, 
-        Vbase: SYSTEM_DATA.Vbase || 13.8,
-        Sbase: SYSTEM_DATA.Sbase || 1000,
+        Vbase: vBase, // 👈 Dinâmico
+        Sbase: sBase, // 👈 Dinâmico
         shunts: systemShunts || {}, 
-        sses: SYSTEM_DATA.sses || {}      
-    }), [activeSources, branches, systemLoads, systemShunts]);
+        sses: sses    // 👈 Dinâmico
+    }), [activeSources, systemLoads, systemShunts, systemFeeders, vBase, sBase, sses]);
 
     const nodeFeeds = useMemo(() => propagateFeeds(branches, faultNodes, sysData), [branches, faultNodes, sysData]);
     const loads = useMemo(() => calculateLoads(nodeFeeds, faultNodes, sysData), [nodeFeeds, faultNodes, sysData]);
@@ -175,29 +188,38 @@ function App() {
         loadNodes.forEach(nodeId => {
             const feeds = nodeFeeds[nodeId];
             if ((!feeds || feeds.size === 0) && !faultNodes.has(nodeId)) {
-                const load = SYSTEM_DATA.loads[nodeId];
+                // 👇 CORREÇÃO: Usa o 'systemLoads' que veio da importação, não o arquivo fixo!
+                const load = systemLoads[nodeId]; 
                 if (load) { totalP += load.p || 0; totalQ += load.q || 0; count++; }
             }
         });
         const sKVA = Math.sqrt(Math.pow(totalP, 2) + Math.pow(totalQ, 2));
-        const estimatedCurrent = sKVA / (Math.sqrt(3) * 12.43); 
+        // 👇 Usa o vBase dinâmico
+        const estimatedCurrent = sKVA / (Math.sqrt(3) * vBase); 
         return { p: totalP, q: totalQ, current: estimatedCurrent || 0, count: count };
-    }, [loadNodes, nodeFeeds, faultNodes]);
+    }, [loadNodes, nodeFeeds, faultNodes, systemLoads, vBase]);
 
+    // Bloco atualizado para implementar redução do cálculo de fluxo de carga usando os "lastEventNodes"
     const powerFlowResults = useMemo(() => {
+
+        // Se não há ramos, não há o que calcular
+        if (!branches || branches.length === 0) return { nodes: {}, lines: {} };
+
+
         const cached = CacheManager.get(branches, faultNodes, calcMethod, sysData);
         if (cached) return cached;
-        const result = runPowerFlow(branches, faultNodes, calcMethod, sysData); 
+        // Passamos o lastEventNodes aqui no final:
+        const result = runPowerFlow(branches, faultNodes, calcMethod, sysData, lastEventNodes); 
         CacheManager.set(branches, faultNodes, calcMethod, sysData, result);
         return result;
-    }, [branches, faultNodes, calcMethod, sysData]);
+    }, [branches, faultNodes, calcMethod, sysData, lastEventNodes]);
 
     const lineCurrents = powerFlowResults.lines;
     const nodeData = powerFlowResults.nodes;
 
-    const feedersList = SYSTEM_DATA.feeders || [];
+    // Usa o Estado Oficial do React
     const { getNodeColor, getEdgeColor } = useColorIntelligence({
-        branches, faultNodes, activeSources, nodeFeeds, lineCurrents, darkMode, feedersList
+        branches, faultNodes, activeSources, nodeFeeds, lineCurrents, darkMode, feedersList: systemFeeders
     });
 
     const effectiveHoveredLineId = hoveredSeqBranch !== null ? hoveredSeqBranch : hoveredLineId;
@@ -222,6 +244,7 @@ function App() {
         setProjectPositions,
         setProjectWaypoints,
         showToast,
+        setSystemFeeders,
         initialBranchesRef
     });
 
@@ -493,6 +516,12 @@ const handleExportSequence = useCallback(() => {
             return;
         }
 
+        // 👇 MODO AO VIVO: ATUALIZADO PARA INFORMAR O ESCUDO 👇
+        const branchToToggle = branches.find(b => b.id === branchId);
+        if (branchToToggle) {
+            setLastEventNodes(new Set([branchToToggle.from, branchToToggle.to]));
+        }
+
         setBranches(prev => prev.map(b => b.id === branchId ? { ...b, state: b.state === 1 ? 0 : 1 } : b));
         showToast('Chave alterada', 'success');
     };
@@ -687,47 +716,9 @@ const handleShuntChange = useCallback((nodeId, increment) => {
         }
     };
 
-    const handleLoadExample = () => {
-        const defaultBranches = SYSTEM_DATA.branches.map((b, idx) => ({ 
-            ...b, id: idx, state: (b.initialState !== undefined ? b.initialState : (b.state !== undefined ? b.state : 1)) 
-        }));
-        
-        setBranches(defaultBranches);
-        initialBranchesRef.current = JSON.parse(JSON.stringify(defaultBranches)); 
-        setSystemLoads(SYSTEM_DATA.loads); 
-        setSystemShunts(SYSTEM_DATA.shunts || {});
-        setActiveSources(SYSTEM_DATA.sources || [101, 102, 104]); 
-        
-        // 👇 AQUI ESTÁ O SEGREDO: Resetar as posições para o mapa do 53! 👇
-        setProjectPositions(SYSTEM_DATA.positionsProject || {});
-        setProjectWaypoints(SYSTEM_DATA.waypointsProject || {});
-
-        setFaultNodes(new Set());
-        window.dispatchEvent(new CustomEvent('resetGraphLayout'));
-        setIsProjectLoaded(true);
-    };
-
-    const handleLoadSystem54 = () => {
-        const defaultBranches = SYSTEM_DATA_SHUNT.branches.map((b, idx) => ({
-            ...b, id: idx, state: (b.initialState !== undefined ? b.initialState : (b.state !== undefined ? b.state : 1)) 
-        }));
-        
-        setBranches(defaultBranches);
-        initialBranchesRef.current = JSON.parse(JSON.stringify(defaultBranches)); 
-        setSystemLoads(SYSTEM_DATA_SHUNT.loads); 
-        setSystemShunts(SYSTEM_DATA_SHUNT.shunts || {});
-        setActiveSources(SYSTEM_DATA_SHUNT.sources || [1000]);
-        SYSTEM_DATA.feeders = SYSTEM_DATA_SHUNT.feeders;
-        SYSTEM_DATA.sses = SYSTEM_DATA_SHUNT.sses;
-        
-        // 👇 AQUI ESTÁ O SEGREDO: Puxar as posições do mapa do 54! 👇
-        setProjectPositions(SYSTEM_DATA_SHUNT.positionsProject || {});
-        setProjectWaypoints(SYSTEM_DATA_SHUNT.waypointsProject || {});
-
-        setFaultNodes(new Set());
-        window.dispatchEvent(new CustomEvent('resetGraphLayout'));
-        setIsProjectLoaded(true);
-    };
+    // Botões da Tela Inicial agora apenas chamam o carregador:
+    const handleLoadExample = () => applySystemData(SYSTEM_DATA, "IEEE 53");
+    const handleLoadSystem54 = () => applySystemData(SYSTEM_DATA_SHUNT, "IEEE 54 Shunt");
 
     const handleDownloadTemplate = () => {
         const templateContent = `# Modelo de Arquivo...`; 
@@ -740,12 +731,12 @@ const handleShuntChange = useCallback((nodeId, increment) => {
 
     const handleExportFullState = useCallback((positions, waypoints) => {
         const exportData = {
-            version: "1.0", systemName: "Sistema Salvo", baseKV: SYSTEM_DATA.Vbase || 13.8, sBase: SYSTEM_DATA.Sbase || 1000, 
-            sources: sources, 
-            feeders: SYSTEM_DATA.feeders || [],
-            sses: SYSTEM_DATA.sses || {},
-            shunts: SYSTEM_DATA.shunts || {},
-            loads: SYSTEM_DATA.loads, 
+            version: "1.0", systemName: "Sistema Salvo", baseKV: vBase, sBase: sBase, 
+            sources: activeSources, 
+            feeders: systemFeeders,
+            sses: sses,
+            shunts: systemShunts,
+            loads: systemLoads,
             branches: branches, 
             faults: Array.from(faultNodes), 
             layout: { positions: positions, waypoints: waypoints }
@@ -761,9 +752,9 @@ const handleShuntChange = useCallback((nodeId, increment) => {
         const handleApplyFullState = (e) => {
             const data = e.detail;
             
-            if (data.feeders) SYSTEM_DATA.feeders = data.feeders;
-            if (data.sses) SYSTEM_DATA.sses = data.sses;
-            if (data.shunts) SYSTEM_DATA.shunts = data.shunts;
+            if (data.feeders) setSystemFeeders(data.feeders);
+            if (data.sses) setSses(data.sses);
+            if (data.shunts) setSystemShunts(data.shunts);
 
             if (data.branches) setBranches(data.branches);
             if (data.faults) setFaultNodes(new Set(data.faults));
@@ -832,7 +823,7 @@ const handleShuntChange = useCallback((nodeId, increment) => {
     };
 
     const handleExportSVG = () => { 
-        exportSVG('sistema-eletrico-svg', 'diagrama_sistema.svg', calcMethod, sources, feedersList, darkMode); 
+        exportSVG('sistema-eletrico-svg', 'diagrama_sistema.svg', calcMethod, sources, systemFeeders, darkMode); 
         showToast('Diagrama vetorizado baixado!', 'success'); 
     };
     
@@ -892,6 +883,92 @@ const handleShuntChange = useCallback((nodeId, increment) => {
             snapshots: buildSnapshots(baseSnapshot, reorderedSteps, allBoundaryNodes, systemLoads)
         });
     };
+
+    // 👇 BLACK START BLINDADO (Recebe os 3 parâmetros diretamente da importação) 👇
+    const runBlackStart = useCallback((targetBranches, targetSources, targetFeeders) => {
+        
+        // 1. Usa os parâmetros frescos injetados na função!
+        const feederNodes = new Set((targetFeeders || []).map(Number));
+        const allSources = (targetSources || []).map(Number);
+        
+        //console.log("🎬 BLACK START INICIADO!");
+        //console.log("⚡ Fontes (Sources) recebidas:", allSources);
+        //console.log("🔌 Alimentadores (Feeders) recebidos:", Array.from(feederNodes));
+
+        // 2. A verdadeira raiz é quem é Source mas NÃO É Alimentador
+        const trueRoots = allSources.filter(s => !feederNodes.has(s));
+
+        if (trueRoots.length === 0) {
+            console.warn("⚠️ ALERTA: Nenhuma fonte principal encontrada! Verifique o arquivo de dados.");
+        }
+
+        // 3. Define as raízes
+        const rootSourcesSet = new Set(trueRoots.length > 0 ? trueRoots : allSources);
+        const rootBranchIds = [];
+        
+        // 4. Blackout seletivo nas Chaves Mestras da Subestação
+        const blackoutState = targetBranches.map(b => {
+            const isMasterSwitch = rootSourcesSet.has(Number(b.from)) || rootSourcesSet.has(Number(b.to));
+
+            if (b.state === 1 && isMasterSwitch) {
+                rootBranchIds.push(b.id);
+                return { ...b, state: 0 }; 
+            }
+            return { ...b };
+        });
+
+        //console.log("✂️ CHAVES DA SUBESTAÇÃO ABERTAS:", rootBranchIds);
+        setBranches(blackoutState);
+
+        // 5. Religamento em Cascata
+        let index = 0;
+        const interval = setInterval(() => {
+            if (index >= rootBranchIds.length) {
+                clearInterval(interval);
+                return;
+            }
+
+            const branchToClose = rootBranchIds[index];
+            setBranches(prev => prev.map(b => 
+                b.id === branchToClose ? { ...b, state: 1 } : b
+            ));
+            
+            index++;
+        }, 600);
+    }, []); // 👈 O array vazio garante que a função é imune ao atraso do React
+
+    // 👇 FUNÇÃO DE CARREGAMENTO UNIFICADA 👇
+    const applySystemData = useCallback((data, sourceName = "Externo") => {
+        // 1. Processa os ramos (Topologia)
+        const targetBranches = data.branches.map((b, idx) => ({ 
+            ...b, id: idx, state: (b.initialState !== undefined ? b.initialState : (b.state !== undefined ? b.state : 1)) 
+        }));
+
+        // 2. Alimenta os Estados Vivos do React (A nossa "variável de importação")
+        setBranches(targetBranches);
+        initialBranchesRef.current = JSON.parse(JSON.stringify(targetBranches)); 
+        
+        setSystemLoads(data.loads || {}); 
+        setSystemShunts(data.shunts || {});
+        setActiveSources(data.sources || []); 
+        setSystemFeeders(data.feeders || []);
+
+        // 3. Alimenta as Configurações de Base (Resolve o Hardcode)
+        setVBase(data.Vbase || 13.8);
+        setSBase(data.Sbase || 1000);
+        setSses(data.sses || {});
+
+        // 4. Layout e Interface
+        setProjectPositions(data.positionsProject || {});
+        setProjectWaypoints(data.waypointsProject || {});
+        setFaultNodes(new Set());
+        setIsProjectLoaded(true);
+
+        // 5. Dispara a animação (Black Start) com os dados recém-unificados
+        runBlackStart(targetBranches, data.sources || [], data.feeders || []);
+
+        console.log(`⚙️ Sistema [${sourceName}] carregado com sucesso na Engine Unificada.`);
+    }, [runBlackStart]);
 
     if (!isProjectLoaded) {
         return (
@@ -969,15 +1046,18 @@ const handleShuntChange = useCallback((nodeId, increment) => {
                         systemSize={Math.max(0, allNodes.length)} 
                         disconnectedStats={disconnectedStats} 
                         lineCurrents={lineCurrents} 
-                        feedersList={SYSTEM_DATA.feeders || []}
+                        feedersList={systemFeeders}
                         nodeData={nodeData}
                         systemLoads={systemLoads}
                         systemShunts={systemShunts}
+                        setViewMode={setViewMode}
+                        sBase={sBase}
+                        sses={sses}
                         handleTapChange={handleTapChange}
                         handleShuntChange={handleShuntChange}
                         // 👇 AS DUAS LINHAS NOVAS AQUI 👇
                         viewMode={viewMode}
-                        setViewMode={setViewMode}
+                        vBase={vBase} 
                     />
                 ) : (
                     <EditSidebar 
@@ -1051,8 +1131,8 @@ const handleShuntChange = useCallback((nodeId, increment) => {
                         onSaveLayoutToHistory={saveLayoutToHistory} 
                         loads={loads} systemLoads={systemLoads} 
                         onExportRequest={handleExportFullState} 
-                        sses={SYSTEM_DATA.sses} 
-                        feedersList={SYSTEM_DATA.feeders || []} 
+                        sses={sses} 
+                        feedersList={systemFeeders} 
                         handleTapChange={handleTapChange}
                         systemShunts={systemShunts} 
                         handleShuntChange={handleShuntChange}
@@ -1068,17 +1148,10 @@ const handleShuntChange = useCallback((nodeId, increment) => {
                                 </div>
                                 
                                 {sources.map(s => (
-                                    <div key={s} className="legend-item">
-                                        <div className="legend-dot" style={{ background: getBaseColor(s, [...sources, ...feedersList], darkMode) }}></div> 
-                                        SUB {s}
-                                    </div>
+                                    <div key={s} className="legend-item"><div className="legend-dot" style={{ background: getBaseColor(s, [...sources, ...systemFeeders], darkMode) }}></div> SUB {s}</div>
                                 ))}
-                                
-                                {feedersList.map(f => (
-                                    <div key={f} className="legend-item">
-                                        <div className="legend-dot" style={{ background: getBaseColor(f, [...sources, ...feedersList], darkMode) }}></div> 
-                                        ALIM {f}
-                                    </div>
+                                {systemFeeders.map(f => (
+                                    <div key={f} className="legend-item"><div className="legend-dot" style={{ background: getBaseColor(f, [...sources, ...systemFeeders], darkMode) }}></div> ALIM {f}</div>
                                 ))}
 
                                 <div className="legend-item"><div className="legend-dot" style={{ background: THEME.light.fault }}></div> Falta/Sobrecarga</div>
@@ -1092,7 +1165,8 @@ const handleShuntChange = useCallback((nodeId, increment) => {
                         darkMode={darkMode}
                         branches={branches} 
                         sources={sources} 
-                        feedersList={SYSTEM_DATA.feeders || []} 
+                        feedersList={systemFeeders} 
+                        sses={sses}
                         getEdgeColor={getEdgeColor} 
                         getNodeColor={getNodeColor} 
                         toggleSwitch={toggleSwitch} 
@@ -1100,7 +1174,7 @@ const handleShuntChange = useCallback((nodeId, increment) => {
                         setSelectedElement={setSelectedElement} 
                         nodeData={nodeData}
                         lineCurrents={lineCurrents}
-                        isEditMode={isEditMode} /* 👈 AQUI ESTÁ O GATILHO DE EDIÇÃO! */
+                        isEditMode={isEditMode}
                         systemShunts={systemShunts}
                         hoveredLineId={hoveredLineId}
                         setHoveredLineId={setHoveredLineId}
@@ -1108,7 +1182,6 @@ const handleShuntChange = useCallback((nodeId, increment) => {
                         setHoveredNodeId={setHoveredNodeId}
                         loads={loads}
                         systemLoads={systemLoads}
-                        sses={SYSTEM_DATA.sses}
                     >
                         {/* 👇 A LEGENDA AGORA É ENVIADA PARA DENTRO DO MAPA 👇 */}
                         {showLegend && (
@@ -1121,10 +1194,10 @@ const handleShuntChange = useCallback((nodeId, increment) => {
                                     </div>
                                 </div>
                                 {sources.map(s => (
-                                    <div key={s} className="legend-item"><div className="legend-dot" style={{ background: getBaseColor(s, [...sources, ...feedersList], darkMode) }}></div> SUB {s}</div>
+                                    <div key={s} className="legend-item"><div className="legend-dot" style={{ background: getBaseColor(s, [...sources, ...systemFeeders], darkMode) }}></div> SUB {s}</div>
                                 ))}
-                                {feedersList.map(f => (
-                                    <div key={f} className="legend-item"><div className="legend-dot" style={{ background: getBaseColor(f, [...sources, ...feedersList], darkMode) }}></div> ALIM {f}</div>
+                                {systemFeeders.map(f => (
+                                    <div key={f} className="legend-item"><div className="legend-dot" style={{ background: getBaseColor(f, [...sources, ...systemFeeders], darkMode) }}></div> ALIM {f}</div>
                                 ))}
                                 <div className="legend-item"><div className="legend-dot" style={{ background: THEME.light.fault }}></div> Falta/Sobrecarga</div>
                                 <div className="legend-item"><div className="legend-dot" style={{ background: THEME.light.loop }}></div> Loop</div>
@@ -1153,7 +1226,7 @@ const handleShuntChange = useCallback((nodeId, increment) => {
                         darkMode={darkMode} 
                         THEME={THEME} 
                         branches={branches} 
-                        feedersList={SYSTEM_DATA.feeders || []} 
+                        feedersList={systemFeeders}
                         
                         // 👇 ADICIONADO PARA A LISTA DE CHAVES QUE AGORA FICA AQUI 👇
                         toggleSwitch={toggleSwitch}

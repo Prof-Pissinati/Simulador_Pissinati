@@ -6,7 +6,6 @@ export const CacheManager = {
     getKey: (branches, faultNodes, method, sysData) => {
         const branchState = branches.map(b => `${b.id}:${b.state}:${b.currentTap || 0}`).join('|');
         const faultState = Array.from(faultNodes).sort().join(',');
-        // Ensina o cache a "ler" os estágios dos capacitores
         const shuntState = sysData && sysData.shunts ? Object.entries(sysData.shunts).map(([id, s]) => `${id}:${s.steps}`).join(',') : '';
         return `${method}-${branchState}-${faultState}-${shuntState}`;
     },
@@ -19,130 +18,255 @@ export const CacheManager = {
         this.cache.set(key, result);
     }
 };
+
+// 👇 0. O NOVO CÉREBRO: O Particionador de Ilhas (Block-Diagonalization) 👇
+function partitionIntoIslands(branches, sources, faultNodes) {
+    const activeBranches = branches.filter(b => b.state === 1);
+    const adj = {};
+    activeBranches.forEach(b => {
+        if (!adj[b.from]) adj[b.from] = [];
+        if (!adj[b.to]) adj[b.to] = [];
+        adj[b.from].push({ node: b.to, branch: b });
+        adj[b.to].push({ node: b.from, branch: b });
+    });
+
+    const islands = [];
+    const visitedNodes = new Set(faultNodes); // Faltas bloqueiam a criação de ilhas
+    const visitedBranches = new Set();
+    const sourceSet = new Set(sources);
+
+    sources.forEach(source => {
+        if (faultNodes.has(source)) return;
+        if (!adj[source]) return;
+
+        // Cada ramo saindo da Subestação é um potencial Alimentador Independente
+        adj[source].forEach(({ node: startNode, branch: startBranch }) => {
+            if (faultNodes.has(startNode) || visitedBranches.has(startBranch.id)) return;
+
+            // Inicia uma nova Ilha
+            const island = {
+                sources: new Set([source]),
+                nodes: new Set([source]),
+                branches: new Map()
+            };
+
+            const queue = [startNode];
+            visitedNodes.add(startNode);
+            island.nodes.add(startNode);
+            island.branches.set(startBranch.id, startBranch);
+            visitedBranches.add(startBranch.id);
+
+            let head = 0;
+            while (head < queue.length) {
+                const u = queue[head++];
+                if (!adj[u]) continue;
+
+                adj[u].forEach(({ node: v, branch: b }) => {
+                    if (faultNodes.has(v)) return;
+
+                    if (!visitedBranches.has(b.id)) {
+                        island.branches.set(b.id, b);
+                        visitedBranches.add(b.id);
+                    }
+
+                    if (sourceSet.has(v)) {
+                        island.sources.add(v);
+                        island.nodes.add(v);
+                    } else if (!visitedNodes.has(v)) {
+                        visitedNodes.add(v);
+                        island.nodes.add(v);
+                        queue.push(v);
+                    }
+                });
+            }
+            
+            islands.push({
+                sources: Array.from(island.sources),
+                nodes: island.nodes,
+                branches: Array.from(island.branches.values())
+            });
+        });
+    });
+
+    return islands;
+}
+
 // --- FUNÇÃO PRINCIPAL DE FLUXO DE POTÊNCIA ---
-export function runPowerFlow(branches, faultNodes, method = 'NR', sysData){
+export function runPowerFlow(branches, faultNodes, method = 'NR', sysData, eventNodes = new Set()){ 
     CacheManager.cache.clear();
 
-    const { sources = [], loads = {}, Vbase = 13.8, Sbase = 1000, shunts = {} } = sysData || {};
-
+    const { Vbase = 13.8, Sbase = 1000, sources = [] } = sysData || {};
+    
     if (sources.length === 0) {
         console.warn("Nenhuma fonte definida no sistema!");
-        return buildResult([], [], [], 1, branches, new Map(), new Set(), sysData);
+        return { nodes: {}, lines: {} };
     }
 
-    const energizedNodes = new Set();
-    const adj = {};
-    
-    branches.forEach(b => {
-        if (b.state === 1) {
+    // 👇 1. O PARTICIONADOR DIVIDE O MAPA EM PEDAÇOS 👇
+    const islands = partitionIntoIslands(branches, sources, faultNodes);
+    console.log(`🧩 Fatoração em Blocos: O sistema foi dividido em ${islands.length} ilha(s) eletricamente independente(s).`);
+
+    const finalNodes = {};
+    const finalLines = {};
+
+    sources.forEach(s => {
+        finalNodes[s] = { v: 1.0, angle: 0, p: 0, q: 0 };
+    });
+
+    // 👇 2. O MOTOR PROCESSA CADA ILHA ISOLADAMENTE 👇
+    islands.forEach((island, index) => {
+        const islandSysData = { ...sysData, sources: island.sources };
+        
+        // NOVO: Verifica se esta ilha possui algum BC ativo
+        const hasActiveShunt = Array.from(island.nodes).some(id => 
+            islandSysData.shunts[id] && islandSysData.shunts[id].steps > 0
+        );
+
+        // NOVO: Se tiver BC, blinda a ilha inteira. Se não, usa só o escudo de manobras normal.
+        const currentShield = new Set(eventNodes);
+        if (hasActiveShunt) {
+            island.nodes.forEach(id => currentShield.add(id));
+            console.log(`   ✨ Ilha ${index + 1} possui BC ativo. Redutor desativado para garantir fidelidade V².`);
+        }
+
+        // Passa o currentShield dinâmico para o redutor
+        const { reducedBranches, reducedSysData, pruneHistory } = reduceSystemTopology(
+            island.branches, 
+            faultNodes, 
+            islandSysData, 
+            currentShield // 👈 Usa o escudo atualizado aqui
+        );
+        
+        console.log(`   🔹 Ilha ${index + 1}: NR calculará ${reducedBranches.length} ramos (Original da ilha: ${island.branches.length})`);
+
+        const islandNodesSet = new Set(island.sources);
+        const adj = {};
+        
+        reducedBranches.forEach(b => {
             if (!adj[b.from]) adj[b.from] = [];
             if (!adj[b.to]) adj[b.to] = [];
             adj[b.from].push(b.to);
             adj[b.to].push(b.from);
-        }
-    });
+        });
 
-    const queue = [];
-    sources.forEach(s => {
-        if (!faultNodes.has(s)) {
-            energizedNodes.add(s);
-            queue.push(s);
-        }
-    });
-
-    let head = 0;
-    while(head < queue.length){
-        const u = queue[head++];
-        if(adj[u]){
-            adj[u].forEach(v => {
-                if(!energizedNodes.has(v) && !faultNodes.has(v)){
-                    energizedNodes.add(v);
-                    queue.push(v);
-                }
-            });
-        }
-    }
-
-    const nodes = Array.from(energizedNodes).sort((a,b) => a-b);
-    const n = nodes.length;
-    
-    if (n === 0) return buildResult([], [], [], 1, branches, new Map(), new Set(), sysData);
-
-    const nodeMap = new Map(nodes.map((id, index) => [id, index]));
-    const Zbase = (Math.pow(Vbase, 2) * 1000) / Sbase;
-
-    const G = Array(n).fill(0).map(() => Array(n).fill(0));
-    const B = Array(n).fill(0).map(() => Array(n).fill(0));
-
-    branches.forEach(branch => {
-        if (branch.state !== 1) return;
-        if (!nodeMap.has(branch.from) || !nodeMap.has(branch.to)) return;
-        
-        const u = nodeMap.get(branch.from);
-        const v = nodeMap.get(branch.to);
-        
-        const r_pu = branch.r / Zbase;
-        const x_pu = branch.x / Zbase;
-        const mag2 = r_pu**2 + x_pu**2;
-        
-        if (mag2 < 1e-20) return; 
-
-        const g = r_pu / mag2;
-        const b_line = -x_pu / mag2; 
-        
-        let a = 1.0;
-        if (branch.isRegulator && branch.maxTaps > 0) {
-            const regMaxPu = branch.regMax > 1 ? branch.regMax / 100 : (branch.regMax || 0.1); 
-            a = 1.0 + (branch.currentTap * (regMaxPu / branch.maxTaps));
-        }
-        const a2 = a * a;
-        
-        G[u][v] -= g / a; 
-        B[u][v] -= b_line / a;
-        G[v][u] -= g / a; 
-        B[v][u] -= b_line / a;
-        
-        G[u][u] += g / a2; 
-        B[u][u] += b_line / a2;
-        G[v][v] += g; 
-        B[v][v] += b_line;
-    });
-
-    // INJEÇÃO DOS BANCOS DE CAPACITORES (SHUNTS)
-    nodes.forEach((id, i) => {
-        if (shunts[id] && shunts[id].steps > 0) {
-            const b_shunt_pu = (shunts[id].steps * shunts[id].stepSize) / Sbase;
-            B[i][i] += b_shunt_pu;
-        }
-    });
-
-    let V = Array(n).fill(1.0);
-    let Theta = Array(n).fill(0.0);
-    const P_spec = Array(n).fill(0);
-    const Q_spec = Array(n).fill(0);
-    const busType = Array(n).fill(0); 
-
-    nodes.forEach((id, i) => {
-        if (sources.includes(id)) {
-            busType[i] = 1; 
-            V[i] = 1.0; 
-            Theta[i] = 0.0;
-        } else {
-            const load = loads[id]; 
-            if (load) {
-                P_spec[i] = -(load.p / Sbase);
-                Q_spec[i] = -(load.q / Sbase);
+        const queue = [...island.sources];
+        let head = 0;
+        while(head < queue.length){
+            const u = queue[head++];
+            if(adj[u]){
+                adj[u].forEach(v => {
+                    if(!islandNodesSet.has(v)){
+                        islandNodesSet.add(v);
+                        queue.push(v);
+                    }
+                });
             }
         }
+
+        const nodes = Array.from(islandNodesSet).sort((a,b) => a-b);
+        const n = nodes.length;
+
+        if (n === 0 || reducedBranches.length === 0) {
+            const emptyResult = buildResult([], [], [], 1, reducedBranches, new Map(), new Set(), reducedSysData);
+            const expanded = expandSystemResults(emptyResult, pruneHistory, islandSysData, island.branches);
+            Object.assign(finalNodes, expanded.nodes);
+            Object.assign(finalLines, expanded.lines);
+            return; 
+        }
+
+        const nodeMap = new Map(nodes.map((id, idx) => [id, idx]));
+        const Zbase = (Math.pow(Vbase, 2) * 1000) / Sbase;
+
+        const G = Array(n).fill(0).map(() => Array(n).fill(0));
+        const B = Array(n).fill(0).map(() => Array(n).fill(0));
+
+        reducedBranches.forEach(branch => {
+            if (!nodeMap.has(branch.from) || !nodeMap.has(branch.to)) return;
+            
+            const u = nodeMap.get(branch.from);
+            const v = nodeMap.get(branch.to);
+            
+            const r_pu = branch.r / Zbase;
+            const x_pu = branch.x / Zbase;
+            const mag2 = r_pu**2 + x_pu**2;
+            
+            if (mag2 < 1e-20) return; 
+
+            const g = r_pu / mag2;
+            const b_line = -x_pu / mag2; 
+            
+            let a = 1.0;
+            if (branch.isRegulator && branch.maxTaps > 0) {
+                const regMaxPu = branch.regMax > 1 ? branch.regMax / 100 : (branch.regMax || 0.1); 
+                a = 1.0 + (branch.currentTap * (regMaxPu / branch.maxTaps));
+            }
+            const a2 = a * a;
+            
+            G[u][v] -= g / a; 
+            B[u][v] -= b_line / a;
+            G[v][u] -= g / a; 
+            B[v][u] -= b_line / a;
+            
+            G[u][u] += g / a2; 
+            B[u][u] += b_line / a2;
+            G[v][v] += g; 
+            B[v][v] += b_line;
+        });
+
+        nodes.forEach((id, i) => {
+            if (reducedSysData.shunts[id] && reducedSysData.shunts[id].steps > 0) {
+                const b_shunt_pu = (reducedSysData.shunts[id].steps * reducedSysData.shunts[id].stepSize) / Sbase;
+                B[i][i] += b_shunt_pu;
+            }
+        });
+
+        let V = Array(n).fill(1.0);
+        let Theta = Array(n).fill(0.0);
+        const P_spec = Array(n).fill(0);
+        const Q_spec = Array(n).fill(0);
+        const busType = Array(n).fill(0); 
+
+        nodes.forEach((id, i) => {
+            if (island.sources.includes(id)) {
+                busType[i] = 1; 
+                V[i] = 1.0; 
+                Theta[i] = 0.0;
+            } else {
+                const load = reducedSysData.loads[id]; 
+                if (load) {
+                    P_spec[i] = -(load.p / Sbase);
+                    Q_spec[i] = -(load.q / Sbase);
+                }
+            }
+        });
+
+        if (method === 'GS') {
+            solveGaussSeidel(n, busType, P_spec, Q_spec, G, B, V, Theta);
+        } else {
+            solveNewtonRaphson(n, busType, P_spec, Q_spec, G, B, V, Theta);
+        }
+
+        const pfResult = buildResult(nodes, V, Theta, Zbase, reducedBranches, nodeMap, islandNodesSet, reducedSysData);
+        
+        // Expande o resultado exclusivo desta ilha
+        const expanded = expandSystemResults(pfResult, pruneHistory, islandSysData, island.branches);
+        
+        // "Cola" o pedaço finalizado no Mapa Geral
+        Object.assign(finalNodes, expanded.nodes);
+        Object.assign(finalLines, expanded.lines);
     });
 
-    if (method === 'GS') {
-        solveGaussSeidel(n, busType, P_spec, Q_spec, G, B, V, Theta);
-    } else {
-        solveNewtonRaphson(n, busType, P_spec, Q_spec, G, B, V, Theta);
-    }
+    // 👇 3. TRAVA GLOBAL (Mantém a tela viva para o que não foi calculado) 👇
+    branches.forEach(b => {
+        if (!finalLines[b.id]) {
+            const limitCurrent = b.Imax || b.imax || b.capacity || b.limit || 1000;
+            finalLines[b.id] = { current: 0, percentage: 0, pFlow: 0, qFlow: 0, limitCurrent };
+        }
+        if (!finalNodes[b.from]) finalNodes[b.from] = { v: 0, angle: 0, p: 0, q: 0 };
+        if (!finalNodes[b.to]) finalNodes[b.to] = { v: 0, angle: 0, p: 0, q: 0 };
+    });
 
-    return buildResult(nodes, V, Theta, Zbase, branches, nodeMap, energizedNodes, sysData);
+    return { nodes: finalNodes, lines: finalLines };
 }
 
 function solveGaussSeidel(n, busType, P_spec, Q_spec, G, B, V, Theta) {
@@ -345,88 +469,270 @@ function buildResult(nodes, V, Theta, Zbase, branches, nodeMap, energizedNodes, 
     return { nodes: nodeResults, lines: lineResults };
 }
 
+// 👇 PROPAGAÇÃO DE ENERGIA (Com Hierarquia e Barreiras Radiais) 👇
 export function propagateFeeds(branches, faultNodes, sysData) {
-    const { sources = [] } = sysData || {}; 
-    const nodes = new Set();
-    
-    sources.forEach(s => nodes.add(s)); 
-    branches.forEach(b => { nodes.add(b.from); nodes.add(b.to); });
-    
     const nodeFeeds = {};
-    Array.from(nodes).forEach(n => nodeFeeds[n] = new Set());
-    
-    sources.forEach(s => { 
-        if (!faultNodes.has(s) && nodeFeeds[s]) nodeFeeds[s].add(s); 
-    });
-    
+    const { sources = [], feeders = [] } = sysData || {};
+    const activeBranches = branches.filter(b => b.state === 1);
+
     const adj = {};
-    branches.forEach(b => {
-        if (b.state === 1) {
-            if (!adj[b.from]) adj[b.from] = [];
-            if (!adj[b.to]) adj[b.to] = [];
-            adj[b.from].push(b.to);
-            adj[b.to].push(b.from);
+    activeBranches.forEach(b => {
+        if (!adj[b.from]) adj[b.from] = [];
+        if (!adj[b.to]) adj[b.to] = [];
+        adj[b.from].push(b.to);
+        adj[b.to].push(b.from);
+    });
+
+    const allSources = [...sources, ...feeders];
+    allSources.forEach(s => {
+        if (!nodeFeeds[s]) nodeFeeds[s] = new Set();
+        nodeFeeds[s].add(s);
+    });
+
+    // 1. A Transmissão (Fontes Principais): Propagam por TUDO
+    sources.forEach(source => {
+        if (faultNodes.has(source)) return;
+        const queue = [source];
+        const visited = new Set([source]);
+
+        let head = 0;
+        while (head < queue.length) {
+            const u = queue[head++];
+            if (!adj[u]) continue;
+            adj[u].forEach(v => {
+                if (!visited.has(v) && !faultNodes.has(v)) {
+                    visited.add(v);
+                    if (!nodeFeeds[v]) nodeFeeds[v] = new Set();
+                    nodeFeeds[v].add(source);
+                    queue.push(v);
+                }
+            });
         }
     });
-    
-    let changed = true;
-    for(let i=0; i<100 && changed; i++) {
-        changed = false;
-        Object.keys(adj).forEach(u => {
-            const uInt = parseInt(u);
-            if(faultNodes.has(uInt)) return;
-            adj[u].forEach(v => {
-                if(faultNodes.has(v)) return;
-                
-                if (!nodeFeeds[u] || !nodeFeeds[v]) return; 
 
-                const before = nodeFeeds[v].size;
-                nodeFeeds[u].forEach(s => nodeFeeds[v].add(s));
-                if(nodeFeeds[v].size > before) changed = true;
+    // 2. A Distribuição (Alimentadores): Propagam apenas no seu ramal
+    feeders.forEach(feeder => {
+        if (faultNodes.has(feeder)) return;
+        const queue = [feeder];
+        const visited = new Set([feeder]);
+
+        let head = 0;
+        while (head < queue.length) {
+            const u = queue[head++];
+            if (!adj[u]) continue;
+            adj[u].forEach(v => {
+                if (!visited.has(v) && !faultNodes.has(v)) {
+                    // 👇 A BARREIRA INVISÍVEL: Impede que o Alimentador invada a rede vizinha 👇
+                    if (sources.includes(v) || feeders.includes(v)) return;
+
+                    visited.add(v);
+                    if (!nodeFeeds[v]) nodeFeeds[v] = new Set();
+                    nodeFeeds[v].add(feeder);
+                    queue.push(v);
+                }
             });
-        });
-    }
+        }
+    });
+
     return nodeFeeds;
 }
 
-// 👇 CÁLCULO DE CARGA ATUALIZADO PARA ABATER O REATIVO DO CAPACITOR 👇
+// 👇 CÁLCULO DE CARGA (Com Contagem Hierárquica Múltipla) 👇
 export function calculateLoads(nodeFeeds, faultNodes, sysData) {
     const subs = {};
-    const { sources = [], loads = {}, shunts = {} } = sysData || {};
+    const { sources = [], feeders = [], loads = {}, shunts = {} } = sysData || {};
     
-    sources.forEach(s => {
-        subs[s] = {p:0, q:0, nodes:0};
+    // Inicializa os painéis (SUB e ALIM)
+    const allSources = [...sources, ...feeders];
+    allSources.forEach(s => {
+        subs[s] = { p: 0, q: 0, nodes: 0 };
     });
 
     Object.keys(nodeFeeds).forEach(n => {
         const id = parseInt(n);
-        if(!sources.includes(id) && !faultNodes.has(id)) {
+        if (!allSources.includes(id) && !faultNodes.has(id)) {
             const feeds = nodeFeeds[id];
-            if(feeds && feeds.size >= 1) {
-                const s = Array.from(feeds)[0];
-                if(subs[s]) {
-                    let nodeP = 0;
-                    let nodeQ = 0;
-                    
-                    // Soma a carga normal
-                    if (loads[id]) {
-                        nodeP += loads[id].p || 0;
-                        nodeQ += loads[id].q || 0;
-                        subs[s].nodes++;
-                    }
-                    
-                    // Subtrai a carga reativa injetada pelos bancos de capacitores
-                    if (shunts[id] && shunts[id].steps > 0) {
-                        nodeQ -= (shunts[id].steps * shunts[id].stepSize);
-                    }
-                    
-                    subs[s].p += nodeP;
-                    subs[s].q += nodeQ;
+            
+            if (feeds && feeds.size > 0) {
+                // Calcula P e Q da barra uma única vez
+                let nodeP = 0;
+                let nodeQ = 0;
+                
+                if (loads[id]) {
+                    nodeP += loads[id].p || 0;
+                    nodeQ += loads[id].q || 0;
                 }
+                
+                if (shunts[id] && shunts[id].steps > 0) {
+                    nodeQ -= (shunts[id].steps * shunts[id].stepSize);
+                }
+                
+                // 👇 A MÁGICA: Adiciona a barra em TODAS as fontes que a alimentam! 👇
+                feeds.forEach(s => {
+                    if (subs[s]) {
+                        subs[s].nodes++; 
+                        subs[s].p += nodeP;
+                        subs[s].q += nodeQ;
+                    }
+                });
             }
         }
     });
+
     return subs;
+}
+// 👇 1. REDUTOR TOPOLÓGICO (Agora com Compensação de Perdas I²R) 👇
+export function reduceSystemTopology(branches, faultNodes, sysData, eventNodes = new Set()) {
+    const { sources = [], loads = {}, shunts = {}, Vbase = 13.8, Sbase = 1000 } = sysData;
+    const Zbase = (Vbase * Vbase) / (Sbase / 1000);
+    
+    const reducedLoads = JSON.parse(JSON.stringify(loads));
+    const activeBranches = branches.filter(b => b.state === 1);
+    const branchMap = new Map(activeBranches.map(b => [b.id, { ...b }]));
+    
+    const adj = {}; const degree = {};
+    activeBranches.forEach(b => {
+        if (!adj[b.from]) { adj[b.from] = new Set(); degree[b.from] = 0; }
+        if (!adj[b.to])   { adj[b.to]   = new Set(); degree[b.to]   = 0; }
+        adj[b.from].add(b.id); adj[b.to].add(b.id);
+        degree[b.from]++; degree[b.to]++;
+    });
+
+    const protectedNodes = new Set([...sources, ...Array.from(faultNodes), ...Array.from(eventNodes)]);
+    
+    // Protege as barras com BC ativo para que o Newton-Raphson calcule o V² exato
+    Object.keys(sysData.shunts || {}).forEach(id => {
+        if (sysData.shunts[id] && sysData.shunts[id].steps > 0) {
+            protectedNodes.add(parseInt(id));
+        }
+    });
+
+    const leavesQueue = [];
+    Object.keys(degree).forEach(nodeStr => {
+        const nodeId = parseInt(nodeStr);
+        if (degree[nodeId] === 1 && !protectedNodes.has(nodeId)) leavesQueue.push(nodeId);
+    });
+
+    const pruneHistory = [];
+
+    while (leavesQueue.length > 0) {
+        const leafId = leavesQueue.shift();
+        if (degree[leafId] !== 1 || protectedNodes.has(leafId)) continue;
+
+        const branchId = Array.from(adj[leafId])[0];
+        const branch = branchMap.get(branchId);
+        if (!branch) continue;
+
+        const parentId = branch.from === leafId ? branch.to : branch.from;
+
+        let pLeaf = reducedLoads[leafId]?.p || 0;
+        let qLeaf = reducedLoads[leafId]?.q || 0;
+        if (shunts[leafId]) qLeaf -= (shunts[leafId].steps * shunts[leafId].stepSize);
+
+        // 👇 A MÁGICA DA COMPENSAÇÃO DE PERDAS (I²R e I²X) 👇
+        const Ppu = pLeaf / Sbase;
+        const Qpu = qLeaf / Sbase;
+        const Rpu = branch.r / Zbase;
+        const Xpu = branch.x / Zbase;
+        
+        // Assumimos V ≈ 1.0 pu para estimar a perda de potência na linha apagada
+        // Ploss = R * I^2 -> R * (S/V)^2. Se V=1, fica apenas R * S^2
+        const Ploss_pu = Rpu * (Ppu * Ppu + Qpu * Qpu);
+        const Qloss_pu = Xpu * (Ppu * Ppu + Qpu * Qpu);
+        
+        const pTotal = pLeaf + (Ploss_pu * Sbase);
+        const qTotal = qLeaf + (Qloss_pu * Sbase);
+
+        if (!reducedLoads[parentId]) reducedLoads[parentId] = { p: 0, q: 0 };
+        // Transferimos a carga da ponta + a perda gerada na linha!
+        reducedLoads[parentId].p += pTotal;
+        reducedLoads[parentId].q += qTotal;
+
+        pruneHistory.push({
+            leafId, parentId, branch,
+            pFlow: pTotal, qFlow: qTotal // A fita agora grava a carga total com perdas!
+        });
+
+        branchMap.delete(branchId);
+        adj[parentId].delete(branchId);
+        degree[parentId]--; degree[leafId] = 0;
+
+        if (degree[parentId] === 1 && !protectedNodes.has(parentId)) leavesQueue.push(parentId);
+    }
+
+    const reducedBranches = Array.from(branchMap.values());
+    const reducedSysData = { ...sysData, loads: reducedLoads };
+
+    return { reducedBranches, reducedSysData, pruneHistory };
+}
+
+
+// 👇 2. O EXPANSOR (Agora com cálculo de Fase/Ângulo exato) 👇
+export function expandSystemResults(pfResult, pruneHistory, sysData, originalBranches) {
+    if (!pfResult) pfResult = { nodes: {}, lines: {} };
+    if (!pfResult.nodes) pfResult.nodes = {};
+    if (!pfResult.lines) pfResult.lines = {};
+
+    const { Vbase = 13.8, Sbase = 1000, sources = [] } = sysData;
+    const Zbase = (Vbase * Vbase) / (Sbase / 1000);
+
+    // Garante as Fontes
+    sources.forEach(s => {
+        if (!pfResult.nodes[s]) pfResult.nodes[s] = { v: 1.0, angle: 0, p: 0, q: 0 };
+    });
+
+    // Rebobina a fita calculando Magnitude E Ângulo
+    for (let i = pruneHistory.length - 1; i >= 0; i--) {
+        const record = pruneHistory[i];
+        
+        const parentV = pfResult.nodes[record.parentId]?.v || 0;
+        const parentAngle = pfResult.nodes[record.parentId]?.angle || 0; 
+
+        if (parentV === 0) {
+            pfResult.nodes[record.leafId] = { v: 0, angle: 0, p: 0, q: 0 };
+            pfResult.lines[record.branch.id] = { current: 0, percentage: 0, pFlow: 0, qFlow: 0 };
+            continue;
+        }
+
+        const Rpu = record.branch.r / Zbase;
+        const Xpu = record.branch.x / Zbase;
+        const Ppu = record.pFlow / Sbase;
+        const Qpu = record.qFlow / Sbase;
+
+        // 1. Queda Longitudinal (Magnitude V)
+        const vLeaf = parentV - ((Rpu * Ppu + Xpu * Qpu) / parentV);
+        
+        // 👇 2. Queda Transversal (Ângulo Theta) 👇
+        // Fórmula: delta_theta = (X*P - R*Q) / V^2 (em radianos)
+        const deltaThetaRad = (Xpu * Ppu - Rpu * Qpu) / (parentV * parentV);
+        
+        // Converte o shift para graus e subtrai do ângulo do pai
+        const leafAngle = parentAngle - (deltaThetaRad * (180 / Math.PI));
+
+        pfResult.nodes[record.leafId] = { v: vLeaf, angle: leafAngle, p: record.pFlow, q: record.qFlow };
+
+        const S_flow_pu = Math.sqrt(Math.pow(Ppu, 2) + Math.pow(Qpu, 2));
+        const I_est = S_flow_pu * (Sbase / (Math.sqrt(3) * Vbase));
+        const limit = record.branch.Imax || 5000;
+        
+        pfResult.lines[record.branch.id] = {
+            current: I_est,
+            percentage: (I_est / limit) * 100,
+            pFlow: record.pFlow,
+            qFlow: record.qFlow
+        };
+    }
+
+    originalBranches.forEach(b => {
+        if (!pfResult.lines[b.id]) {
+            const limitCurrent = b.Imax || b.imax || b.capacity || b.limit || 1000;
+            pfResult.lines[b.id] = { current: 0, percentage: 0, pFlow: 0, qFlow: 0, limitCurrent };
+        }
+        if (!pfResult.nodes[b.from]) pfResult.nodes[b.from] = { v: 0, angle: 0, p: 0, q: 0 };
+        if (!pfResult.nodes[b.to]) pfResult.nodes[b.to] = { v: 0, angle: 0, p: 0, q: 0 };
+    });
+
+    return pfResult;
 }
 /*
 // 👇 CÁLCULO DE CARGA ATUALIZADO PARA CONTAR TODAS AS BARRAS E ALIMENTADORES 👇
