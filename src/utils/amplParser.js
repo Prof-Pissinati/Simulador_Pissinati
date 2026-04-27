@@ -51,7 +51,11 @@ export function parseAMPLDat(text) {
                     };
 
                     const pd = getVal('Pd'); const qd = getVal('Qd');
-                    const nmax = getVal('nmax'); if (nmax > 0 && qbc > 0) shunts[id] = nmax * qbc;
+                    const nmax = getVal('nmax'); 
+                    const n0 = getVal('n0', 0); // Pega o estado inicial (ou 0 se não existir)
+                    if (nmax > 0 && qbc > 0) {
+                        shunts[id] = { maxSteps: nmax, steps: n0, stepSize: qbc };
+                    }
 
                     const pgd = getVal('Pgdini'); const qgd = getVal('Qgdini'); const sgd = getVal('Sgd');
                     if (sgd > 0 || pgd > 0 || qgd > 0) dgs[id] = { p: pgd, q: qgd, s: sgd };

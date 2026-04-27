@@ -1,6 +1,5 @@
 // src/hooks/useFileImport.js
 import { useCallback } from 'react';
-import { SYSTEM_DATA } from '../data/systemData';
 import { parseAMPLDat } from '../utils/amplParser';
 import { calculateForceLayout } from '../utils/autoLayout'; //
 
@@ -83,12 +82,6 @@ export function useFileImport({
             try {
                 const data = JSON.parse(event.target.result);
                 if (data.layout || data.positions) {
-                    if (data.loads) setSystemLoads(data.loads);
-                    if (data.baseKV) SYSTEM_DATA.Vbase = data.baseKV;
-                    if (data.sBase) SYSTEM_DATA.Sbase = data.sBase;
-                    if (data.sources) SYSTEM_DATA.sources = data.sources;
-                    if (data.sses) SYSTEM_DATA.sses = data.sses;
-                    if (data.shunts) SYSTEM_DATA.shunts = data.shunts;
 
                     if (data.branches) {
                         setBranches(data.branches);
@@ -136,16 +129,6 @@ export function useFileImport({
                 setProjectWaypoints(parsedData.waypoints || {});
  
                 setSystemLoads(parsedData.loads);
-                SYSTEM_DATA.Vbase = parsedData.baseKV;
-                SYSTEM_DATA.Sbase = parsedData.sBase;
-                SYSTEM_DATA.sources = parsedData.sources;
-
-                SYSTEM_DATA.feeders = parsedData.feeders || [];
-                SYSTEM_DATA.nodeTypes = parsedData.nodeTypes || {}; 
-
-                SYSTEM_DATA.sses = parsedData.sses || {};
-                SYSTEM_DATA.shunts = parsedData.shunts || {};
-
                 setActiveSources(parsedData.sources);
                 setBranches(parsedData.branches);
                 if (initialBranchesRef) initialBranchesRef.current = JSON.parse(JSON.stringify(parsedData.branches));
