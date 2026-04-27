@@ -1,24 +1,17 @@
-// src/hooks/useFileImport.js
 import { useCallback } from 'react';
 import { parseAMPLDat } from '../utils/amplParser';
-//import { calculateForceLayout } from '../utils/autoLayout'; 
 import { runAsyncLayout } from '../utils/runLayoutWorker';
 
 export function useFileImport({
-    setSystemLoads,
     setBranches,
     setFaultNodes,
-    setActiveSources,
-    setIsProjectLoaded,
-    setProjectPositions,
-    setProjectWaypoints,
     showToast,
-    initialBranchesRef,
     setIsCalculatingLayout,
-    setLayoutProgress
+    setLayoutProgress,
+    applySystemData // 👈 A Engine
 }) {
 
-    // 1. IMPORTAÇÃO DE ESTADOS DE CHAVES E FALTAS (TXT/LOG)
+    // 1. IMPORTAÇÃO DE ESTADOS DE CHAVES E FALTAS (TXT/LOG) - Mantido igual
     const handleUploadSwitches = useCallback((file) => {
         const reader = new FileReader();
         reader.onload = (e) => {
@@ -81,21 +74,12 @@ export function useFileImport({
         const file = e.target.files[0];
         if (!file) return;
         const reader = new FileReader();
-        reader.onload = async (event) => {
+        reader.onload = (event) => {
             try {
                 const data = JSON.parse(event.target.result);
                 if (data.layout || data.positions) {
-
-                    if (data.branches) {
-                        setBranches(data.branches);
-                        if (initialBranchesRef) initialBranchesRef.current = JSON.parse(JSON.stringify(data.branches));
-                    }
-                    if (data.faults) setFaultNodes(new Set(data.faults));
-
-                    setTimeout(() => { window.dispatchEvent(new CustomEvent('applyGraphLayout', { detail: data })); }, 100);
-
-                    setActiveSources(data.sources || [101, 102, 104]);
-                    setIsProjectLoaded(true);
+                    // 👇 DELEGA 100% PARA A ENGINE 👇
+                    applySystemData(data, "Projeto JSON");
                     showToast("Projeto carregado com sucesso!", "success");
                 } else {
                     alert("❌ Arquivo inválido. O arquivo não contém o formato esperado.");
@@ -106,7 +90,7 @@ export function useFileImport({
         };
         reader.readAsText(file);
         e.target.value = ''; 
-    }, [setActiveSources, setBranches, setFaultNodes, setIsProjectLoaded, setSystemLoads, showToast, initialBranchesRef]);
+    }, [applySystemData, showToast]);
 
     // 3. IMPORTAÇÃO DE SISTEMA AMPL (.DAT / .TXT)
     const handleDatFileUpload = useCallback((e) => {
@@ -119,16 +103,12 @@ export function useFileImport({
                 const parsedData = parseAMPLDat(text);
 
                 const allNodes = Array.from(new Set(parsedData.branches.flatMap(b => [b.from, b.to])));
-                parsedData.sources.forEach(s => { if (!allNodes.includes(s)) allNodes.push(s); }); // Garante que as fontes estejam na conta
+                parsedData.sources.forEach(s => { if (!allNodes.includes(s)) allNodes.push(s); });
                 
-                // 1. Liga a tela preta de carregamento
                 if (setIsCalculatingLayout) setIsCalculatingLayout(true);
                 if (setLayoutProgress) setLayoutProgress({ passes: 0, msg1: "Desenhando Mapa...", msg2: "Calculando gravidade inicial" });
-
-                // 50ms para o React pintar a tela preta antes de travar tudo com o cálculo pesado (Layout Força Bruta).
                 await new Promise(resolve => setTimeout(resolve, 50));
-
-                // 2. Manda o Worker calcular
+                
                 const autoPositions = await runAsyncLayout('force', allNodes, parsedData.branches, parsedData.sources, { 
                     distance: 10, charge: -40,
                     onProgress: (passes, msg1, msg2) => {
@@ -136,43 +116,30 @@ export function useFileImport({
                     }
                 });
                 
-                // 3. Desliga a tela preta
                 if (setIsCalculatingLayout) setIsCalculatingLayout(false);
                 
-                // Substitui a grade falsa pela gravidade perfeita
                 parsedData.positions = autoPositions;
                 if (parsedData.layout) parsedData.layout.positions = autoPositions;
                                 
-                setProjectPositions(parsedData.positions || {});
-                setProjectWaypoints(parsedData.waypoints || {});
- 
-                setSystemLoads(parsedData.loads);
-                setActiveSources(parsedData.sources);
-                setBranches(parsedData.branches);
-                if (initialBranchesRef) initialBranchesRef.current = JSON.parse(JSON.stringify(parsedData.branches));
-                setFaultNodes(new Set());
+                // 👇 DELEGA 100% PARA A ENGINE 👇
+                applySystemData(parsedData, "Arquivo .dat AMPL");
                 
-                setTimeout(() => { window.dispatchEvent(new CustomEvent('applyGraphLayout', { detail: parsedData })); }, 100);
-                
-                setIsProjectLoaded(true);
-                
-                // 👇 VALIDAÇÃO DE INTEGRIDADE DE DADOS 👇
                 const missingLimits = parsedData.branches.filter(b => !b.Imax && !b.imax && !b.limit && !b.capacity);
                 if (missingLimits.length > 0) {
                     showToast(`⚠️ Aviso: ${missingLimits.length} linha(s) importada(s) sem Limite de Corrente. Assumindo 1000A.`, "warning");
                 } else {
                     showToast("Sistema AMPL importado com integridade total!", "success");
                 }
-                // 👆 FIM DA VALIDAÇÃO 👆
 
             } catch (err) {
+                if (setIsCalculatingLayout) setIsCalculatingLayout(false);
                 alert("❌ Erro ao processar o ficheiro .dat.");
                 console.error(err);
             }
         };
         reader.readAsText(file);
         e.target.value = ''; 
-    }, [setActiveSources, setBranches, setFaultNodes, setIsProjectLoaded, setProjectPositions, setProjectWaypoints, setSystemLoads, showToast, initialBranchesRef]);
+    }, [applySystemData, showToast, setIsCalculatingLayout, setLayoutProgress]);
 
     return { handleUploadSwitches, handleWelcomeFileUpload, handleDatFileUpload };
 }

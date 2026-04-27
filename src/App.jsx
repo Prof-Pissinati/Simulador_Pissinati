@@ -77,32 +77,115 @@ function App() {
         console.log(`🎥 [App.jsx] A variável isCalculatingLayout mudou para: ${isCalculatingLayout ? '🟢 LIGADA' : '🔴 DESLIGADA'}`);
     }, [isCalculatingLayout]);
 
-    const [layoutProgress, setLayoutProgress] = useState({ passes: 0, msg1: '', msg2: '' });
-
-
     const activePositions = useMemo(() => layoutMode === 'project' ? projectPositions : (organicPositions || projectPositions), [layoutMode, projectPositions, organicPositions]);
     const activeWaypoints = useMemo(() => layoutMode === 'project' ? projectWaypoints : (organicWaypoints || projectWaypoints), [layoutMode, projectWaypoints, organicWaypoints]);
     
     const [printFrameMode, setPrintFrameMode] = useState('none'); 
     const [showShortcuts, setShowShortcuts] = useState(false);
-
+    
     const [sidebarMode, setSidebarMode] = useState('full');
     const [isFaultSidebarOpen, setFaultSidebarOpen] = useState(true);
     const [hoveredLineId, setHoveredLineId] = useState(null);
     const [hoveredNodeId, setHoveredNodeId] = useState(null);
     const [maintenanceMode, setMaintenanceMode] = useState(false);
-
+    
     const [isProjectLoaded, setIsProjectLoaded] = useState(false);
     const welcomeFileInputRef = useRef(null);
     const datFileInputRef = useRef(null);
     const allNodes = Array.from(new Set(branches.flatMap(b => [b.from, b.to]))).sort((a, b) => a - b);
     const sources = activeSources;
     const loadNodes = allNodes.filter(n => !sources.includes(n));
-
+    
     // 👇 IMPORTANTE: Esta lista mista blinda os barramentos para o Sequenciador 👇
     const allBoundaryNodes = useMemo(() => [...sources, ...systemFeeders], [sources, systemFeeders]);
-
+    
     const [optimizerStatus, setOptimizerStatus] = useState("");
+    
+    const [layoutProgress, setLayoutProgress] = useState({ passes: 0, msg1: '', msg2: '' });
+    
+    // 👇 BLACK START BLINDADO (Recebe os 3 parâmetros diretamente da importação) 👇
+    const runBlackStart = useCallback((targetBranches, targetSources, targetFeeders) => {
+        
+        // 1. Usa os parâmetros frescos injetados na função!
+        const feederNodes = new Set((targetFeeders || []).map(Number));
+        const allSources = (targetSources || []).map(Number);
+        
+        //console.log("🎬 BLACK START INICIADO!");
+        //console.log("⚡ Fontes (Sources) recebidas:", allSources);
+        //console.log("🔌 Alimentadores (Feeders) recebidos:", Array.from(feederNodes));
+
+        // 2. A verdadeira raiz é quem é Source mas NÃO É Alimentador
+        const trueRoots = allSources.filter(s => !feederNodes.has(s));
+
+        if (trueRoots.length === 0) {
+            console.warn("⚠️ ALERTA: Nenhuma fonte principal encontrada! Verifique o arquivo de dados.");
+        }
+
+        // 3. Define as raízes
+        const rootSourcesSet = new Set(trueRoots.length > 0 ? trueRoots : allSources);
+        const rootBranchIds = [];
+        
+        // 4. Blackout seletivo nas Chaves Mestras da Subestação
+        const blackoutState = targetBranches.map(b => {
+            const isMasterSwitch = rootSourcesSet.has(Number(b.from)) || rootSourcesSet.has(Number(b.to));
+
+            if (b.state === 1 && isMasterSwitch) {
+                rootBranchIds.push(b.id);
+                return { ...b, state: 0 }; 
+            }
+            return { ...b };
+        });
+
+        //console.log("✂️ CHAVES DA SUBESTAÇÃO ABERTAS:", rootBranchIds);
+        setBranches(blackoutState);
+
+        // 5. Religamento em Cascata
+        let index = 0;
+        const interval = setInterval(() => {
+            if (index >= rootBranchIds.length) {
+                clearInterval(interval);
+                return;
+            }
+
+            const branchToClose = rootBranchIds[index];
+            setBranches(prev => prev.map(b => 
+                b.id === branchToClose ? { ...b, state: 1 } : b
+            ));
+            
+            index++;
+        }, 100);
+    }, []); // 👈 O array vazio garante que a função é imune ao atraso do React
+
+    // 👇 FUNÇÃO DE CARREGAMENTO UNIFICADA 👇
+    const applySystemData = useCallback((data, sourceName = "Externo") => {
+        const targetBranches = data.branches ? data.branches.map((b, idx) => ({ 
+            ...b, id: idx, state: (b.initialState !== undefined ? b.initialState : (b.state !== undefined ? b.state : 1)) 
+        })) : [];
+
+        setBranches(targetBranches);
+        if (initialBranchesRef) initialBranchesRef.current = JSON.parse(JSON.stringify(targetBranches)); 
+        
+        setSystemLoads(data.loads || {}); 
+        setSystemShunts(data.shunts || {});
+        setActiveSources(data.sources || []); 
+        setSystemFeeders(data.feeders || []);
+
+        // 👇 ADICIONADO: Suporte para nomes de variáveis tanto do JSON quanto do DAT
+        setVBase(data.Vbase || data.baseKV || 13.8);
+        setSBase(data.Sbase || data.sBase || 1000);
+        setSses(data.sses || {});
+
+        const layoutData = data.layout || data;
+        setProjectPositions(layoutData.positionsProject || layoutData.positions || {});
+        setProjectWaypoints(layoutData.waypointsProject || layoutData.waypoints || {});
+        
+        setFaultNodes(new Set(data.faults || []));
+        setIsProjectLoaded(true);
+
+        runBlackStart(targetBranches, data.sources || [], data.feeders || []);
+
+        console.log(`⚙️ Sistema [${sourceName}] carregado com sucesso na Engine Unificada.`);
+    }, [runBlackStart]);
 
     // 👇 EFEITO DO LAYOUT ORGÂNICO ASYNC 👇
     useEffect(() => {
@@ -264,18 +347,12 @@ function App() {
     const showToast = (message, type = 'success') => { setToast({ message, type }); setTimeout(() => setToast(null), 3000); };
     
     const { handleWelcomeFileUpload, handleDatFileUpload } = useFileImport({
-        setSystemLoads,
-        setBranches,
-        setFaultNodes,
-        setActiveSources,
-        setIsProjectLoaded,
-        setProjectPositions,
-        setProjectWaypoints,
+        setBranches,    // Mantido apenas por compatibilidade com arquivos de Sequência
+        setFaultNodes,  // Mantido apenas por compatibilidade com arquivos de Sequência
         showToast,
-        setSystemFeeders,
-        initialBranchesRef,
         setIsCalculatingLayout, 
-        setLayoutProgress
+        setLayoutProgress,
+        applySystemData // Passamos o Motor para o importador.
     });
 
     const handleUploadSwitches = async (file) => {
@@ -913,92 +990,6 @@ const handleShuntChange = useCallback((nodeId, increment) => {
             snapshots: buildSnapshots(baseSnapshot, reorderedSteps, allBoundaryNodes, systemLoads)
         });
     };
-
-    // 👇 BLACK START BLINDADO (Recebe os 3 parâmetros diretamente da importação) 👇
-    const runBlackStart = useCallback((targetBranches, targetSources, targetFeeders) => {
-        
-        // 1. Usa os parâmetros frescos injetados na função!
-        const feederNodes = new Set((targetFeeders || []).map(Number));
-        const allSources = (targetSources || []).map(Number);
-        
-        //console.log("🎬 BLACK START INICIADO!");
-        //console.log("⚡ Fontes (Sources) recebidas:", allSources);
-        //console.log("🔌 Alimentadores (Feeders) recebidos:", Array.from(feederNodes));
-
-        // 2. A verdadeira raiz é quem é Source mas NÃO É Alimentador
-        const trueRoots = allSources.filter(s => !feederNodes.has(s));
-
-        if (trueRoots.length === 0) {
-            console.warn("⚠️ ALERTA: Nenhuma fonte principal encontrada! Verifique o arquivo de dados.");
-        }
-
-        // 3. Define as raízes
-        const rootSourcesSet = new Set(trueRoots.length > 0 ? trueRoots : allSources);
-        const rootBranchIds = [];
-        
-        // 4. Blackout seletivo nas Chaves Mestras da Subestação
-        const blackoutState = targetBranches.map(b => {
-            const isMasterSwitch = rootSourcesSet.has(Number(b.from)) || rootSourcesSet.has(Number(b.to));
-
-            if (b.state === 1 && isMasterSwitch) {
-                rootBranchIds.push(b.id);
-                return { ...b, state: 0 }; 
-            }
-            return { ...b };
-        });
-
-        //console.log("✂️ CHAVES DA SUBESTAÇÃO ABERTAS:", rootBranchIds);
-        setBranches(blackoutState);
-
-        // 5. Religamento em Cascata
-        let index = 0;
-        const interval = setInterval(() => {
-            if (index >= rootBranchIds.length) {
-                clearInterval(interval);
-                return;
-            }
-
-            const branchToClose = rootBranchIds[index];
-            setBranches(prev => prev.map(b => 
-                b.id === branchToClose ? { ...b, state: 1 } : b
-            ));
-            
-            index++;
-        }, 600);
-    }, []); // 👈 O array vazio garante que a função é imune ao atraso do React
-
-    // 👇 FUNÇÃO DE CARREGAMENTO UNIFICADA 👇
-    const applySystemData = useCallback((data, sourceName = "Externo") => {
-        // 1. Processa os ramos (Topologia)
-        const targetBranches = data.branches.map((b, idx) => ({ 
-            ...b, id: idx, state: (b.initialState !== undefined ? b.initialState : (b.state !== undefined ? b.state : 1)) 
-        }));
-
-        // 2. Alimenta os Estados Vivos do React (A nossa "variável de importação")
-        setBranches(targetBranches);
-        initialBranchesRef.current = JSON.parse(JSON.stringify(targetBranches)); 
-        
-        setSystemLoads(data.loads || {}); 
-        setSystemShunts(data.shunts || {});
-        setActiveSources(data.sources || []); 
-        setSystemFeeders(data.feeders || []);
-
-        // 3. Alimenta as Configurações de Base (Resolve o Hardcode)
-        setVBase(data.Vbase || 13.8);
-        setSBase(data.Sbase || 1000);
-        setSses(data.sses || {});
-
-        // 4. Layout e Interface
-        setProjectPositions(data.positionsProject || {});
-        setProjectWaypoints(data.waypointsProject || {});
-        setFaultNodes(new Set());
-        setIsProjectLoaded(true);
-
-        // 5. Dispara a animação (Black Start) com os dados recém-unificados
-        runBlackStart(targetBranches, data.sources || [], data.feeders || []);
-
-        console.log(`⚙️ Sistema [${sourceName}] carregado com sucesso na Engine Unificada.`);
-    }, [runBlackStart]);
 
     if (!isProjectLoaded) {
         return (
