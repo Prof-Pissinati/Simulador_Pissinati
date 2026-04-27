@@ -1,7 +1,8 @@
 // src/hooks/useFileImport.js
 import { useCallback } from 'react';
 import { parseAMPLDat } from '../utils/amplParser';
-import { calculateForceLayout } from '../utils/autoLayout'; //
+//import { calculateForceLayout } from '../utils/autoLayout'; 
+import { runAsyncLayout } from '../utils/runLayoutWorker';
 
 export function useFileImport({
     setSystemLoads,
@@ -12,7 +13,9 @@ export function useFileImport({
     setProjectPositions,
     setProjectWaypoints,
     showToast,
-    initialBranchesRef
+    initialBranchesRef,
+    setIsCalculatingLayout,
+    setLayoutProgress
 }) {
 
     // 1. IMPORTAÇÃO DE ESTADOS DE CHAVES E FALTAS (TXT/LOG)
@@ -78,7 +81,7 @@ export function useFileImport({
         const file = e.target.files[0];
         if (!file) return;
         const reader = new FileReader();
-        reader.onload = (event) => {
+        reader.onload = async (event) => {
             try {
                 const data = JSON.parse(event.target.result);
                 if (data.layout || data.positions) {
@@ -110,7 +113,7 @@ export function useFileImport({
         const file = e.target.files[0];
         if (!file) return;
         const reader = new FileReader();
-        reader.onload = (event) => {
+        reader.onload = async (event) => {
             try {
                 const text = event.target.result;
                 const parsedData = parseAMPLDat(text);
@@ -118,8 +121,23 @@ export function useFileImport({
                 const allNodes = Array.from(new Set(parsedData.branches.flatMap(b => [b.from, b.to])));
                 parsedData.sources.forEach(s => { if (!allNodes.includes(s)) allNodes.push(s); }); // Garante que as fontes estejam na conta
                 
-                // Roda o algoritmo de gravidade invisível
-                const autoPositions = calculateForceLayout(allNodes, parsedData.branches, parsedData.sources, { distance: 10, charge: -40 });
+                // 1. Liga a tela preta de carregamento
+                if (setIsCalculatingLayout) setIsCalculatingLayout(true);
+                if (setLayoutProgress) setLayoutProgress({ passes: 0, msg1: "Desenhando Mapa...", msg2: "Calculando gravidade inicial" });
+
+                // 50ms para o React pintar a tela preta antes de travar tudo com o cálculo pesado (Layout Força Bruta).
+                await new Promise(resolve => setTimeout(resolve, 50));
+
+                // 2. Manda o Worker calcular
+                const autoPositions = await runAsyncLayout('force', allNodes, parsedData.branches, parsedData.sources, { 
+                    distance: 10, charge: -40,
+                    onProgress: (passes, msg1, msg2) => {
+                        if (setLayoutProgress) setLayoutProgress({ passes, msg1, msg2 });
+                    }
+                });
+                
+                // 3. Desliga a tela preta
+                if (setIsCalculatingLayout) setIsCalculatingLayout(false);
                 
                 // Substitui a grade falsa pela gravidade perfeita
                 parsedData.positions = autoPositions;

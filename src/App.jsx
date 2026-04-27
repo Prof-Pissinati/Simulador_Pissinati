@@ -9,7 +9,10 @@ import EditSidebar from './components/EditSidebar';
 import { exportSVG, generateTextReport } from './utils/exportUtils';
 import './index.css';
 import { useFileImport } from './hooks/useFileImport';
-import { calculateForceLayout } from './utils/autoLayout';
+
+//import { calculateForceLayout } from './utils/autoLayout';
+import { runAsyncLayout } from './utils/runLayoutWorker';
+
 import { useShortcuts } from './hooks/useShortcuts';
 import { useColorIntelligence, getBaseColor } from './hooks/useColorIntelligence';
 import { SYSTEM_DATA} from './data/systemData';
@@ -29,27 +32,26 @@ function App() {
     const [sses, setSses] = useState({});
 
     const [showReportModal, setShowReportModal] = useState(false);
-    const [activeSources, setActiveSources] = useState(SYSTEM_DATA.sources || []);
     const [darkMode, setDarkMode] = useState(true); 
     // Controle de Visualização: 'schematic' (Diagrama SVG) ou 'map' (Georreferenciado Leaflet)
     const [viewMode, setViewMode] = useState('schematic');
     
-    // condições iniciais do sistema são carregadas a partir do SYSTEM_DATA, mas podem ser alteradas pelo usuário.
-    //const [branches, setBranches] = useState(() => SYSTEM_DATA.branches.map((b, idx) => ({ ...b, id: idx, state: (b.initialState !== undefined ? b.initialState : (b.state !== undefined ? b.state : 1)) })));
-    //const initialBranchesRef = useRef(SYSTEM_DATA.branches.map((b, idx) => ({ ...b, id: idx, state: (b.initialState !== undefined ? b.initialState : (b.state !== undefined ? b.state : 1)) })));
-    
     // O sistema agora nasce vazio, sem chaves e sem peso na memória
     const [branches, setBranches] = useState([]);
     const initialBranchesRef = useRef([]);
-
-
+    
+    
     const [faultNodes, setFaultNodes] = useState(new Set());
-
+    
     // Implementação para o sistema de redução de calculo NR
     const [lastEventNodes, setLastEventNodes] = useState(new Set());
-
-    const [systemShunts, setSystemShunts] = useState(SYSTEM_DATA.shunts || {});
-    const [systemFeeders, setSystemFeeders] = useState(SYSTEM_DATA.feeders || []);
+    
+    const [activeSources, setActiveSources] = useState([]);
+    const [systemShunts, setSystemShunts] = useState({});
+    const [systemFeeders, setSystemFeeders] = useState([]);
+    const [systemLoads, setSystemLoads] = useState({});
+    const [projectPositions, setProjectPositions] = useState({});
+    const [projectWaypoints, setProjectWaypoints] = useState({});
     
     const [sequenceData, setSequenceData] = useState(null);
     const [seqOverlayOpen, setSeqOverlayOpen] = useState(false);
@@ -67,11 +69,16 @@ function App() {
     const [layoutMode, setLayoutMode] = useState('project'); 
     const [organicPositions, setOrganicPositions] = useState(null);
 
-    const [projectPositions, setProjectPositions] = useState(SYSTEM_DATA.positionsProject || {});
-    const [projectWaypoints, setProjectWaypoints] = useState(SYSTEM_DATA.waypointsProject || {});
     const [organicWaypoints, setOrganicWaypoints] = useState({});
 
-    const [systemLoads, setSystemLoads] = useState(SYSTEM_DATA.loads);
+    const [isCalculatingLayout, setIsCalculatingLayout] = useState(false);
+    // 👇 CÂMERA DE SEGURANÇA 1: Monitora a Variável da Tela Preta
+    useEffect(() => {
+        console.log(`🎥 [App.jsx] A variável isCalculatingLayout mudou para: ${isCalculatingLayout ? '🟢 LIGADA' : '🔴 DESLIGADA'}`);
+    }, [isCalculatingLayout]);
+
+    const [layoutProgress, setLayoutProgress] = useState({ passes: 0, msg1: '', msg2: '' });
+
 
     const activePositions = useMemo(() => layoutMode === 'project' ? projectPositions : (organicPositions || projectPositions), [layoutMode, projectPositions, organicPositions]);
     const activeWaypoints = useMemo(() => layoutMode === 'project' ? projectWaypoints : (organicWaypoints || projectWaypoints), [layoutMode, projectWaypoints, organicWaypoints]);
@@ -97,10 +104,31 @@ function App() {
 
     const [optimizerStatus, setOptimizerStatus] = useState("");
 
+    // 👇 EFEITO DO LAYOUT ORGÂNICO ASYNC 👇
     useEffect(() => {
         if (layoutMode === 'organic' && !organicPositions && allNodes.length > 0) {
-            const newLayout = calculateForceLayout(allNodes, branches, sources, { distance: 80, charge: -400 });
-            setOrganicPositions(newLayout);
+            const calculateAsync = async () => {
+                setIsCalculatingLayout(true);
+                setLayoutProgress({ passes: 0, msg1: "Iniciando Motor Físico...", msg2: "Preparando nós" });
+                
+                try {
+                    // Chama o operário terceirizado!
+                    const newLayout = await runAsyncLayout('vns', allNodes, branches, sources, { 
+                        gridSize: 100, 
+                        maxIter: 30,
+                        onProgress: (passes, msg1, msg2) => {
+                            setLayoutProgress({ passes, msg1, msg2 });
+                        }
+                    });
+                    setOrganicPositions(newLayout);
+                } catch (error) {
+                    console.error("Erro no Worker de Layout:", error);
+                    showToast("Erro ao calcular layout orgânico.", "error");
+                } finally {
+                    setIsCalculatingLayout(false);
+                }
+            };
+            calculateAsync();
         }
     }, [layoutMode, organicPositions, allNodes, branches, sources]);
 
@@ -245,7 +273,9 @@ function App() {
         setProjectWaypoints,
         showToast,
         setSystemFeeders,
-        initialBranchesRef
+        initialBranchesRef,
+        setIsCalculatingLayout, 
+        setLayoutProgress
     });
 
     const handleUploadSwitches = async (file) => {
@@ -989,6 +1019,20 @@ const handleShuntChange = useCallback((nodeId, increment) => {
                         <button onClick={handleDownloadTemplate} style={{ width: '100%', padding: '8px', border: 'none', borderRadius: '8px', fontSize: '12px', cursor: 'pointer', background: 'transparent', color: darkMode ? '#00bcd4' : '#0097a7', textDecoration: 'underline', transition: 'opacity 0.2s' }} onMouseOver={e => e.target.style.opacity = '0.7'} onMouseOut={e => e.target.style.opacity = '1'}> Precisa de ajuda? Baixe o modelo (.dat) </button>
                     </div>
                 </div>
+
+                {isCalculatingLayout && (
+                    <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.8)', zIndex: 10000, display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', color: '#fff', backdropFilter: 'blur(5px)' }}>
+                        <div style={{ fontSize: '50px', animation: 'spin 2s linear infinite', marginBottom: '20px' }}>⚙️</div>
+                        <h2 style={{ color: '#00bcd4', marginBottom: '10px' }}>{layoutProgress.msg1}</h2>
+                        <p style={{ color: '#aaa', fontSize: '14px', marginBottom: '20px' }}>{layoutProgress.msg2}</p>
+                        
+                        <div style={{ width: '300px', height: '6px', background: '#333', borderRadius: '3px', overflow: 'hidden' }}>
+                            <div style={{ width: `${Math.min(100, (layoutProgress.passes / 30) * 100)}%`, height: '100%', background: '#00bcd4', transition: 'width 0.3s' }}></div>
+                        </div>
+                        <p style={{ marginTop: '10px', fontSize: '12px', color: '#666' }}>Iteração {layoutProgress.passes} de 30</p>
+                        <style>{`@keyframes spin { 100% { transform: rotate(360deg); } }`}</style>
+                    </div>
+                )}
             </div>
         );
     }
@@ -1071,6 +1115,8 @@ const handleShuntChange = useCallback((nodeId, increment) => {
                         allNodes={allNodes} 
                         sources={sources} 
                         currentPositions={activePositions}
+                        setIsCalculatingLayout={setIsCalculatingLayout}
+                        setLayoutProgress={setLayoutProgress}
                     />
                 )}
             </div>
@@ -1431,6 +1477,21 @@ const handleShuntChange = useCallback((nodeId, increment) => {
                             Cancelar
                         </button>
                     </div>
+                </div>
+            )}
+
+            {/* 👇 TELA DE CARREGAMENTO DO WORKER 👇 */}
+            {isCalculatingLayout && (
+                <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.8)', zIndex: 10000, display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', color: '#fff', backdropFilter: 'blur(5px)' }}>
+                    <div style={{ fontSize: '50px', animation: 'spin 2s linear infinite', marginBottom: '20px' }}>⚙️</div>
+                    <h2 style={{ color: '#00bcd4', marginBottom: '10px' }}>{layoutProgress.msg1}</h2>
+                    <p style={{ color: '#aaa', fontSize: '14px', marginBottom: '20px' }}>{layoutProgress.msg2}</p>
+                    
+                    <div style={{ width: '300px', height: '6px', background: '#333', borderRadius: '3px', overflow: 'hidden' }}>
+                        <div style={{ width: `${Math.min(100, (layoutProgress.passes / 30) * 100)}%`, height: '100%', background: '#00bcd4', transition: 'width 0.3s' }}></div>
+                    </div>
+                    <p style={{ marginTop: '10px', fontSize: '12px', color: '#666' }}>Iteração {layoutProgress.passes} de 30</p>
+                    <style>{`@keyframes spin { 100% { transform: rotate(360deg); } }`}</style>
                 </div>
             )}
         </div>

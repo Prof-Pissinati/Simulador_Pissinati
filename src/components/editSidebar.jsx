@@ -1,10 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { 
-    calculateForceLayout, 
-    calculateOrthogonalLayout, 
-    calculateVNSLayout,
-    calculateAStarRouting
-} from '../utils/autoLayout';
+import { runAsyncLayout } from '../utils/runLayoutWorker';
 
 export default function EditSidebar({
     isEditMode,
@@ -12,7 +7,9 @@ export default function EditSidebar({
     darkMode,
     onUndo = () => {},
     canUndo = false,
-    branches, allNodes, sources, currentPositions
+    branches, allNodes, sources, currentPositions,
+    setIsCalculatingLayout,
+    setLayoutProgress
 }) {
 
     const [algoMode, setAlgoMode] = useState('force');
@@ -22,7 +19,7 @@ export default function EditSidebar({
     const [openWeight, setOpenWeight] = useState(65); 
     const fileInputRef = useRef(null);
     
-    // Estado do VNS e dos Novos Algoritmos
+    // Estado do VNS
     const [vnsRunning, setVnsRunning]     = useState(false);
     const [vnsProgress, setVnsProgress]   = useState(null); 
     const [vnsGridSize, setVnsGridSize]   = useState(100);
@@ -30,65 +27,38 @@ export default function EditSidebar({
     const [usePhysics, setUsePhysics]     = useState(false); 
 
     const handleApplyGenerator = async () => {
-        // 1. SINCRONIA: Extrai a posição real visual da tela
         let actualLayout = { positions: currentPositions, waypoints: {} };
         window.dispatchEvent(new CustomEvent('getLatestLayout', { 
             detail: { callback: (layout) => { actualLayout = layout; } } 
         }));
 
-        // 2. HISTÓRICO: Salva essa posição real no botão Voltar
         window.dispatchEvent(new CustomEvent('saveToHistory', { detail: actualLayout }));
 
-        let actualPositions = actualLayout.positions;
-        let newPos = {};
-        let newWps = null; // Preparado para receber os waypoints do A*
+        // 1. LIGA A TELA PRETA
+        if (setIsCalculatingLayout) setIsCalculatingLayout(true);
+        if (setLayoutProgress) setLayoutProgress({ passes: 0, msg1: "Calculando Geometria...", msg2: `Algoritmo: ${algoMode}` });
 
-        // 3. GERAÇÃO
-        if (algoMode === 'force') {
-            newPos = calculateForceLayout(allNodes, branches, sources, { distance: forceDist, charge: -forceCharge, openWeight: openWeight / 100, currentPos: actualPositions });
-        }
-        
-        if (algoMode === 'orthogonal') {
-            if (usePhysics) {
-                newPos = await calculateForceLayout(allNodes, branches, sources, { distance: forceDist, charge: -forceCharge, openWeight: openWeight / 100, currentPos: actualPositions });
-            } else {
-                newPos = await calculateOrthogonalLayout(allNodes, branches, sources, { gridSize: radialStep, currentPos: actualPositions });
-            }
-        }
+        // Força a pintura da tela
+        await new Promise(resolve => setTimeout(resolve, 50));
 
-        // ==========================================
-        // OS 3 NOVOS ALGORITMOS (ESPAÇO RESERVADO)
-        // ==========================================
-        if (algoMode === 'astar') {
-            // O A* vai criar joelhos (waypoints) e não mover barras!
-            newWps = calculateAStarRouting(allNodes, branches, actualPositions, { gridSize: radialStep });
-            newPos = actualPositions; // Mantém as barras onde estão
-        }
+        try {
+            // 2. CHAMA O WORKER
+            const newPos = await runAsyncLayout(algoMode, allNodes, branches, sources, { 
+                gridSize: radialStep, distance: forceDist, charge: -forceCharge, openWeight: openWeight / 100, currentPos: actualLayout.positions, usePhysics,
+                onProgress: (passes, msg1, msg2) => { if (setLayoutProgress) setLayoutProgress({ passes, msg1, msg2 }); }
+            });
 
-        if (algoMode === 'tsm') {
-            newPos = calculateTSMLayout(allNodes, branches, sources, { gridSize: radialStep, currentPos: actualPositions });
-        }
-
-        if (algoMode === 'symmetry') {
-            newPos = calculateSymmetryLayout(allNodes, branches, sources, { gridSize: radialStep, currentPos: actualPositions });
-        }
-
-        if (algoMode === 'balloon') {
-            newPos = calculateInflateDeflateLayout(allNodes, branches, sources, { gridSize: radialStep, currentPos: actualPositions });
-        }
-
-        // 4. APLICAÇÃO
-        // Se o algoritmo gerou waypoints (como o A* fará), envia junto!
-        if (newWps) {
-            // Se o A* gerou as quinas, envia positions E waypoints!
-            window.dispatchEvent(new CustomEvent('applyOrganicLayout', { detail: { positions: newPos, waypoints: newWps } }));
-        } else {
-            // Se for os outros algoritmos, envia só positions
+            // 3. APLICA O RESULTADO
             window.dispatchEvent(new CustomEvent('applyOrganicLayout', { detail: { positions: newPos } }));
+            
+        } catch (error) {
+            console.error("Erro no Worker de Layout:", error);
+            alert("Erro ao calcular o layout.");
+        } finally {
+            if (setIsCalculatingLayout) setIsCalculatingLayout(false);
         }
     };
 
-    /** Executa algoritmos pesados (como o VNS) sem travar a UI */
     const handleApplyVNS = async () => {
         if (vnsRunning) return;
 
@@ -99,27 +69,29 @@ export default function EditSidebar({
         window.dispatchEvent(new CustomEvent('saveToHistory', { detail: actualLayout }));
 
         setVnsRunning(true);
-        setVnsProgress({ iter: 0, cost: '...', crossings: '...' });
+        if (setIsCalculatingLayout) setIsCalculatingLayout(true);
+        if (setLayoutProgress) setLayoutProgress({ passes: 0, msg1: "Otimizando Layout...", msg2: "Rodando VNS" });
+
+        await new Promise(resolve => setTimeout(resolve, 50));
 
         try {
-            const resultPos = await calculateVNSLayout( // <-- Adicione await!
-                allNodes, branches, sources,
-                {
-                    gridSize: vnsGridSize,
-                    maxIter: vnsMaxIter,
-                    currentPos: actualLayout.positions,
-                    onProgress: (iter, cost, crossings) => {
-                        setVnsProgress({ iter, cost: cost, crossings });
-                    },
-                }
-            );
+            const resultPos = await runAsyncLayout('vns', allNodes, branches, sources, {
+                gridSize: vnsGridSize,
+                maxIter: vnsMaxIter,
+                currentPos: actualLayout.positions,
+                onProgress: (iter, cost, crossings) => {
+                    setVnsProgress({ iter, cost: cost, crossings });
+                    if (setLayoutProgress) setLayoutProgress({ passes: iter, msg1: "Ajuste Fino VNS", msg2: `Tentativa ${iter} | Cruzamentos restantes: ${crossings}` });
+                },
+            });
             
-            window.dispatchEvent(new CustomEvent('applyOrganicLayout', {
-                detail: { positions: resultPos, waypoints: {} }
-            }));
+            window.dispatchEvent(new CustomEvent('applyOrganicLayout', { detail: { positions: resultPos, waypoints: {} } }));
             window.dispatchEvent(new CustomEvent('triggerZoomExtents'));
+        } catch (error) {
+            console.error("Erro no Worker VNS:", error);
         } finally {
             setVnsRunning(false);
+            if (setIsCalculatingLayout) setIsCalculatingLayout(false);
         }
     };
 
@@ -189,7 +161,6 @@ export default function EditSidebar({
 
     if (!isEditMode) return null;
 
-    // --- ESTILOS NATIVOS ---
     const glassContainerStyle = { background: darkMode ? 'rgba(30, 30, 30, 0.65)' : 'rgba(255, 255, 255, 0.85)', backdropFilter: 'blur(15px)', WebkitBackdropFilter: 'blur(15px)', borderLeft: `1px solid ${darkMode ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.1)'}`, display: 'flex', flexDirection: 'column', width: '230px', height: '100%', boxSizing: 'border-box', overflow: 'hidden', boxShadow: darkMode ? '-5px 0 20px rgba(0,0,0,0.4)' : '-5px 0 15px rgba(0,0,0,0.05)', transition: 'background 0.3s, border 0.3s' };
     const ghostBtnOrangeStyle = { background: 'transparent', border: '1.5px solid #ff9800', color: '#ff9800', borderRadius: '8px', fontWeight: 'bold', fontSize: '13px', padding: '10px 4px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', transition: 'all 0.2s ease-in-out', width: '100%', marginBottom: '10px' };
     const shortcutBadgeStyle = { display: 'inline-block', background: darkMode ? 'rgba(255,152,0,0.2)' : '#FFE0B2', color: darkMode ? '#ffb74d' : '#E65100', borderRadius: '5px', padding: '2px 6px', fontWeight: 'bold', fontFamily: 'monospace', fontSize: '11px', margin: '0 2px' };
@@ -228,7 +199,6 @@ export default function EditSidebar({
                 
                 <button className="edit-ghost-btn" style={{...ghostBtnOrangeStyle, background: 'rgba(255, 152, 0, 0.05)', '--hover-color': '#ff9800'}} onClick={() => setIsEditMode(false)}>🚪 Sair e Salvar</button>
 
-                {/* PAINEL GERADOR DE LAYOUTS */}
                 <div style={{ padding: '15px', background: darkMode ? '#2a2a2a' : '#f5f5f5', borderRadius: '8px', marginBottom: '15px', border: `1px solid ${darkMode ? '#444' : '#ddd'}` }}>
                     <h3 style={{ margin: '0 0 10px 0', fontSize: '13px', color: '#ff9800' }}>🛠️ Gerador Geométrico</h3>
                     
@@ -236,11 +206,8 @@ export default function EditSidebar({
                         <option value="force">Orgânico (D3 Force)</option>
                         <option value="orthogonal">Ortogonal (Grid Expansion)</option>
                         <option value="vns">Compactador VNS</option>
-                        <option disabled>──────────</option>
-                        <option value="astar">Roteamento de Cabos (A* Waypoints)</option>
                     </select>
 
-                    {/* Controles Dinâmicos */}
                     {algoMode === 'force' && (
                         <div style={{ fontSize: '12px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
                             <label>Distância das Linhas: {forceDist}px
@@ -255,15 +222,12 @@ export default function EditSidebar({
                         </div>
                     )}
 
-                    {(algoMode === 'orthogonal' || algoMode === 'tsm' || algoMode === 'symmetry' || algoMode === 'astar') && (
+                    {algoMode === 'orthogonal' && (
                         <div style={{ fontSize: '12px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                            {algoMode === 'orthogonal' && (
-                                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', color: '#ff9800', fontWeight: 'bold' }}>
-                                    <input type="checkbox" checked={usePhysics} onChange={e => setUsePhysics(e.target.checked)} />
-                                    Usar repulsão física prévia
-                                </label>
-                            )}
-
+                            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', color: '#ff9800', fontWeight: 'bold' }}>
+                                <input type="checkbox" checked={usePhysics} onChange={e => setUsePhysics(e.target.checked)} />
+                                Usar repulsão física prévia
+                            </label>
                             <label style={{ color: '#00bcd4', fontWeight: 'bold' }}>Tamanho da Malha (Grid): {radialStep}px
                                 <input type="range" min="10" max="150" step="5" value={radialStep} onChange={e=>setRadialStep(Number(e.target.value))} style={{width:'100%'}}/>
                             </label>
@@ -281,7 +245,6 @@ export default function EditSidebar({
                         </div>
                     )}
 
-                    {/* Botões de Ação */}
                     {algoMode === 'vns' ? (
                         <button onClick={handleApplyVNS} disabled={vnsRunning} style={{ width: '100%', padding: '8px', marginTop: '12px', background: vnsRunning ? '#555' : '#7c4dff', color: '#fff', border: 'none', borderRadius: '4px', fontWeight: 'bold', cursor: vnsRunning ? 'wait' : 'pointer' }}>
                             {vnsRunning ? `⏳ Iter ${vnsProgress?.iter ?? 0} | ✂️ ${vnsProgress?.crossings ?? '?'} cruzamentos` : '🧬 Executar VNS'}
