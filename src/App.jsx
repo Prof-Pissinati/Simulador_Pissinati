@@ -103,58 +103,116 @@ function App() {
     
     const [layoutProgress, setLayoutProgress] = useState({ passes: 0, msg1: '', msg2: '' });
     
-    // 👇 BLACK START BLINDADO (Recebe os 3 parâmetros diretamente da importação) 👇
+    // 👇 BLACK START INTELIGENTE (Agrupamento de Loops) 👇
     const runBlackStart = useCallback((targetBranches, targetSources, targetFeeders) => {
         
-        // 1. Usa os parâmetros frescos injetados na função!
         const feederNodes = new Set((targetFeeders || []).map(Number));
         const allSources = (targetSources || []).map(Number);
         
-        //console.log("🎬 BLACK START INICIADO!");
-        //console.log("⚡ Fontes (Sources) recebidas:", allSources);
-        //console.log("🔌 Alimentadores (Feeders) recebidos:", Array.from(feederNodes));
-
-        // 2. A verdadeira raiz é quem é Source mas NÃO É Alimentador
+        // 1. A verdadeira raiz é quem é Source mas NÃO É Alimentador
         const trueRoots = allSources.filter(s => !feederNodes.has(s));
-
         if (trueRoots.length === 0) {
             console.warn("⚠️ ALERTA: Nenhuma fonte principal encontrada! Verifique o arquivo de dados.");
         }
-
-        // 3. Define as raízes
         const rootSourcesSet = new Set(trueRoots.length > 0 ? trueRoots : allSources);
-        const rootBranchIds = [];
-        
-        // 4. Blackout seletivo nas Chaves Mestras da Subestação
+
+        // 2. Identificação das Chaves Mestras e geração do Blackout
+        const rootBranches = [];
         const blackoutState = targetBranches.map(b => {
             const isMasterSwitch = rootSourcesSet.has(Number(b.from)) || rootSourcesSet.has(Number(b.to));
-
             if (b.state === 1 && isMasterSwitch) {
-                rootBranchIds.push(b.id);
+                rootBranches.push(b);
                 return { ...b, state: 0 }; 
             }
             return { ...b };
         });
 
-        //console.log("✂️ CHAVES DA SUBESTAÇÃO ABERTAS:", rootBranchIds);
+        // =========================================================
+        // 🧠 3. INTELIGÊNCIA DE LOOPS: Agrupamento Topológico
+        // =========================================================
+        const rootBranchIds = new Set(rootBranches.map(b => b.id));
+        const adj = {};
+        
+        // 3a. Cria mapa de conexões APENAS com a rede interna (ignorando as chaves mestras)
+        targetBranches.forEach(b => {
+            if (b.state === 1 && !rootBranchIds.has(b.id)) {
+                if (!adj[b.from]) adj[b.from] = [];
+                if (!adj[b.to]) adj[b.to] = [];
+                adj[b.from].push(b.to);
+                adj[b.to].push(b.from);
+            }
+        });
+
+        const nodeComponent = {};
+        let compCounter = 0;
+        
+        // 3b. Algoritmo de Busca (BFS) para mapear Ilhas
+        const getComponent = (startNode) => {
+            if (nodeComponent[startNode] !== undefined) return nodeComponent[startNode];
+            compCounter++;
+            const queue = [startNode];
+            nodeComponent[startNode] = compCounter;
+            
+            let head = 0;
+            while(head < queue.length) {
+                const u = queue[head++];
+                if (adj[u]) {
+                    adj[u].forEach(v => {
+                        if (nodeComponent[v] === undefined) {
+                            nodeComponent[v] = compCounter;
+                            queue.push(v);
+                        }
+                    });
+                }
+            }
+            return compCounter;
+        };
+
+        const groupsMap = {};
+        rootBranches.forEach(b => {
+            // Pega o nó da chave que está "dentro" da rede (e não na subestação)
+            const networkNode = rootSourcesSet.has(Number(b.from)) ? Number(b.to) : Number(b.from);
+            const compId = getComponent(networkNode);
+            
+            if (!groupsMap[compId]) groupsMap[compId] = [];
+            groupsMap[compId].push(b.id); // Agrupa as chaves que tocam a mesma ilha
+        });
+
+        // Converte o mapa em um Array de grupos de chaves
+        const rootBranchGroups = Object.values(groupsMap);
+        // =========================================================
+
+        // Desliga a subestação
         setBranches(blackoutState);
 
-        // 5. Religamento em Cascata
+        // 4. Religamento em Cascata (Agrupado por Ilha/Loop)
         let index = 0;
         const interval = setInterval(() => {
-            if (index >= rootBranchIds.length) {
+            if (index >= rootBranchGroups.length) {
                 clearInterval(interval);
                 return;
             }
 
-            const branchToClose = rootBranchIds[index];
+            const groupToClose = rootBranchGroups[index]; // Array com 1 ou mais IDs de chaves
+            
+            // 4a. Liga TODAS as chaves do grupo simultaneamente
             setBranches(prev => prev.map(b => 
-                b.id === branchToClose ? { ...b, state: 1 } : b
+                groupToClose.includes(b.id) ? { ...b, state: 1 } : b
             ));
             
+            // 4b. Acorda o Newton-Raphson com os nós de todas as chaves fechadas
+            const nodesToWake = new Set();
+            targetBranches.forEach(b => {
+                if (groupToClose.includes(b.id)) {
+                    nodesToWake.add(b.from);
+                    nodesToWake.add(b.to);
+                }
+            });
+            if (nodesToWake.size > 0) setLastEventNodes(nodesToWake);
+
             index++;
-        }, 100);
-    }, []); // 👈 O array vazio garante que a função é imune ao atraso do React
+        }, 5100);
+    }, []);
 
     // 👇 FUNÇÃO DE CARREGAMENTO UNIFICADA 👇
     const applySystemData = useCallback((data, sourceName = "Externo") => {

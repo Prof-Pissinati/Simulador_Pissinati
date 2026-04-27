@@ -3,6 +3,8 @@ import { solveLinearSystem } from './mathSolver';
 // --- GERENCIADOR DE CACHE ---
 export const CacheManager = {
     cache: new Map(),
+    islandCache: new Map(), // memória isolada por ilhas. Cada ilha tem seu próprio cache de topologia reduzida e resultados.
+    hashHistory: new Map(),
     getKey: (branches, faultNodes, method, sysData) => {
         const branchState = branches.map(b => `${b.id}:${b.state}:${b.currentTap || 0}`).join('|');
         const faultState = Array.from(faultNodes).sort().join(',');
@@ -113,14 +115,40 @@ export function runPowerFlow(branches, faultNodes, method = 'NR', sysData, event
         finalNodes[s] = { v: 1.0, angle: 0, p: 0, q: 0 };
     });
 
-    // 👇 2. O MOTOR PROCESSA CADA ILHA ISOLADAMENTE 👇
     islands.forEach((island, index) => {
         const islandSysData = { ...sysData, sources: island.sources };
         
+        // ==============================================================
+        // 🧠 INTELIGÊNCIA ARTIFICIAL: CACHE POR ILHA
+        // ==============================================================
+        const sortedBranches = [...island.branches].sort((a, b) => a.id - b.id);
+        const islandBranchHash = sortedBranches.map(b => `${b.id}:${b.state}:${b.currentTap||0}`).join(',');
+        
+        const sortedNodes = Array.from(island.nodes).sort();
+        const islandNodeHash = sortedNodes.map(n => {
+            let h = `${n}`;
+            if (faultNodes.has(n)) h += 'F';
+            if (islandSysData.shunts[n]) h += `S${islandSysData.shunts[n].steps}`;
+            if (islandSysData.loads[n]) h += `L${islandSysData.loads[n].p}-${islandSysData.loads[n].q}`;
+            return h;
+        }).join(',');
+        
+        const islandKey = `${method}-${Vbase}-${Sbase}|${islandBranchHash}|${islandNodeHash}`;
+
+        if (CacheManager.islandCache.has(islandKey)) {
+            console.log(`   ♻️ Ilha ${index + 1}: Recuperada do cache 🚀`);
+            const cachedIsland = CacheManager.islandCache.get(islandKey);
+            Object.assign(finalNodes, cachedIsland.nodes);
+            Object.assign(finalLines, cachedIsland.lines);
+            return; 
+        }
+        // ==============================================================
+
         // NOVO: Verifica se esta ilha possui algum BC ativo
         const hasActiveShunt = Array.from(island.nodes).some(id => 
             islandSysData.shunts[id] && islandSysData.shunts[id].steps > 0
         );
+        
 
         // NOVO: Se tiver BC, blinda a ilha inteira. Se não, usa só o escudo de manobras normal.
         const currentShield = new Set(eventNodes);
@@ -169,6 +197,9 @@ export function runPowerFlow(branches, faultNodes, method = 'NR', sysData, event
         if (n === 0 || reducedBranches.length === 0) {
             const emptyResult = buildResult([], [], [], 1, reducedBranches, new Map(), new Set(), reducedSysData);
             const expanded = expandSystemResults(emptyResult, pruneHistory, islandSysData, island.branches);
+
+            CacheManager.islandCache.set(islandKey, expanded);
+
             Object.assign(finalNodes, expanded.nodes);
             Object.assign(finalLines, expanded.lines);
             return; 
@@ -246,11 +277,16 @@ export function runPowerFlow(branches, faultNodes, method = 'NR', sysData, event
             solveNewtonRaphson(n, busType, P_spec, Q_spec, G, B, V, Theta);
         }
 
+
         const pfResult = buildResult(nodes, V, Theta, Zbase, reducedBranches, nodeMap, islandNodesSet, reducedSysData);
         
         // Expande o resultado exclusivo desta ilha
         const expanded = expandSystemResults(pfResult, pruneHistory, islandSysData, island.branches);
         
+        // 👇 SALVA O NOVO RESULTADO NO CACHE DA ILHA 👇
+        if (CacheManager.islandCache.size > 500) CacheManager.islandCache.clear(); // Proteção de Memória RAM
+        CacheManager.islandCache.set(islandKey, expanded);
+
         // "Cola" o pedaço finalizado no Mapa Geral
         Object.assign(finalNodes, expanded.nodes);
         Object.assign(finalLines, expanded.lines);
@@ -708,6 +744,9 @@ export function expandSystemResults(pfResult, pruneHistory, sysData, originalBra
         
         // Converte o shift para graus e subtrai do ângulo do pai
         const leafAngle = parentAngle - (deltaThetaRad * (180 / Math.PI));
+
+        // 👇 ADICIONE ESTA CÂMERA DE SEGURANÇA AQUI 👇
+        console.log(`📉 [Via Expressa Radial] Barra ${record.leafId}: Tensão calculada = ${vLeaf.toFixed(4)} pu | Ângulo = ${leafAngle.toFixed(4)}°`);
 
         pfResult.nodes[record.leafId] = { v: vLeaf, angle: leafAngle, p: record.pFlow, q: record.qFlow };
 
