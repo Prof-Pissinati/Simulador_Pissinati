@@ -304,23 +304,25 @@ export default function GraphArea({
         e.stopPropagation();
         const ctx = contextRef.current;
         if (ctx.isEditMode) return;
-        
+
+        if (e.ctrlKey || e.metaKey) {
+            const branch = ctx.branches.find(b => b.id === branchId);
+            ctx.setSelectedElement({ type: 'edge', data: branch });
+            return; // SEM tooltip, SEM toggleSwitch
+        }
         if (e.shiftKey) {
             const branch = ctx.branches.find(b => b.id === branchId);
             ctx.setSelectedElement({ type: 'edge', data: branch });
-            
             const rawPt = getRawSVGPoint(e.clientX, e.clientY);
             const spawnX = (rawPt.x - transform.x) / transform.scale;
             const spawnY = (rawPt.y - transform.y) / transform.scale;
-
             setPinnedCards(prev => {
                 const exists = prev.find(p => p.id === branchId && p.type === 'line');
-                if (exists) return prev.filter(p => !(p.id === branchId && p.type === 'line')); 
-                return [...prev, { id: branchId, type: 'line', x: spawnX + 20, y: spawnY + 20 }]; 
+                if (exists) return prev.filter(p => !(p.id === branchId && p.type === 'line'));
+                return [...prev, { id: branchId, type: 'line', x: spawnX + 20, y: spawnY + 20 }];
             });
-            return; 
+            return;
         }
-
         const branch = ctx.branches.find(b => b.id === branchId);
         if (branch.hasSwitch || ctx.maintenanceMode) ctx.toggleSwitch(branchId);
     }, [getRawSVGPoint, transform]);
@@ -454,17 +456,19 @@ export default function GraphArea({
     }, [getTransformedPoint]);
 
     const handleNodeClick = useCallback((e, nodeId) => {
-        e.stopPropagation(); 
+        e.stopPropagation();
         const ctx = contextRef.current;
         if (ctx.isEditMode || wasDragged.current) return;
-        
+
+        if (e.ctrlKey || e.metaKey) {
+            ctx.setSelectedElement({ type: 'node', id: nodeId });
+            return; // SEM tooltip, SEM toggleFault
+        }
         if (e.shiftKey) {
             ctx.setSelectedElement({ type: 'node', id: nodeId });
-            
             const rawPt = getRawSVGPoint(e.clientX, e.clientY);
             const spawnX = (rawPt.x - transform.x) / transform.scale;
             const spawnY = (rawPt.y - transform.y) / transform.scale;
-
             setPinnedCards(prev => {
                 const exists = prev.find(p => p.id === nodeId && p.type === 'node');
                 if (exists) return prev.filter(p => !(p.id === nodeId && p.type === 'node'));
@@ -472,7 +476,6 @@ export default function GraphArea({
             });
             return;
         }
-
         ctx.toggleFault(nodeId);
     }, [getRawSVGPoint, transform]);
 

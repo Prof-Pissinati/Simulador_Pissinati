@@ -211,7 +211,7 @@ function App() {
             if (nodesToWake.size > 0) setLastEventNodes(nodesToWake);
 
             index++;
-        }, 5100);
+        }, 50);
     }, []);
 
     // 👇 FUNÇÃO DE CARREGAMENTO UNIFICADA 👇
@@ -1337,6 +1337,7 @@ const handleShuntChange = useCallback((nodeId, increment) => {
                         <ul style={{ listStyle: 'none', padding: 0, margin: 0, lineHeight: '2' }}>
                             <li><strong style={{ color: '#00bcd4' }}>Clique (Chave)</strong> - Abrir/Fechar Chave</li>
                             <li><strong style={{ color: '#00bcd4' }}>Clique (Barra)</strong> - Inserir/Remover Falta</li>
+                            <li><strong style={{ color: '#ff9800' }}>Ctrl + Clique</strong> - Inspecionar Elemento (Seleção Fixa)</li>
                             <li><strong style={{ color: '#ff9800' }}>Shift + Clique</strong> - Fixar/Desafixar Tooltip (Post-it)</li>
                             <li><strong style={{ color: '#ff9800' }}>Shift + Arrastar Fundo</strong> - Seleção Múltipla (Modo Edição)</li>
                             <li><strong style={{ color: '#ff9800' }}>Duplo Clique (Linha)</strong> - Criar/Remover Joelho (Modo Edição)</li>

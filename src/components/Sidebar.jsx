@@ -530,7 +530,7 @@ export default function Sidebar({
                         {!isMini && (
                             <>
                                 <span style={{ fontSize: '16px', fontWeight: 'bold', marginBottom: '5px' }}>Inspetor de Elementos</span>
-                                <span style={{ fontSize: '13px' }}>Clique ou passe o mouse sobre<br/>uma barra ou linha.<br/> Use Shift + Clique para fixar </span>
+                                <span style={{ fontSize: '13px' }}>Clique ou passe o mouse sobre<br/>uma barra ou linha.<br/> Use Ctrl + Clique para fixar </span>
                             </>
                         )}
                     </div>
