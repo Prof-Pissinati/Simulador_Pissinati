@@ -974,6 +974,7 @@ export default function GraphArea({
                                         showLabels={showLabels} nodeLoad={nodeLoad} hasShunt={hasShunt} 
                                         onMouseDown={handleNodeMouseDown} onClick={handleNodeClick}
                                         onMouseEnter={handleNodeMouseEnter} onMouseLeave={handleNodeMouseLeave}
+                                        currentScale={transform.scale}
                                     />
                                     {hasShunt && (
                                         <g transform={`translate(${pos.x + 18}, ${pos.y - 18})`} style={{ cursor: isEditMode ? 'default' : 'pointer', pointerEvents: 'all' }}>
@@ -1013,14 +1014,15 @@ export default function GraphArea({
                                 pinnedCards={pinnedCards}
                                 setPinnedCards={setPinnedCards}
                                 nodeData={nodeData}
-                                mouseSvgPt={mouseSvgPt} // 👈 INJEÇÃO DA ANTENA
+                                mouseSvgPt={mouseSvgPt}
+                                currentScale={transform.scale} // 👈 Mantém essa linha!
                             />
                         )}
-                    </g>
+                    </g> {/* 👈 O FECHAMENTO DO G VOLTA PARA CÁ, ABRAÇANDO O TOOLTIP DE NOVO */}
                 </svg>
 
                 {children}
             </div>
         </div>
     );
-}
+};

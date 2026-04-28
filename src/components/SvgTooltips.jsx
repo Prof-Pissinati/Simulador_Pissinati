@@ -6,10 +6,16 @@ const TOOLTIP_H_NODE_SM = 70;
 const TOOLTIP_H_NODE_LOAD = 90;
 const TOOLTIP_H_NODE_SOURCE = 120; // 👈 Altura extra para caber a tensão nas Subestações e Alimentadores
 
-function smartOffset(anchorX, anchorY, tooltipW, tooltipH, bounds) {
-    if (!bounds) return { dx: 20, dy: 20 };
-    const dx = (anchorX + 20 + tooltipW > bounds.right)  ? -(tooltipW + 20) : 20;
-    const dy = (anchorY + 20 + tooltipH > bounds.bottom) ? -(tooltipH + 20) : 20;
+function smartOffset(anchorX, anchorY, tooltipW, tooltipH, bounds, invScale = 1) {
+    // Escala o tamanho e o "respiro" de 20px para não ficar grudado no mouse de longe
+    const actualW = tooltipW * invScale;
+    const actualH = tooltipH * invScale;
+    const offset = 20 * invScale;
+
+    if (!bounds) return { dx: offset, dy: offset };
+    
+    const dx = (anchorX + offset + actualW > bounds.right)  ? -(actualW + offset) : offset;
+    const dy = (anchorY + offset + actualH > bounds.bottom) ? -(actualH + offset) : offset;
     return { dx, dy };
 }
 
@@ -33,8 +39,11 @@ export default function SvgTooltips({
     pinnedCards = [],
     setPinnedCards,
     nodeData,
-    mouseSvgPt // 👈 Rastreio do mouse vindo do GraphArea
+    mouseSvgPt, // 👈 Rastreio do mouse vindo do GraphArea
+    currentScale
 }) {
+    
+    const invScale = 1 / (currentScale || 1);
 
     const removeCard = (id, type) => {
         setPinnedCards(prev => prev.filter(c => !(String(c.id) === String(id) && c.type === type)));
@@ -65,7 +74,7 @@ export default function SvgTooltips({
         const isOverloaded = safePercent > 100;
 
         return (
-            <g transform={`translate(${x}, ${y})`} pointerEvents={isPinned ? "all" : "none"} className={isPinned ? "pinned-card" : "svg-tooltip"} data-id={branch.id} data-type="line" key={isPinned ? `pin-line-${branch.id}` : `hov-line-${branch.id}`}>
+            <g transform={`translate(${x}, ${y}) scale(${invScale})`} pointerEvents={isPinned ? "all" : "none"} className={isPinned ? "pinned-card" : "svg-tooltip"} data-id={branch.id} data-type="line" key={isPinned ? `pin-line-${branch.id}` : `hov-line-${branch.id}`}>
                 
                 {/* Fundo do Card (Borda azul vivido se estiver fixado) */}
                 <rect x="0" y="0" width={TOOLTIP_W} height={TOOLTIP_H_LINE} rx="6" fill="rgba(18,18,18,0.96)" stroke={isPinned ? "#001aff" : "#444"} strokeWidth={isPinned ? "1.5" : "1"} cursor={isPinned ? "grab" : "default"} />
@@ -146,7 +155,7 @@ export default function SvgTooltips({
         const titleLabel = isMainSource ? `Subestação ${nodeId}` : isFeeder ? `Alim. ${nodeId}` : `Barra ${nodeId}`;
 
         return (
-            <g transform={`translate(${x}, ${y})`} pointerEvents={isPinned ? "all" : "none"} className={isPinned ? "pinned-card" : "svg-tooltip"} data-id={nodeId} data-type="node" key={isPinned ? `pin-node-${nodeId}` : `hov-node-${nodeId}`}>
+            <g transform={`translate(${x}, ${y}) scale(${invScale})`} pointerEvents={isPinned ? "all" : "none"} className={isPinned ? "pinned-card" : "svg-tooltip"} data-id={nodeId} data-type="node" key={isPinned ? `pin-node-${nodeId}` : `hov-node-${nodeId}`}>
                 
                 <rect x="0" y="0" width={TOOLTIP_W} height={cardH} rx="6" fill="rgba(18,18,18,0.96)" stroke={isPinned ? "#001aff" : "#444"} strokeWidth={isPinned ? "1.5" : "1"} cursor={isPinned ? "grab" : "default"} />
                 
@@ -215,7 +224,7 @@ export default function SvgTooltips({
 
                 const ptX = mouseSvgPt?.x || 0;
                 const ptY = mouseSvgPt?.y || 0;
-                const { dx, dy } = smartOffset(ptX, ptY, TOOLTIP_W, TOOLTIP_H_LINE, svgWorldBounds);
+                const { dx, dy } = smartOffset(ptX, ptY, TOOLTIP_W, TOOLTIP_H_LINE, svgWorldBounds, invScale);
 
                 return renderLineCard(hoveredBranch.id, ptX + dx, ptY + dy, false, hoveredBranch, hoveredLineData);
             })()}
@@ -233,7 +242,7 @@ export default function SvgTooltips({
                 
                 const ptX = mouseSvgPt?.x || 0;
                 const ptY = mouseSvgPt?.y || 0;
-                const { dx, dy } = smartOffset(ptX, ptY, TOOLTIP_W, tooltipH, svgWorldBounds);
+                const { dx, dy } = smartOffset(ptX, ptY, TOOLTIP_W, TOOLTIP_H_LINE, svgWorldBounds, invScale);
 
                 return renderNodeCard(localHoveredNode, ptX + dx, ptY + dy, false, hoveredNodeInfo);
             })()}

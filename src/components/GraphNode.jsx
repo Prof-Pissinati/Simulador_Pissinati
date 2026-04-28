@@ -25,8 +25,13 @@ const GraphNode = memo(function GraphNode({
     onMouseDown,
     onClick,
     onMouseEnter,
-    onMouseLeave
+    onMouseLeave,
+    currentScale
 }) {
+
+    // 👇 A MÁGICA DA ESCALA INVERSA (Limitada a 3x para não poluir a tela) 👇
+    const inverseScale = Math.min(1 / (currentScale || 1), 3);
+
     // Contorno de destaque ao hover / seleção
     const strokeColor = isHighlighted
         ? 'rgba(255,255,255,0.35)'
@@ -55,7 +60,8 @@ const GraphNode = memo(function GraphNode({
     return (
         <g
             style={{
-                transform: `translate(${pos.x}px, ${pos.y}px)`,
+                // 👇 APLIQUE O INVERSESCALE AQUI 👇
+                transform: `translate(${pos.x}px, ${pos.y}px) scale(${inverseScale})`,
                 cursor: isEditMode ? 'grab' : 'pointer',
                 transition: isRestoringLayout
                     ? 'transform 0.4s cubic-bezier(0.25, 1, 0.5, 1)'
