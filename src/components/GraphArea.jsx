@@ -1,4 +1,4 @@
-import React, { useRef, useState, useEffect, useCallback } from 'react';
+import React, { useRef, useState, useEffect, useCallback, useMemo } from 'react';
 import { SYSTEM_DATA } from '../data/systemData';
 import SvgTooltips from './SvgTooltips';
 import GraphEdge from './GraphEdge';
@@ -826,6 +826,49 @@ export default function GraphArea({
         overflow: 'hidden'
     };
 
+    // 👇 VIEWPORT CULLING COM HISTERESE (Zonas Mortas O-X-Z) 👇
+    const [visibleBounds, setVisibleBounds] = useState({ minX: -Infinity, minY: -Infinity, maxX: Infinity, maxY: Infinity });
+    const lastCullingTransform = useRef({ x: 0, y: 0, scale: 1 });
+
+    useEffect(() => {
+        // No modo impressão, desenha tudo para o PDF sair perfeito
+        if (printFrameMode !== 'none') {
+            setVisibleBounds({ minX: -Infinity, minY: -Infinity, maxX: Infinity, maxY: Infinity });
+            return;
+        }
+        
+        if (!containerSize || containerSize.w === 0) return;
+
+        const t = transform;
+        const prev = lastCullingTransform.current;
+
+        // Zona "O" (Tolerância): Só recalcula se arrastar mais de 30% do tamanho da tela
+        const toleranceX = (containerSize.w / t.scale) * 0.3;
+        const toleranceY = (containerSize.h / t.scale) * 0.3;
+
+        const dx = Math.abs((t.x - prev.x) / t.scale);
+        const dy = Math.abs((t.y - prev.y) / t.scale);
+        const scaleChanged = Math.abs(t.scale - prev.scale) > 0.05; // Atualiza imediatamente se der zoom
+
+        // Se saiu da zona de tolerância (cruzou a fronteira O -> X), recalcula o Culling!
+        if (scaleChanged || dx > toleranceX || dy > toleranceY || visibleBounds.minX === -Infinity) {
+            
+            // 👇 SUA OTIMIZAÇÃO: Se tolera 30%, a margem só precisa ser 40% 👇
+            const marginX = (containerSize.w / t.scale) * 0.4;
+            const marginY = (containerSize.h / t.scale) * 0.4;
+
+            setVisibleBounds({
+                minX: (-t.x) / t.scale - marginX,
+                minY: (-t.y) / t.scale - marginY,
+                maxX: (-t.x + containerSize.w) / t.scale + marginX,
+                maxY: (-t.y + containerSize.h) / t.scale + marginY,
+            });
+            // Salva a posição da câmera deste último corte
+            lastCullingTransform.current = t;
+        }
+    }, [transform, containerSize, printFrameMode, visibleBounds.minX]);
+    // 👆 FIM DA HISTERESE 👆
+
     return (
         <div className="graph-container" style={{ position: 'relative', width: '100%', height: '100%', display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
             <div ref={measureRef} style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, pointerEvents: 'none', zIndex: -1 }}></div>
@@ -858,6 +901,16 @@ export default function GraphArea({
                             const p1 = manualPositions[b.from] || renderPositions[b.from];
                             const p2 = manualPositions[b.to] || renderPositions[b.to];
                             if (!p1 || !p2) return null; 
+
+                            // 👇 CULLING DAS LINHAS 👇
+                            // Descarta a linha APENAS se AMBOS os extremos estiverem fora da tela expandida
+                            const p1Out = p1.x < visibleBounds.minX || p1.x > visibleBounds.maxX ||
+                                        p1.y < visibleBounds.minY || p1.y > visibleBounds.maxY;
+                            const p2Out = p2.x < visibleBounds.minX || p2.x > visibleBounds.maxX ||
+                                        p2.y < visibleBounds.minY || p2.y > visibleBounds.maxY;
+                            
+                            if (p1Out && p2Out) return null; // Aborta a renderização desta linha
+                            // 👆 FIM DO CULLING 👆
                             
                             const wps = manualWaypoints[b.id] || renderWaypoints[b.id] || [];
                             const waypoints = Array.isArray(wps) ? wps : [];
@@ -888,6 +941,14 @@ export default function GraphArea({
                         {allNodes.map(nodeId => {
                             const pos = manualPositions[nodeId] || renderPositions[nodeId];
                             if (!pos) return null;
+
+                            // 👇 CULLING DAS BARRAS 👇
+                            // Se a barra estiver totalmente fora da área expandida, não renderiza
+                            if (pos.x < visibleBounds.minX || pos.x > visibleBounds.maxX ||
+                                pos.y < visibleBounds.minY || pos.y > visibleBounds.maxY) {
+                                return null; // Aborta a renderização desta barra
+                            }
+                            // 👆 FIM DO CULLING 👆
                             
                             const isSource = sources.includes(nodeId);
                             const isFeeder = feedersList.includes(nodeId);
