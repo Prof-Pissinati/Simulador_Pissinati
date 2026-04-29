@@ -1148,7 +1148,6 @@ const handleShuntChange = useCallback((nodeId, increment) => {
                         sses={sses}
                         handleTapChange={handleTapChange}
                         handleShuntChange={handleShuntChange}
-                        // 👇 AS DUAS LINHAS NOVAS AQUI 👇
                         viewMode={viewMode}
                         vBase={vBase} 
                     />

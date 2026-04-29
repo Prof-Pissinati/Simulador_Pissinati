@@ -105,6 +105,7 @@ const GraphEdge = memo(function GraphEdge({
                 stroke="transparent"
                 strokeWidth="20"
                 fill="none"
+                vectorEffect="non-scaling-stroke"
                 style={{ cursor: isEditMode ? 'move' : 'pointer' }}
                 onMouseDown={(e) => onLineMouseDown(e, branch.id)}
                 onClick={(e) => onLineClick(e, branch.id)}

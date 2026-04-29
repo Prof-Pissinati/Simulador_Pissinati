@@ -573,6 +573,57 @@ export function propagateFeeds(branches, faultNodes, sysData) {
     return nodeFeeds;
 }
 
+/**
+ * Calcula zonas visuais para clustering.
+ * Cada ramal que sai diretamente de uma source ou feeder define uma zona.
+ * Barras sem zona (ilhas sem energia) recebem zona 'blackout'.
+ */
+export function computeVisualZones(branches, sources, feeders, faultNodes = new Set()) {
+    const nodeZone = {};
+    const activeBranches = branches.filter(b => b.state === 1);
+
+    // Monta adjacência
+    const adj = {};
+    activeBranches.forEach(b => {
+        if (!adj[b.from]) adj[b.from] = [];
+        if (!adj[b.to]) adj[b.to] = [];
+        adj[b.from].push({ neighbor: b.to, branchId: b.id });
+        adj[b.to].push({ neighbor: b.from, branchId: b.id });
+    });
+
+    const allBoundary = new Set([...sources, ...feeders]);
+
+    allBoundary.forEach(rootId => {
+        if (faultNodes.has(rootId)) return;
+        const neighbors = adj[rootId] || [];
+
+        neighbors.forEach(({ neighbor, branchId }) => {
+            if (allBoundary.has(neighbor)) return;
+            if (faultNodes.has(neighbor)) return;
+
+            const zoneId = `zone-${rootId}-branch-${branchId}`;
+
+            const queue = [neighbor];
+            const visited = new Set([rootId, neighbor]);
+            nodeZone[neighbor] = zoneId;
+
+            let head = 0;
+            while (head < queue.length) {
+                const u = queue[head++];
+                (adj[u] || []).forEach(({ neighbor: v }) => {
+                    if (visited.has(v) || faultNodes.has(v)) return;
+                    if (allBoundary.has(v)) return;
+                    visited.add(v);
+                    if (!nodeZone[v]) nodeZone[v] = zoneId;
+                    queue.push(v);
+                });
+            }
+        });
+    });
+
+    return nodeZone;
+}
+
 // 👇 CÁLCULO DE CARGA (Com Contagem Hierárquica Múltipla) 👇
 export function calculateLoads(nodeFeeds, faultNodes, sysData) {
     const subs = {};

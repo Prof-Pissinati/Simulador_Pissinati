@@ -27,13 +27,17 @@ export default function GraphArea({
     selectedElement, hoveredLineId, setHoveredLineId, hoveredNodeId, setHoveredNodeId, maintenanceMode,
     activePositions = {}, activeWaypoints = {}, lineCurrents = {}, nodeData = {}, isEditMode, setIsEditMode, darkMode,
     printFrameMode, isFaultSidebarOpen, onSaveLayoutToHistory, children, onExportRequest, loads,
-    systemLoads, sses, feedersList = [], systemShunts, nodeFeeds
+    systemLoads, sses, feedersList = [], systemShunts, nodeFeeds, clusterThreshold = 0.35, faultNodes = new Set()
 }) {
     const svgRef = useRef(null);
     const measureRef = useRef(null); 
     
     const [transform, setTransform] = useState({ x: -50, y: 0, scale: 1 });
     const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
+
+    // Níveis de Detalhe
+    const isDetailed = transform.scale > 0.8; // LOD 0: Completo
+    const isSimplified = transform.scale <= 0.8;
 
     // 👇 ANTENA DE RASTREIO DO MOUSE NO SVG 👇
     const [mouseSvgPt, setMouseSvgPt] = useState({ x: 0, y: 0 });
@@ -849,7 +853,6 @@ export default function GraphArea({
         const dx = Math.abs((t.x - prev.x) / t.scale);
         const dy = Math.abs((t.y - prev.y) / t.scale);
         const scaleChanged = Math.abs(t.scale - prev.scale) > 0.05; // Atualiza imediatamente se der zoom
-
         // Se saiu da zona de tolerância (cruzou a fronteira O -> X), recalcula o Culling!
         if (scaleChanged || dx > toleranceX || dy > toleranceY || visibleBounds.minX === -Infinity) {
             
@@ -868,6 +871,11 @@ export default function GraphArea({
         }
     }, [transform, containerSize, printFrameMode, visibleBounds.minX]);
     // 👆 FIM DA HISTERESE 👆
+
+    // 👇 MOTOR SIMPLIFICADO (LOD 0 e LOD 1 apenas) 👇
+    const displayData = useMemo(() => {
+        return { visibleNodes: allNodes, visibleBranches: branches };
+    }, [allNodes, branches]);
 
     return (
         <div className="graph-container" style={{ position: 'relative', width: '100%', height: '100%', display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
@@ -897,25 +905,65 @@ export default function GraphArea({
                             </g>
                         )}
 
-                        {branches.map(b => {
+                        {displayData.visibleBranches.map(b => {
+                            // 1. Calcula as posições dos extremos (p1 e p2)
                             const p1 = manualPositions[b.from] || renderPositions[b.from];
                             const p2 = manualPositions[b.to] || renderPositions[b.to];
-                            if (!p1 || !p2) return null; 
+                            if (!p1 || !p2) return null;
 
-                            // 👇 CULLING DAS LINHAS 👇
-                            // Descarta a linha APENAS se AMBOS os extremos estiverem fora da tela expandida
-                            const p1Out = p1.x < visibleBounds.minX || p1.x > visibleBounds.maxX ||
-                                        p1.y < visibleBounds.minY || p1.y > visibleBounds.maxY;
-                            const p2Out = p2.x < visibleBounds.minX || p2.x > visibleBounds.maxX ||
-                                        p2.y < visibleBounds.minY || p2.y > visibleBounds.maxY;
-                            
-                            if (p1Out && p2Out) return null; // Aborta a renderização desta linha
-                            // 👆 FIM DO CULLING 👆
-                            
+                            // 2. Culling de Linhas (Protege a performance)
+                            const p1Out = p1.x < visibleBounds.minX || p1.x > visibleBounds.maxX || p1.y < visibleBounds.minY || p1.y > visibleBounds.maxY;
+                            const p2Out = p2.x < visibleBounds.minX || p2.x > visibleBounds.maxX || p2.y < visibleBounds.minY || p2.y > visibleBounds.maxY;
+                            if (p1Out && p2Out) return null;
+
+                            // 3. Captura os waypoints e o caminho do SVG
                             const wps = manualWaypoints[b.id] || renderWaypoints[b.id] || [];
                             const waypoints = Array.isArray(wps) ? wps : [];
                             const pathString = getPathData(p1, p2, waypoints);
-                            const color = getEdgeColor(b);
+                            
+                            // 4. Captura a cor oficial da linha
+                            const color = getEdgeColor ? getEdgeColor(b) : (darkMode ? '#888' : '#666');
+
+                            // 👇 INJEÇÃO DO LOD 1 (Micro-Lines Interativas) 👇
+                            if (isSimplified) {
+                                return (
+                                    <g key={`micro-edge-group-${b.id}`}>
+                                        <path 
+                                            key={`micro-edge-${b.id}`} 
+                                            d={pathString} 
+                                            stroke={color} 
+                                            strokeWidth={1.5 / transform.scale} 
+                                            fill="none" 
+                                            vectorEffect="non-scaling-stroke"
+                                            strokeDasharray={b.state === 1 ? 'none' : '4,3'}
+                                            style={{ cursor: isEditMode ? 'move' : 'pointer', opacity: b.state === 1 ? 1 : 0.4 }}
+                                            onMouseEnter={() => handleLineMouseEnter(b.id)}
+                                            onMouseLeave={() => handleLineMouseLeave(b.id)}
+                                            onClick={(e) => handleLineClick(e, b.id)}
+                                            // 👇 EVENTOS DE EDIÇÃO ADICIONADOS AQUI 👇
+                                            onMouseDown={(e) => handleLineMouseDown(e, b.id)} 
+                                            onDoubleClick={(e) => handleLineDoubleClick(e, b.id)}
+                                        />
+                                        {/* 👇 DESENHA OS WAYPOINTS MESMO NO MODO SIMPLIFICADO 👇 */}
+                                        {isEditMode && waypoints.map((wp, wpIndex) => {
+                                            const wpKey = `${b.id}-${wpIndex}`;
+                                            const isSelectedWp = selectedEditWaypoints.has(wpKey);
+                                            return (
+                                                <circle
+                                                    key={`micro-wp-${wpKey}`}
+                                                    cx={wp.x} cy={wp.y}
+                                                    r={isSelectedWp ? 6 / transform.scale : 4 / transform.scale}
+                                                    fill={isSelectedWp ? '#2962ff' : '#ff9800'}
+                                                    style={{ cursor: 'grab' }}
+                                                    onMouseDown={(e) => handleWaypointMouseDown(e, b.id, wpIndex, wpKey, wp)}
+                                                    onDoubleClick={(e) => handleWaypointDoubleClick(e, b.id, wpIndex)}
+                                                />
+                                            );
+                                        })}
+                                    </g>
+                                );
+                            }
+                            // 👆 FIM DA INJEÇÃO 👆
                             
                             const isHovered = hoveredLineId === b.id || localHoveredLine === b.id;
                             const isSelected = selectedElement && selectedElement.type === 'edge' && selectedElement.data.id === b.id;
@@ -938,7 +986,8 @@ export default function GraphArea({
                             );
                         })}
 
-                        {allNodes.map(nodeId => {
+
+                        {displayData.visibleNodes.map(nodeId => {
                             const pos = manualPositions[nodeId] || renderPositions[nodeId];
                             if (!pos) return null;
 
@@ -950,9 +999,33 @@ export default function GraphArea({
                             }
                             // 👆 FIM DO CULLING 👆
                             
+                            const color = getNodeColor(nodeId); // Movido para cima
+
+                            // 👇 INJEÇÃO DO LOD 1 (Micro-Dots Interativos) 👇
+                            if (isSimplified) {
+                                const isSelectedEdit = isEditMode && selectedEditNodes.has(nodeId);
+                                return (
+                                    <circle 
+                                        key={`micro-node-${nodeId}`} 
+                                        cx={pos.x} 
+                                        cy={pos.y} 
+                                        r={isSelectedEdit ? 6 / transform.scale : 4 / transform.scale} 
+                                        fill={color}
+                                        stroke={isSelectedEdit ? '#fff' : 'none'}
+                                        strokeWidth={isSelectedEdit ? 1.5 / transform.scale : 0}
+                                        style={{ cursor: isEditMode ? 'grab' : 'pointer' }}
+                                        onMouseEnter={() => handleNodeMouseEnter(nodeId)}
+                                        onMouseLeave={() => handleNodeMouseLeave(nodeId)}
+                                        onClick={(e) => handleNodeClick(e, nodeId)}
+                                        // 👇 O MOTOR DE ARRASTO CONECTADO AQUI 👇
+                                        onMouseDown={(e) => handleNodeMouseDown(e, nodeId)} 
+                                    />
+                                );
+                            }
+                            // 👆 FIM DA INJEÇÃO 👆
+
                             const isSource = sources.includes(nodeId);
                             const isFeeder = feedersList.includes(nodeId);
-                            const color = getNodeColor(nodeId);
                             const isSelectedEdit = selectedEditNodes.has(nodeId);
                             const isHighlighted = hoveredNodeId === nodeId || localHoveredNode === nodeId || isSelectedEdit || (!isEditMode && selectedElement?.id === nodeId);
                             const nodeLoad = systemLoads && systemLoads[nodeId] ? (systemLoads[nodeId].p / 1000).toFixed(1) : null;
@@ -1018,7 +1091,7 @@ export default function GraphArea({
                                 currentScale={transform.scale} // 👈 Mantém essa linha!
                             />
                         )}
-                    </g> {/* 👈 O FECHAMENTO DO G VOLTA PARA CÁ, ABRAÇANDO O TOOLTIP DE NOVO */}
+                    </g> 
                 </svg>
 
                 {children}
