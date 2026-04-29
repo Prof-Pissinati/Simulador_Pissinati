@@ -36,8 +36,8 @@ export default function GraphArea({
     const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
 
     // Níveis de Detalhe
-    const isDetailed = transform.scale > 0.8; // LOD 0: Completo
-    const isSimplified = transform.scale <= 0.8;
+    const isDetailed = transform.scale > 0.9; // LOD 0: Completo
+    const isSimplified = transform.scale <= 0.9;
 
     // 👇 ANTENA DE RASTREIO DO MOUSE NO SVG 👇
     const [mouseSvgPt, setMouseSvgPt] = useState({ x: 0, y: 0 });
