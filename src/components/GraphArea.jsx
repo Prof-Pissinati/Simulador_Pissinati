@@ -3,6 +3,7 @@ import { SYSTEM_DATA } from '../data/systemData';
 import SvgTooltips from './SvgTooltips';
 import GraphEdge from './GraphEdge';
 import GraphNode from './GraphNode';
+import CanvasOverlay from './CanvasOverlay'; // 👈 Adicione este import
 
 const FIXED_GRID_SIZE = 10;
 
@@ -36,8 +37,9 @@ export default function GraphArea({
     const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
 
     // Níveis de Detalhe
-    const isDetailed = transform.scale > 0.9; // LOD 0: Completo
-    const isSimplified = transform.scale <= 0.9;
+    const isDetailed = transform.scale > 0.9; // LOD 0: Componentes SVG Completos
+    const isSimplified = transform.scale <= 0.9 && transform.scale >= 0.35; // LOD 1: SVG Simplificado (Ativo apenas no "meio do caminho")
+    const isCanvas = transform.scale < 0.35;  // LOD 2: Renderizador de Alta Performance (Canvas)
 
     // 👇 ANTENA DE RASTREIO DO MOUSE NO SVG 👇
     const [mouseSvgPt, setMouseSvgPt] = useState({ x: 0, y: 0 });
@@ -496,8 +498,10 @@ export default function GraphArea({
 
     const isPaper = printFrameMode !== 'none';
     const isLandscape = printFrameMode === 'landscape';
-    const vbW = isPaper ? (isLandscape ? 2970 : 2100) : 900;
-    const vbH = isPaper ? (isLandscape ? 2100 : 2970) : 650;
+    
+    // 👇 O SVG agora usa os pixels reais da tela (containerSize), alinhando 100% com o Canvas!
+    const vbW = isPaper ? (isLandscape ? 2970 : 2100) : (containerSize.w || 900);
+    const vbH = isPaper ? (isLandscape ? 2100 : 2970) : (containerSize.h || 650);
 
     const handleZoomExtents = useCallback(() => {
         const { positions, waypoints } = getCurrentFullLayout();
@@ -882,6 +886,23 @@ export default function GraphArea({
             <div ref={measureRef} style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, pointerEvents: 'none', zIndex: -1 }}></div>
 
             <div className="paper-container" style={paperStyle}>
+                
+                {/* 👇 NOVO: CAMADA DE PERFORMANCE (LOD 2) 👇 */}
+                {isCanvas && (
+                    <CanvasOverlay 
+                        allNodes={allNodes}
+                        branches={branches}
+                        activePositions={activePositions}
+                        activeWaypoints={activeWaypoints}
+                        transform={transform}
+                        getNodeColor={getNodeColor}
+                        getEdgeColor={getEdgeColor}
+                        width={containerSize.w}
+                        height={containerSize.h}
+                        darkMode={darkMode}
+                    />
+                )}
+                    
                 <svg id="sistema-eletrico-svg" className="graph-svg" viewBox={`0 0 ${vbW} ${vbH}`} 
                     preserveAspectRatio="xMidYMid meet" 
                     ref={svgRef}
@@ -890,119 +911,124 @@ export default function GraphArea({
                     onMouseEnter={() => setIsHoveringSVG(true)}
                     onMouseLeave={() => { setIsHoveringSVG(false); isPanning.current = false; isSelecting.current = false; setHoveredLineId(null); setHoveredNodeId(null); setLocalHoveredNode(null); setLocalHoveredLine(null); if(dragInfo) setDragInfo(null); if(draggingCard) setDraggingCard(null); }}
                 >
-                    <g 
-                        transform={`translate(${transform.x}, ${transform.y}) scale(${transform.scale})`}
-                        style={{ transition: isAnimatingZoom ? 'transform 0.5s cubic-bezier(0.25, 1, 0.5, 1)' : 'none' }}
-                    >
-                        {isEditMode && (
-                            <g>
-                                <defs>
-                                    <pattern id={`bg-grid-${FIXED_GRID_SIZE}`} width={FIXED_GRID_SIZE} height={FIXED_GRID_SIZE} patternUnits="userSpaceOnUse">
-                                        <path d={`M ${FIXED_GRID_SIZE} 0 L 0 0 0 ${FIXED_GRID_SIZE}`} fill="none" stroke={darkMode ? '#333' : '#e0e0e0'} strokeWidth="1"/>
-                                    </pattern>
-                                </defs>
-                                <rect id="bg-grid-rect" x="-10000" y="-10000" width="20000" height="20000" fill={`url(#bg-grid-${FIXED_GRID_SIZE})`} />
-                            </g>
-                        )}
+                    {!isCanvas && (
+                        <g 
+                            transform={`translate(${transform.x}, ${transform.y}) scale(${transform.scale})`}
+                            style={{ transition: isAnimatingZoom ? 'transform 0.5s cubic-bezier(0.25, 1, 0.5, 1)' : 'none' }}
+                        >
+                            {isEditMode && (
+                                <g>
+                                    <defs>
+                                        <pattern id={`bg-grid-${FIXED_GRID_SIZE}`} width={FIXED_GRID_SIZE} height={FIXED_GRID_SIZE} patternUnits="userSpaceOnUse">
+                                            <path d={`M ${FIXED_GRID_SIZE} 0 L 0 0 0 ${FIXED_GRID_SIZE}`} fill="none" stroke={darkMode ? '#333' : '#e0e0e0'} strokeWidth="1"/>
+                                        </pattern>
+                                    </defs>
+                                    <rect id="bg-grid-rect" x="-10000" y="-10000" width="20000" height="20000" fill={`url(#bg-grid-${FIXED_GRID_SIZE})`} />
+                                </g>
+                            )}
 
-                        {displayData.visibleBranches.map(b => {
-                            // 1. Calcula as posições dos extremos (p1 e p2)
-                            const p1 = manualPositions[b.from] || renderPositions[b.from];
-                            const p2 = manualPositions[b.to] || renderPositions[b.to];
-                            if (!p1 || !p2) return null;
+                            {displayData.visibleBranches.map(b => {
+                                // 1. Calcula as posições dos extremos (p1 e p2)
+                                const p1 = manualPositions[b.from] || renderPositions[b.from];
+                                const p2 = manualPositions[b.to] || renderPositions[b.to];
+                                if (!p1 || !p2) return null;
 
-                            // 2. Culling de Linhas (Protege a performance)
-                            const p1Out = p1.x < visibleBounds.minX || p1.x > visibleBounds.maxX || p1.y < visibleBounds.minY || p1.y > visibleBounds.maxY;
-                            const p2Out = p2.x < visibleBounds.minX || p2.x > visibleBounds.maxX || p2.y < visibleBounds.minY || p2.y > visibleBounds.maxY;
-                            if (p1Out && p2Out) return null;
+                                // 2. Culling de Linhas (Protege a performance)
+                                const p1Out = p1.x < visibleBounds.minX || p1.x > visibleBounds.maxX || p1.y < visibleBounds.minY || p1.y > visibleBounds.maxY;
+                                const p2Out = p2.x < visibleBounds.minX || p2.x > visibleBounds.maxX || p2.y < visibleBounds.minY || p2.y > visibleBounds.maxY;
+                                if (p1Out && p2Out) return null;
 
-                            // 3. Captura os waypoints e o caminho do SVG
-                            const wps = manualWaypoints[b.id] || renderWaypoints[b.id] || [];
-                            const waypoints = Array.isArray(wps) ? wps : [];
-                            const pathString = getPathData(p1, p2, waypoints);
-                            
-                            // 4. Captura a cor oficial da linha
-                            const color = getEdgeColor ? getEdgeColor(b) : (darkMode ? '#888' : '#666');
+                                // 3. Captura os waypoints e o caminho do SVG
+                                const wps = manualWaypoints[b.id] || renderWaypoints[b.id] || [];
+                                const waypoints = Array.isArray(wps) ? wps : [];
+                                const pathString = getPathData(p1, p2, waypoints);
+                                
+                                // 4. Captura a cor oficial da linha
+                                const color = getEdgeColor ? getEdgeColor(b) : (darkMode ? '#888' : '#666');
 
-                            // 👇 INJEÇÃO DO LOD 1 (Micro-Lines Interativas) 👇
-                            if (isSimplified) {
+                                // 👇 INJEÇÃO DO LOD 1 (Micro-Lines Interativas) 👇
+                                if (isSimplified) {
+                                    return (
+                                        <g key={`micro-edge-group-${b.id}`}>
+                                            <path 
+                                                key={`micro-edge-${b.id}`} 
+                                                d={pathString} 
+                                                stroke={color} 
+                                                strokeWidth={1.5 / transform.scale} 
+                                                fill="none" 
+                                                vectorEffect="non-scaling-stroke"
+                                                strokeDasharray={b.state === 1 ? 'none' : '4,3'}
+                                                style={{ cursor: isEditMode ? 'move' : 'pointer', opacity: b.state === 1 ? 1 : 0.4 }}
+                                                onMouseEnter={() => handleLineMouseEnter(b.id)}
+                                                onMouseLeave={() => handleLineMouseLeave(b.id)}
+                                                onClick={(e) => handleLineClick(e, b.id)}
+                                                // 👇 EVENTOS DE EDIÇÃO ADICIONADOS AQUI 👇
+                                                onMouseDown={(e) => handleLineMouseDown(e, b.id)} 
+                                                onDoubleClick={(e) => handleLineDoubleClick(e, b.id)}
+                                            />
+                                            {/* 👇 DESENHA OS WAYPOINTS MESMO NO MODO SIMPLIFICADO 👇 */}
+                                            {isEditMode && waypoints.map((wp, wpIndex) => {
+                                                const wpKey = `${b.id}-${wpIndex}`;
+                                                const isSelectedWp = selectedEditWaypoints.has(wpKey);
+                                                return (
+                                                    <circle
+                                                        key={`micro-wp-${wpKey}`}
+                                                        cx={wp.x} cy={wp.y}
+                                                        r={isSelectedWp ? 6 / transform.scale : 4 / transform.scale}
+                                                        fill={isSelectedWp ? '#2962ff' : '#ff9800'}
+                                                        style={{ cursor: 'grab' }}
+                                                        onMouseDown={(e) => handleWaypointMouseDown(e, b.id, wpIndex, wpKey, wp)}
+                                                        onDoubleClick={(e) => handleWaypointDoubleClick(e, b.id, wpIndex)}
+                                                    />
+                                                );
+                                            })}
+                                        </g>
+                                    );
+                                }
+                                // 👆 FIM DA INJEÇÃO 👆
+                                
+                                const isHovered = hoveredLineId === b.id || localHoveredLine === b.id;
+                                const isSelected = selectedElement && selectedElement.type === 'edge' && selectedElement.data.id === b.id;
+
+                                const lineData = lineCurrents[b.id];
+                                const flowDir = (!lineData || lineData.current < 0.01) ? 0 : (lineData.pFlow >= 0 ? 1 : -1);
+
                                 return (
-                                    <g key={`micro-edge-group-${b.id}`}>
-                                        <path 
-                                            key={`micro-edge-${b.id}`} 
-                                            d={pathString} 
-                                            stroke={color} 
-                                            strokeWidth={1.5 / transform.scale} 
-                                            fill="none" 
-                                            vectorEffect="non-scaling-stroke"
-                                            strokeDasharray={b.state === 1 ? 'none' : '4,3'}
-                                            style={{ cursor: isEditMode ? 'move' : 'pointer', opacity: b.state === 1 ? 1 : 0.4 }}
-                                            onMouseEnter={() => handleLineMouseEnter(b.id)}
-                                            onMouseLeave={() => handleLineMouseLeave(b.id)}
-                                            onClick={(e) => handleLineClick(e, b.id)}
-                                            // 👇 EVENTOS DE EDIÇÃO ADICIONADOS AQUI 👇
-                                            onMouseDown={(e) => handleLineMouseDown(e, b.id)} 
-                                            onDoubleClick={(e) => handleLineDoubleClick(e, b.id)}
-                                        />
-                                        {/* 👇 DESENHA OS WAYPOINTS MESMO NO MODO SIMPLIFICADO 👇 */}
-                                        {isEditMode && waypoints.map((wp, wpIndex) => {
-                                            const wpKey = `${b.id}-${wpIndex}`;
-                                            const isSelectedWp = selectedEditWaypoints.has(wpKey);
-                                            return (
-                                                <circle
-                                                    key={`micro-wp-${wpKey}`}
-                                                    cx={wp.x} cy={wp.y}
-                                                    r={isSelectedWp ? 6 / transform.scale : 4 / transform.scale}
-                                                    fill={isSelectedWp ? '#2962ff' : '#ff9800'}
-                                                    style={{ cursor: 'grab' }}
-                                                    onMouseDown={(e) => handleWaypointMouseDown(e, b.id, wpIndex, wpKey, wp)}
-                                                    onDoubleClick={(e) => handleWaypointDoubleClick(e, b.id, wpIndex)}
-                                                />
-                                            );
-                                        })}
-                                    </g>
+                                    <GraphEdge 
+                                        key={b.id} branch={b} pathString={pathString} color={color}
+                                        isHighlighted={isHovered || isSelected} isEditMode={isEditMode}
+                                        isRestoringLayout={isRestoringLayout} waypoints={waypoints}
+                                        selectedEditWaypoints={selectedEditWaypoints} dragInfoType={dragInfo?.type}
+                                        flowDir={flowDir} p1={p1} p2={p2}
+                                        onLineMouseDown={handleLineMouseDown} onLineClick={handleLineClick}
+                                        onLineDoubleClick={handleLineDoubleClick} onLineMouseEnter={handleLineMouseEnter}
+                                        onLineMouseLeave={handleLineMouseLeave} onWaypointMouseDown={handleWaypointMouseDown}
+                                        onWaypointDoubleClick={handleWaypointDoubleClick}
+                                    />
                                 );
-                            }
-                            // 👆 FIM DA INJEÇÃO 👆
-                            
-                            const isHovered = hoveredLineId === b.id || localHoveredLine === b.id;
-                            const isSelected = selectedElement && selectedElement.type === 'edge' && selectedElement.data.id === b.id;
-
-                            const lineData = lineCurrents[b.id];
-                            const flowDir = (!lineData || lineData.current < 0.01) ? 0 : (lineData.pFlow >= 0 ? 1 : -1);
-
-                            return (
-                                <GraphEdge 
-                                    key={b.id} branch={b} pathString={pathString} color={color}
-                                    isHighlighted={isHovered || isSelected} isEditMode={isEditMode}
-                                    isRestoringLayout={isRestoringLayout} waypoints={waypoints}
-                                    selectedEditWaypoints={selectedEditWaypoints} dragInfoType={dragInfo?.type}
-                                    flowDir={flowDir} p1={p1} p2={p2}
-                                    onLineMouseDown={handleLineMouseDown} onLineClick={handleLineClick}
-                                    onLineDoubleClick={handleLineDoubleClick} onLineMouseEnter={handleLineMouseEnter}
-                                    onLineMouseLeave={handleLineMouseLeave} onWaypointMouseDown={handleWaypointMouseDown}
-                                    onWaypointDoubleClick={handleWaypointDoubleClick}
-                                />
-                            );
-                        })}
+                            })}
 
 
-                        {displayData.visibleNodes.map(nodeId => {
-                            const pos = manualPositions[nodeId] || renderPositions[nodeId];
-                            if (!pos) return null;
+                            {displayData.visibleNodes.map(nodeId => {
+                                const pos = manualPositions[nodeId] || renderPositions[nodeId];
+                                if (!pos) return null;
 
-                            // 👇 CULLING DAS BARRAS 👇
-                            // Se a barra estiver totalmente fora da área expandida, não renderiza
-                            if (pos.x < visibleBounds.minX || pos.x > visibleBounds.maxX ||
-                                pos.y < visibleBounds.minY || pos.y > visibleBounds.maxY) {
-                                return null; // Aborta a renderização desta barra
-                            }
-                            // 👆 FIM DO CULLING 👆
-                            
-                            const color = getNodeColor(nodeId); // Movido para cima
+                                // 👇 CULLING DAS BARRAS 👇
+                                // Se a barra estiver totalmente fora da área expandida, não renderiza
+                                if (pos.x < visibleBounds.minX || pos.x > visibleBounds.maxX ||
+                                    pos.y < visibleBounds.minY || pos.y > visibleBounds.maxY) {
+                                    return null; // Aborta a renderização desta barra
+                                }
+                                // 👆 FIM DO CULLING 👆
+                                
+                                const color = getNodeColor(nodeId); // Movido para cima
 
-                            // 👇 INJEÇÃO DO LOD 1 (Micro-Dots Interativos) 👇
-                            if (isSimplified) {
+                                // 👇 IDENTIFICA OS "MARCOS" DO SISTEMA 👇
+                            const isSource = sources.includes(nodeId);
+                            const isFeeder = feedersList.includes(nodeId);
+
+                            // 👇 INJEÇÃO DO LOD 1 — Simplifica APENAS barras comuns 👇
+                            if (isSimplified && !isSource && !isFeeder) { // 👈 ADICIONE AS EXCEÇÕES AQUI
                                 const isSelectedEdit = isEditMode && selectedEditNodes.has(nodeId);
                                 return (
                                     <circle 
@@ -1017,81 +1043,79 @@ export default function GraphArea({
                                         onMouseEnter={() => handleNodeMouseEnter(nodeId)}
                                         onMouseLeave={() => handleNodeMouseLeave(nodeId)}
                                         onClick={(e) => handleNodeClick(e, nodeId)}
-                                        // 👇 O MOTOR DE ARRASTO CONECTADO AQUI 👇
                                         onMouseDown={(e) => handleNodeMouseDown(e, nodeId)} 
                                     />
                                 );
                             }
-                            // 👆 FIM DA INJEÇÃO 👆
+                                // 👆 FIM DA INJEÇÃO 👆
 
-                            const isSource = sources.includes(nodeId);
-                            const isFeeder = feedersList.includes(nodeId);
-                            const isSelectedEdit = selectedEditNodes.has(nodeId);
-                            const isHighlighted = hoveredNodeId === nodeId || localHoveredNode === nodeId || isSelectedEdit || (!isEditMode && selectedElement?.id === nodeId);
-                            const nodeLoad = systemLoads && systemLoads[nodeId] ? (systemLoads[nodeId].p / 1000).toFixed(1) : null;
+                                const isSelectedEdit = selectedEditNodes.has(nodeId);
+                                const isHighlighted = hoveredNodeId === nodeId || localHoveredNode === nodeId || isSelectedEdit || (!isEditMode && selectedElement?.id === nodeId);
+                                const nodeLoad = systemLoads && systemLoads[nodeId] ? (systemLoads[nodeId].p / 1000).toFixed(1) : null;
 
-                            const v_pu = nodeData[nodeId]?.v;
-                            const hasViolation = v_pu && (v_pu < 0.93 || v_pu > 1.05);
+                                const v_pu = nodeData[nodeId]?.v;
+                                const hasViolation = v_pu && (v_pu < 0.93 || v_pu > 1.05);
 
-                            const shuntData = systemShunts && systemShunts[nodeId];
-                            const hasShunt = !!shuntData;
-                            const isShuntOn = hasShunt && shuntData.steps > 0;
-                            const injectedQ = hasShunt ? shuntData.steps * shuntData.stepSize : 0;
+                                const shuntData = systemShunts && systemShunts[nodeId];
+                                const hasShunt = !!shuntData;
+                                const isShuntOn = hasShunt && shuntData.steps > 0;
+                                const injectedQ = hasShunt ? shuntData.steps * shuntData.stepSize : 0;
 
-                            return (
-                                <g key={`wrapper-${nodeId}`} className={hasViolation ? "voltage-glow-wrapper" : ""}>
-                                    <GraphNode
-                                        key={nodeId} nodeId={nodeId} pos={pos} isSource={isSource}
-                                        isFeeder={isFeeder} color={color} isHighlighted={isHighlighted}
-                                        darkMode={darkMode} isEditMode={isEditMode} isRestoringLayout={isRestoringLayout}
-                                        showLabels={showLabels} nodeLoad={nodeLoad} hasShunt={hasShunt} 
-                                        onMouseDown={handleNodeMouseDown} onClick={handleNodeClick}
-                                        onMouseEnter={handleNodeMouseEnter} onMouseLeave={handleNodeMouseLeave}
-                                        currentScale={transform.scale}
-                                    />
-                                    {hasShunt && (
-                                        <g transform={`translate(${pos.x + 18}, ${pos.y - 18})`} style={{ cursor: isEditMode ? 'default' : 'pointer', pointerEvents: 'all' }}>
-                                            <title>{`Banco de Capacitores (${injectedQ} kVAr)\nPassos LIGADOS: ${shuntData.steps} de ${shuntData.maxSteps}`}</title>
-                                            <circle cx="0" cy="0" r="12" fill={isShuntOn ? (darkMode ? 'rgba(0, 188, 212, 0.2)' : 'rgba(0, 188, 212, 0.15)') : (darkMode ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)')} stroke={isShuntOn ? '#00bcd4' : (darkMode ? '#555' : '#aaa')} strokeWidth="1.5" />
-                                            <text x="0" y="3" textAnchor="middle" fontSize="9" fontWeight="bold" fill={isShuntOn ? '#00bcd4' : (darkMode ? '#888' : '#aaa')} pointerEvents="none">
-                                                {shuntData.steps}
-                                            </text>
-                                        </g>
-                                    )}
-                                </g>
-                            );
-                        })}
+                                return (
+                                    <g key={`wrapper-${nodeId}`} className={hasViolation ? "voltage-glow-wrapper" : ""}>
+                                        <GraphNode
+                                            key={nodeId} nodeId={nodeId} pos={pos} isSource={isSource}
+                                            isFeeder={isFeeder} color={color} isHighlighted={isHighlighted}
+                                            darkMode={darkMode} isEditMode={isEditMode} isRestoringLayout={isRestoringLayout}
+                                            showLabels={showLabels} nodeLoad={nodeLoad} hasShunt={hasShunt} 
+                                            onMouseDown={handleNodeMouseDown} onClick={handleNodeClick}
+                                            onMouseEnter={handleNodeMouseEnter} onMouseLeave={handleNodeMouseLeave}
+                                            currentScale={transform.scale}
+                                        />
+                                        {hasShunt && (
+                                            <g transform={`translate(${pos.x + 18}, ${pos.y - 18})`} style={{ cursor: isEditMode ? 'default' : 'pointer', pointerEvents: 'all' }}>
+                                                <title>{`Banco de Capacitores (${injectedQ} kVAr)\nPassos LIGADOS: ${shuntData.steps} de ${shuntData.maxSteps}`}</title>
+                                                <circle cx="0" cy="0" r="12" fill={isShuntOn ? (darkMode ? 'rgba(0, 188, 212, 0.2)' : 'rgba(0, 188, 212, 0.15)') : (darkMode ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)')} stroke={isShuntOn ? '#00bcd4' : (darkMode ? '#555' : '#aaa')} strokeWidth="1.5" />
+                                                <text x="0" y="3" textAnchor="middle" fontSize="9" fontWeight="bold" fill={isShuntOn ? '#00bcd4' : (darkMode ? '#888' : '#aaa')} pointerEvents="none">
+                                                    {shuntData.steps}
+                                                </text>
+                                            </g>
+                                        )}
+                                    </g>
+                                );
+                            })}
 
-                        {selectionBox && (
-                            <rect x={Math.min(selectionBox.x1, selectionBox.x2)} y={Math.min(selectionBox.y1, selectionBox.y2)} width={Math.abs(selectionBox.x2 - selectionBox.x1)} height={Math.abs(selectionBox.y2 - selectionBox.y1)} fill="rgba(41, 98, 255, 0.1)" stroke="#2962ff" strokeWidth="2" strokeDasharray="5,5" pointerEvents="none" />
-                        )}
+                            {selectionBox && (
+                                <rect x={Math.min(selectionBox.x1, selectionBox.x2)} y={Math.min(selectionBox.y1, selectionBox.y2)} width={Math.abs(selectionBox.x2 - selectionBox.x1)} height={Math.abs(selectionBox.y2 - selectionBox.y1)} fill="rgba(41, 98, 255, 0.1)" stroke="#2962ff" strokeWidth="2" strokeDasharray="5,5" pointerEvents="none" />
+                            )}
 
-                        {!dragInfo && !isEditMode && !selectionBox && (
-                            <SvgTooltips 
-                                isHoveringSVG={isHoveringSVG}
-                                localHoveredLine={localHoveredLine}
-                                hoveredBranch={hoveredBranch}
-                                hoveredLineData={hoveredLineData}
-                                localHoveredNode={localHoveredNode}
-                                hoveredNodeInfo={hoveredNodeInfo}
-                                manualPositions={manualPositions}
-                                animPositions={renderPositions}
-                                sources={sources}
-                                branches={branches}
-                                lineCurrents={lineCurrents}
-                                loads={loads}
-                                systemLoads={systemLoads}
-                                sses={sses}
-                                feedersList={feedersList}
-                                svgWorldBounds={svgWorldBounds}
-                                pinnedCards={pinnedCards}
-                                setPinnedCards={setPinnedCards}
-                                nodeData={nodeData}
-                                mouseSvgPt={mouseSvgPt}
-                                currentScale={transform.scale} // 👈 Mantém essa linha!
-                            />
-                        )}
-                    </g> 
+                            {!dragInfo && !isEditMode && !selectionBox && (
+                                <SvgTooltips 
+                                    isHoveringSVG={isHoveringSVG}
+                                    localHoveredLine={localHoveredLine}
+                                    hoveredBranch={hoveredBranch}
+                                    hoveredLineData={hoveredLineData}
+                                    localHoveredNode={localHoveredNode}
+                                    hoveredNodeInfo={hoveredNodeInfo}
+                                    manualPositions={manualPositions}
+                                    animPositions={renderPositions}
+                                    sources={sources}
+                                    branches={branches}
+                                    lineCurrents={lineCurrents}
+                                    loads={loads}
+                                    systemLoads={systemLoads}
+                                    sses={sses}
+                                    feedersList={feedersList}
+                                    svgWorldBounds={svgWorldBounds}
+                                    pinnedCards={pinnedCards}
+                                    setPinnedCards={setPinnedCards}
+                                    nodeData={nodeData}
+                                    mouseSvgPt={mouseSvgPt}
+                                    currentScale={transform.scale} // 👈 Mantém essa linha!
+                                />
+                            )}
+                        </g> 
+                    )}
                 </svg>
 
                 {children}
