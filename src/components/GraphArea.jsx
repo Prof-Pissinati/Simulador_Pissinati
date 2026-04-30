@@ -333,10 +333,14 @@ export default function GraphArea({
             const rawPt = getRawSVGPoint(e.clientX, e.clientY);
             const spawnX = (rawPt.x - transform.x) / transform.scale;
             const spawnY = (rawPt.y - transform.y) / transform.scale;
+            
+            // 👇 CORREÇÃO: Aplica a escala para casar perfeitamente com o Hover 👇
+            const offset = 20 / transform.scale; 
+
             setPinnedCards(prev => {
                 const exists = prev.find(p => p.id === branchId && p.type === 'line');
                 if (exists) return prev.filter(p => !(p.id === branchId && p.type === 'line'));
-                return [...prev, { id: branchId, type: 'line', x: spawnX + 20, y: spawnY + 20 }];
+                return [...prev, { id: branchId, type: 'line', x: spawnX + offset, y: spawnY + offset }]; // 👈 Usa o offset
             });
             return;
         }
@@ -486,10 +490,14 @@ export default function GraphArea({
             const rawPt = getRawSVGPoint(e.clientX, e.clientY);
             const spawnX = (rawPt.x - transform.x) / transform.scale;
             const spawnY = (rawPt.y - transform.y) / transform.scale;
+            
+            // 👇 CORREÇÃO: Escala sincronizada 👇
+            const offset = 20 / transform.scale;
+
             setPinnedCards(prev => {
                 const exists = prev.find(p => p.id === nodeId && p.type === 'node');
                 if (exists) return prev.filter(p => !(p.id === nodeId && p.type === 'node'));
-                return [...prev, { id: nodeId, type: 'node', x: spawnX + 20, y: spawnY + 20 }];
+                return [...prev, { id: nodeId, type: 'node', x: spawnX + offset, y: spawnY + offset }]; // 👈 Usa o offset
             });
             return;
         }
@@ -833,7 +841,21 @@ export default function GraphArea({
         
         isPanning.current = false;
         const isBackgroundClick = e.target.tagName === 'svg' || e.target.id === 'bg-grid-rect';
-        if (isBackgroundClick && !hasMoved.current && !isEditMode) setSelectedElement(null);
+        if (isBackgroundClick && !hasMoved.current && !isEditMode) {
+            // 👇 FASE 3: INTERCEPTADOR DE CLIQUES DO CANVAS 👇
+            if (isCanvas) {
+                if (localHoveredNode !== null) {
+                    handleNodeClick(e, localHoveredNode);
+                } else if (localHoveredLine !== null) {
+                    handleLineClick(e, localHoveredLine);
+                } else {
+                    setSelectedElement(null); // Clique no vazio limpa o painel
+                }
+            } else {
+                setSelectedElement(null); // Comportamento padrão do SVG (LOD 0 e 1)
+            }
+            // 👆 FIM DA FASE 3 👆
+        }
         hasMoved.current = false;
     };
 
