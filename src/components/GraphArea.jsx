@@ -23,6 +23,17 @@ function getClosestSegmentIndex(p1, p2, waypoints, clickPt) {
     return minIdx;
 }
 
+// 👇 MATEMÁTICA DE RAYCASTING (FASE 2 DO CANVAS) 👇
+const getEuclideanDist = (x1, y1, x2, y2) => Math.sqrt(Math.pow(x2 - x1, 2) + Math.pow(y2 - y1, 2));
+
+const getDistToSegment = (p, v, w) => {
+    const l2 = Math.pow(w.x - v.x, 2) + Math.pow(w.y - v.y, 2);
+    if (l2 === 0) return getEuclideanDist(p.x, p.y, v.x, v.y);
+    let t = ((p.x - v.x) * (w.x - v.x) + (p.y - v.y) * (w.y - v.y)) / l2;
+    t = Math.max(0, Math.min(1, t));
+    return getEuclideanDist(p.x, p.y, v.x + t * (w.x - v.x), v.y + t * (w.y - v.y));
+};
+
 export default function GraphArea({
     branches = [], allNodes = [], sources = [], showLabels, getEdgeColor, getNodeColor, toggleSwitch, toggleFault, setSelectedElement,
     selectedElement, hoveredLineId, setHoveredLineId, hoveredNodeId, setHoveredNodeId, maintenanceMode,
@@ -630,7 +641,61 @@ export default function GraphArea({
         if (now - lastMouseUpdate.current > 30) {
             setMouseSvgPt(svgPt); 
             lastMouseUpdate.current = now;
-        } // Atualiza a Antena do Tooltip Hover
+
+            // 👇 MOTOR DE RAYCASTING DO CANVAS (LOD 2) 👇
+            // Só executa se estivermos no Canvas e não estivermos arrastando a tela
+            if (isCanvas && !isPanning.current && !draggingCard) {
+                const hitTolerance = 12 / transform.scale; // "Gordura" magnética para facilitar o clique
+                let hoveredNode = null;
+                let minDist = hitTolerance;
+
+                // 1. Radar de Nós (Barras)
+                for (let i = 0; i < allNodes.length; i++) {
+                    const nodeId = allNodes[i];
+                    const pos = manualPositions[nodeId] || renderPositions[nodeId];
+                    if (!pos) continue;
+                    
+                    const d = getEuclideanDist(svgPt.x, svgPt.y, pos.x, pos.y);
+                    if (d < minDist) {
+                        minDist = d;
+                        hoveredNode = nodeId;
+                    }
+                }
+
+                if (hoveredNode) {
+                    if (localHoveredNode !== hoveredNode) {
+                        setHoveredNodeId(hoveredNode); setLocalHoveredNode(hoveredNode);
+                        setHoveredLineId(null); setLocalHoveredLine(null);
+                    }
+                } else {
+                    if (localHoveredNode) {
+                        setHoveredNodeId(null); setLocalHoveredNode(null);
+                    }
+
+                    // 2. Radar de Linhas (Executa só se o mouse não bateu em nenhum nó)
+                    let hoveredEdge = null;
+                    let minEdgeDist = hitTolerance;
+
+                    for (let i = 0; i < branches.length; i++) {
+                        const b = branches[i];
+                        const p1 = manualPositions[b.from] || renderPositions[b.from];
+                        const p2 = manualPositions[b.to] || renderPositions[b.to];
+                        if (!p1 || !p2) continue;
+
+                        const d = getDistToSegment(svgPt, p1, p2);
+                        if (d < minEdgeDist) {
+                            minEdgeDist = d;
+                            hoveredEdge = b.id;
+                        }
+                    }
+
+                    if (localHoveredLine !== hoveredEdge) {
+                        setHoveredLineId(hoveredEdge); setLocalHoveredLine(hoveredEdge);
+                    }
+                }
+            }
+            // 👆 FIM DO RAYCASTING 👆
+        }
 
         // 👇 MOTOR DE ARRASTO DO POST-IT 👇
         if (draggingCard) {
@@ -885,239 +950,239 @@ export default function GraphArea({
         <div className="graph-container" style={{ position: 'relative', width: '100%', height: '100%', display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
             <div ref={measureRef} style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, pointerEvents: 'none', zIndex: -1 }}></div>
 
-            <div className="paper-container" style={paperStyle}>
-                
-                {/* 👇 NOVO: CAMADA DE PERFORMANCE (LOD 2) 👇 */}
-                {isCanvas && (
-                    <CanvasOverlay 
-                        allNodes={allNodes}
-                        branches={branches}
-                        activePositions={activePositions}
-                        activeWaypoints={activeWaypoints}
-                        transform={transform}
-                        getNodeColor={getNodeColor}
-                        getEdgeColor={getEdgeColor}
-                        width={containerSize.w}
-                        height={containerSize.h}
-                        darkMode={darkMode}
-                    />
-                )}
+                <div className="paper-container" style={paperStyle}>
                     
-                <svg id="sistema-eletrico-svg" className="graph-svg" viewBox={`0 0 ${vbW} ${vbH}`} 
-                    preserveAspectRatio="xMidYMid meet" 
-                    ref={svgRef}
-                    style={{ width: '100%', height: '100%', display: 'block', cursor: svgCursor }}
-                    onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onMouseUp={handleMouseUp} 
-                    onMouseEnter={() => setIsHoveringSVG(true)}
-                    onMouseLeave={() => { setIsHoveringSVG(false); isPanning.current = false; isSelecting.current = false; setHoveredLineId(null); setHoveredNodeId(null); setLocalHoveredNode(null); setLocalHoveredLine(null); if(dragInfo) setDragInfo(null); if(draggingCard) setDraggingCard(null); }}
-                >
-                    {!isCanvas && (
+                    {/* 👇 NOVO: CAMADA DE PERFORMANCE (LOD 2) 👇 */}
+                    {isCanvas && (
+                        <CanvasOverlay 
+                            allNodes={allNodes}
+                            branches={branches}
+                            activePositions={activePositions}
+                            activeWaypoints={activeWaypoints}
+                            transform={transform}
+                            getNodeColor={getNodeColor}
+                            getEdgeColor={getEdgeColor}
+                            width={containerSize.w}
+                            height={containerSize.h}
+                            darkMode={darkMode}
+                        />
+                    )}
+                        
+                    <svg id="sistema-eletrico-svg" className="graph-svg" viewBox={`0 0 ${vbW} ${vbH}`} 
+                        preserveAspectRatio="xMidYMid meet" 
+                        ref={svgRef}
+                        style={{ width: '100%', height: '100%', display: 'block', cursor: svgCursor, position: 'relative', zIndex: 10 }}
+                        onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onMouseUp={handleMouseUp} 
+                        onMouseEnter={() => setIsHoveringSVG(true)}
+                        onMouseLeave={() => { setIsHoveringSVG(false); isPanning.current = false; isSelecting.current = false; setHoveredLineId(null); setHoveredNodeId(null); setLocalHoveredNode(null); setLocalHoveredLine(null); if(dragInfo) setDragInfo(null); if(draggingCard) setDraggingCard(null); }}
+                    >
                         <g 
                             transform={`translate(${transform.x}, ${transform.y}) scale(${transform.scale})`}
                             style={{ transition: isAnimatingZoom ? 'transform 0.5s cubic-bezier(0.25, 1, 0.5, 1)' : 'none' }}
                         >
-                            {isEditMode && (
-                                <g>
-                                    <defs>
-                                        <pattern id={`bg-grid-${FIXED_GRID_SIZE}`} width={FIXED_GRID_SIZE} height={FIXED_GRID_SIZE} patternUnits="userSpaceOnUse">
-                                            <path d={`M ${FIXED_GRID_SIZE} 0 L 0 0 0 ${FIXED_GRID_SIZE}`} fill="none" stroke={darkMode ? '#333' : '#e0e0e0'} strokeWidth="1"/>
-                                        </pattern>
-                                    </defs>
-                                    <rect id="bg-grid-rect" x="-10000" y="-10000" width="20000" height="20000" fill={`url(#bg-grid-${FIXED_GRID_SIZE})`} />
-                                </g>
-                            )}
+                        {!isCanvas && (
+                            <>
+                                {isEditMode && (
+                                    <g>
+                                        <defs>
+                                            <pattern id={`bg-grid-${FIXED_GRID_SIZE}`} width={FIXED_GRID_SIZE} height={FIXED_GRID_SIZE} patternUnits="userSpaceOnUse">
+                                                <path d={`M ${FIXED_GRID_SIZE} 0 L 0 0 0 ${FIXED_GRID_SIZE}`} fill="none" stroke={darkMode ? '#333' : '#e0e0e0'} strokeWidth="1"/>
+                                            </pattern>
+                                        </defs>
+                                        <rect id="bg-grid-rect" x="-10000" y="-10000" width="20000" height="20000" fill={`url(#bg-grid-${FIXED_GRID_SIZE})`} />
+                                    </g>
+                                )}
 
-                            {displayData.visibleBranches.map(b => {
-                                // 1. Calcula as posições dos extremos (p1 e p2)
-                                const p1 = manualPositions[b.from] || renderPositions[b.from];
-                                const p2 = manualPositions[b.to] || renderPositions[b.to];
-                                if (!p1 || !p2) return null;
+                                {displayData.visibleBranches.map(b => {
+                                    // 1. Calcula as posições dos extremos (p1 e p2)
+                                    const p1 = manualPositions[b.from] || renderPositions[b.from];
+                                    const p2 = manualPositions[b.to] || renderPositions[b.to];
+                                    if (!p1 || !p2) return null;
 
-                                // 2. Culling de Linhas (Protege a performance)
-                                const p1Out = p1.x < visibleBounds.minX || p1.x > visibleBounds.maxX || p1.y < visibleBounds.minY || p1.y > visibleBounds.maxY;
-                                const p2Out = p2.x < visibleBounds.minX || p2.x > visibleBounds.maxX || p2.y < visibleBounds.minY || p2.y > visibleBounds.maxY;
-                                if (p1Out && p2Out) return null;
+                                    // 2. Culling de Linhas (Protege a performance)
+                                    const p1Out = p1.x < visibleBounds.minX || p1.x > visibleBounds.maxX || p1.y < visibleBounds.minY || p1.y > visibleBounds.maxY;
+                                    const p2Out = p2.x < visibleBounds.minX || p2.x > visibleBounds.maxX || p2.y < visibleBounds.minY || p2.y > visibleBounds.maxY;
+                                    if (p1Out && p2Out) return null;
 
-                                // 3. Captura os waypoints e o caminho do SVG
-                                const wps = manualWaypoints[b.id] || renderWaypoints[b.id] || [];
-                                const waypoints = Array.isArray(wps) ? wps : [];
-                                const pathString = getPathData(p1, p2, waypoints);
-                                
-                                // 4. Captura a cor oficial da linha
-                                const color = getEdgeColor ? getEdgeColor(b) : (darkMode ? '#888' : '#666');
+                                    // 3. Captura os waypoints e o caminho do SVG
+                                    const wps = manualWaypoints[b.id] || renderWaypoints[b.id] || [];
+                                    const waypoints = Array.isArray(wps) ? wps : [];
+                                    const pathString = getPathData(p1, p2, waypoints);
+                                    
+                                    // 4. Captura a cor oficial da linha
+                                    const color = getEdgeColor ? getEdgeColor(b) : (darkMode ? '#888' : '#666');
 
-                                // 👇 INJEÇÃO DO LOD 1 (Micro-Lines Interativas) 👇
-                                if (isSimplified) {
+                                    // 👇 INJEÇÃO DO LOD 1 (Micro-Lines Interativas) 👇
+                                    if (isSimplified) {
+                                        return (
+                                            <g key={`micro-edge-group-${b.id}`}>
+                                                <path 
+                                                    key={`micro-edge-${b.id}`} 
+                                                    d={pathString} 
+                                                    stroke={color} 
+                                                    strokeWidth={1.5 / transform.scale} 
+                                                    fill="none" 
+                                                    vectorEffect="non-scaling-stroke"
+                                                    strokeDasharray={b.state === 1 ? 'none' : '4,3'}
+                                                    style={{ cursor: isEditMode ? 'move' : 'pointer', opacity: b.state === 1 ? 1 : 0.4 }}
+                                                    onMouseEnter={() => handleLineMouseEnter(b.id)}
+                                                    onMouseLeave={() => handleLineMouseLeave(b.id)}
+                                                    onClick={(e) => handleLineClick(e, b.id)}
+                                                    // 👇 EVENTOS DE EDIÇÃO ADICIONADOS AQUI 👇
+                                                    onMouseDown={(e) => handleLineMouseDown(e, b.id)} 
+                                                    onDoubleClick={(e) => handleLineDoubleClick(e, b.id)}
+                                                />
+                                                {/* 👇 DESENHA OS WAYPOINTS MESMO NO MODO SIMPLIFICADO 👇 */}
+                                                {isEditMode && waypoints.map((wp, wpIndex) => {
+                                                    const wpKey = `${b.id}-${wpIndex}`;
+                                                    const isSelectedWp = selectedEditWaypoints.has(wpKey);
+                                                    return (
+                                                        <circle
+                                                            key={`micro-wp-${wpKey}`}
+                                                            cx={wp.x} cy={wp.y}
+                                                            r={isSelectedWp ? 6 / transform.scale : 4 / transform.scale}
+                                                            fill={isSelectedWp ? '#2962ff' : '#ff9800'}
+                                                            style={{ cursor: 'grab' }}
+                                                            onMouseDown={(e) => handleWaypointMouseDown(e, b.id, wpIndex, wpKey, wp)}
+                                                            onDoubleClick={(e) => handleWaypointDoubleClick(e, b.id, wpIndex)}
+                                                        />
+                                                    );
+                                                })}
+                                            </g>
+                                        );
+                                    }
+                                    // 👆 FIM DA INJEÇÃO 👆
+                                    
+                                    const isHovered = hoveredLineId === b.id || localHoveredLine === b.id;
+                                    const isSelected = selectedElement && selectedElement.type === 'edge' && selectedElement.data.id === b.id;
+
+                                    const lineData = lineCurrents[b.id];
+                                    const flowDir = (!lineData || lineData.current < 0.01) ? 0 : (lineData.pFlow >= 0 ? 1 : -1);
+
                                     return (
-                                        <g key={`micro-edge-group-${b.id}`}>
-                                            <path 
-                                                key={`micro-edge-${b.id}`} 
-                                                d={pathString} 
-                                                stroke={color} 
-                                                strokeWidth={1.5 / transform.scale} 
-                                                fill="none" 
-                                                vectorEffect="non-scaling-stroke"
-                                                strokeDasharray={b.state === 1 ? 'none' : '4,3'}
-                                                style={{ cursor: isEditMode ? 'move' : 'pointer', opacity: b.state === 1 ? 1 : 0.4 }}
-                                                onMouseEnter={() => handleLineMouseEnter(b.id)}
-                                                onMouseLeave={() => handleLineMouseLeave(b.id)}
-                                                onClick={(e) => handleLineClick(e, b.id)}
-                                                // 👇 EVENTOS DE EDIÇÃO ADICIONADOS AQUI 👇
-                                                onMouseDown={(e) => handleLineMouseDown(e, b.id)} 
-                                                onDoubleClick={(e) => handleLineDoubleClick(e, b.id)}
-                                            />
-                                            {/* 👇 DESENHA OS WAYPOINTS MESMO NO MODO SIMPLIFICADO 👇 */}
-                                            {isEditMode && waypoints.map((wp, wpIndex) => {
-                                                const wpKey = `${b.id}-${wpIndex}`;
-                                                const isSelectedWp = selectedEditWaypoints.has(wpKey);
-                                                return (
-                                                    <circle
-                                                        key={`micro-wp-${wpKey}`}
-                                                        cx={wp.x} cy={wp.y}
-                                                        r={isSelectedWp ? 6 / transform.scale : 4 / transform.scale}
-                                                        fill={isSelectedWp ? '#2962ff' : '#ff9800'}
-                                                        style={{ cursor: 'grab' }}
-                                                        onMouseDown={(e) => handleWaypointMouseDown(e, b.id, wpIndex, wpKey, wp)}
-                                                        onDoubleClick={(e) => handleWaypointDoubleClick(e, b.id, wpIndex)}
-                                                    />
-                                                );
-                                            })}
-                                        </g>
+                                        <GraphEdge 
+                                            key={b.id} branch={b} pathString={pathString} color={color}
+                                            isHighlighted={isHovered || isSelected} isEditMode={isEditMode}
+                                            isRestoringLayout={isRestoringLayout} waypoints={waypoints}
+                                            selectedEditWaypoints={selectedEditWaypoints} dragInfoType={dragInfo?.type}
+                                            flowDir={flowDir} p1={p1} p2={p2}
+                                            onLineMouseDown={handleLineMouseDown} onLineClick={handleLineClick}
+                                            onLineDoubleClick={handleLineDoubleClick} onLineMouseEnter={handleLineMouseEnter}
+                                            onLineMouseLeave={handleLineMouseLeave} onWaypointMouseDown={handleWaypointMouseDown}
+                                            onWaypointDoubleClick={handleWaypointDoubleClick}
+                                        />
+                                    );
+                                })}
+
+
+                                {displayData.visibleNodes.map(nodeId => {
+                                    const pos = manualPositions[nodeId] || renderPositions[nodeId];
+                                    if (!pos) return null;
+
+                                    // 👇 CULLING DAS BARRAS 👇
+                                    // Se a barra estiver totalmente fora da área expandida, não renderiza
+                                    if (pos.x < visibleBounds.minX || pos.x > visibleBounds.maxX ||
+                                        pos.y < visibleBounds.minY || pos.y > visibleBounds.maxY) {
+                                        return null; // Aborta a renderização desta barra
+                                    }
+                                    // 👆 FIM DO CULLING 👆
+                                    
+                                    const color = getNodeColor(nodeId); // Movido para cima
+
+                                    // 👇 IDENTIFICA OS "MARCOS" DO SISTEMA 👇
+                                const isSource = sources.includes(nodeId);
+                                const isFeeder = feedersList.includes(nodeId);
+
+                                // 👇 INJEÇÃO DO LOD 1 — Simplifica APENAS barras comuns 👇
+                                if (isSimplified && !isSource && !isFeeder) { // 👈 ADICIONE AS EXCEÇÕES AQUI
+                                    const isSelectedEdit = isEditMode && selectedEditNodes.has(nodeId);
+                                    return (
+                                        <circle 
+                                            key={`micro-node-${nodeId}`} 
+                                            cx={pos.x} 
+                                            cy={pos.y} 
+                                            r={isSelectedEdit ? 6 / transform.scale : 4 / transform.scale} 
+                                            fill={color}
+                                            stroke={isSelectedEdit ? '#fff' : 'none'}
+                                            strokeWidth={isSelectedEdit ? 1.5 / transform.scale : 0}
+                                            style={{ cursor: isEditMode ? 'grab' : 'pointer' }}
+                                            onMouseEnter={() => handleNodeMouseEnter(nodeId)}
+                                            onMouseLeave={() => handleNodeMouseLeave(nodeId)}
+                                            onClick={(e) => handleNodeClick(e, nodeId)}
+                                            onMouseDown={(e) => handleNodeMouseDown(e, nodeId)} 
+                                        />
                                     );
                                 }
-                                // 👆 FIM DA INJEÇÃO 👆
-                                
-                                const isHovered = hoveredLineId === b.id || localHoveredLine === b.id;
-                                const isSelected = selectedElement && selectedElement.type === 'edge' && selectedElement.data.id === b.id;
+                                    // 👆 FIM DA INJEÇÃO 👆
 
-                                const lineData = lineCurrents[b.id];
-                                const flowDir = (!lineData || lineData.current < 0.01) ? 0 : (lineData.pFlow >= 0 ? 1 : -1);
+                                    const isSelectedEdit = selectedEditNodes.has(nodeId);
+                                    const isHighlighted = hoveredNodeId === nodeId || localHoveredNode === nodeId || isSelectedEdit || (!isEditMode && selectedElement?.id === nodeId);
+                                    const nodeLoad = systemLoads && systemLoads[nodeId] ? (systemLoads[nodeId].p / 1000).toFixed(1) : null;
 
-                                return (
-                                    <GraphEdge 
-                                        key={b.id} branch={b} pathString={pathString} color={color}
-                                        isHighlighted={isHovered || isSelected} isEditMode={isEditMode}
-                                        isRestoringLayout={isRestoringLayout} waypoints={waypoints}
-                                        selectedEditWaypoints={selectedEditWaypoints} dragInfoType={dragInfo?.type}
-                                        flowDir={flowDir} p1={p1} p2={p2}
-                                        onLineMouseDown={handleLineMouseDown} onLineClick={handleLineClick}
-                                        onLineDoubleClick={handleLineDoubleClick} onLineMouseEnter={handleLineMouseEnter}
-                                        onLineMouseLeave={handleLineMouseLeave} onWaypointMouseDown={handleWaypointMouseDown}
-                                        onWaypointDoubleClick={handleWaypointDoubleClick}
-                                    />
-                                );
-                            })}
+                                    const v_pu = nodeData[nodeId]?.v;
+                                    const hasViolation = v_pu && (v_pu < 0.93 || v_pu > 1.05);
 
+                                    const shuntData = systemShunts && systemShunts[nodeId];
+                                    const hasShunt = !!shuntData;
+                                    const isShuntOn = hasShunt && shuntData.steps > 0;
+                                    const injectedQ = hasShunt ? shuntData.steps * shuntData.stepSize : 0;
 
-                            {displayData.visibleNodes.map(nodeId => {
-                                const pos = manualPositions[nodeId] || renderPositions[nodeId];
-                                if (!pos) return null;
+                                    return (
+                                        <g key={`wrapper-${nodeId}`} className={hasViolation ? "voltage-glow-wrapper" : ""}>
+                                            <GraphNode
+                                                key={nodeId} nodeId={nodeId} pos={pos} isSource={isSource}
+                                                isFeeder={isFeeder} color={color} isHighlighted={isHighlighted}
+                                                darkMode={darkMode} isEditMode={isEditMode} isRestoringLayout={isRestoringLayout}
+                                                showLabels={showLabels} nodeLoad={nodeLoad} hasShunt={hasShunt} 
+                                                onMouseDown={handleNodeMouseDown} onClick={handleNodeClick}
+                                                onMouseEnter={handleNodeMouseEnter} onMouseLeave={handleNodeMouseLeave}
+                                                currentScale={transform.scale}
+                                            />
+                                            {hasShunt && (
+                                                <g transform={`translate(${pos.x + 18}, ${pos.y - 18})`} style={{ cursor: isEditMode ? 'default' : 'pointer', pointerEvents: 'all' }}>
+                                                    <title>{`Banco de Capacitores (${injectedQ} kVAr)\nPassos LIGADOS: ${shuntData.steps} de ${shuntData.maxSteps}`}</title>
+                                                    <circle cx="0" cy="0" r="12" fill={isShuntOn ? (darkMode ? 'rgba(0, 188, 212, 0.2)' : 'rgba(0, 188, 212, 0.15)') : (darkMode ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)')} stroke={isShuntOn ? '#00bcd4' : (darkMode ? '#555' : '#aaa')} strokeWidth="1.5" />
+                                                    <text x="0" y="3" textAnchor="middle" fontSize="9" fontWeight="bold" fill={isShuntOn ? '#00bcd4' : (darkMode ? '#888' : '#aaa')} pointerEvents="none">
+                                                        {shuntData.steps}
+                                                    </text>
+                                                </g>
+                                            )}
+                                        </g>
+                                    );
+                                })}
 
-                                // 👇 CULLING DAS BARRAS 👇
-                                // Se a barra estiver totalmente fora da área expandida, não renderiza
-                                if (pos.x < visibleBounds.minX || pos.x > visibleBounds.maxX ||
-                                    pos.y < visibleBounds.minY || pos.y > visibleBounds.maxY) {
-                                    return null; // Aborta a renderização desta barra
-                                }
-                                // 👆 FIM DO CULLING 👆
-                                
-                                const color = getNodeColor(nodeId); // Movido para cima
-
-                                // 👇 IDENTIFICA OS "MARCOS" DO SISTEMA 👇
-                            const isSource = sources.includes(nodeId);
-                            const isFeeder = feedersList.includes(nodeId);
-
-                            // 👇 INJEÇÃO DO LOD 1 — Simplifica APENAS barras comuns 👇
-                            if (isSimplified && !isSource && !isFeeder) { // 👈 ADICIONE AS EXCEÇÕES AQUI
-                                const isSelectedEdit = isEditMode && selectedEditNodes.has(nodeId);
-                                return (
-                                    <circle 
-                                        key={`micro-node-${nodeId}`} 
-                                        cx={pos.x} 
-                                        cy={pos.y} 
-                                        r={isSelectedEdit ? 6 / transform.scale : 4 / transform.scale} 
-                                        fill={color}
-                                        stroke={isSelectedEdit ? '#fff' : 'none'}
-                                        strokeWidth={isSelectedEdit ? 1.5 / transform.scale : 0}
-                                        style={{ cursor: isEditMode ? 'grab' : 'pointer' }}
-                                        onMouseEnter={() => handleNodeMouseEnter(nodeId)}
-                                        onMouseLeave={() => handleNodeMouseLeave(nodeId)}
-                                        onClick={(e) => handleNodeClick(e, nodeId)}
-                                        onMouseDown={(e) => handleNodeMouseDown(e, nodeId)} 
-                                    />
-                                );
-                            }
-                                // 👆 FIM DA INJEÇÃO 👆
-
-                                const isSelectedEdit = selectedEditNodes.has(nodeId);
-                                const isHighlighted = hoveredNodeId === nodeId || localHoveredNode === nodeId || isSelectedEdit || (!isEditMode && selectedElement?.id === nodeId);
-                                const nodeLoad = systemLoads && systemLoads[nodeId] ? (systemLoads[nodeId].p / 1000).toFixed(1) : null;
-
-                                const v_pu = nodeData[nodeId]?.v;
-                                const hasViolation = v_pu && (v_pu < 0.93 || v_pu > 1.05);
-
-                                const shuntData = systemShunts && systemShunts[nodeId];
-                                const hasShunt = !!shuntData;
-                                const isShuntOn = hasShunt && shuntData.steps > 0;
-                                const injectedQ = hasShunt ? shuntData.steps * shuntData.stepSize : 0;
-
-                                return (
-                                    <g key={`wrapper-${nodeId}`} className={hasViolation ? "voltage-glow-wrapper" : ""}>
-                                        <GraphNode
-                                            key={nodeId} nodeId={nodeId} pos={pos} isSource={isSource}
-                                            isFeeder={isFeeder} color={color} isHighlighted={isHighlighted}
-                                            darkMode={darkMode} isEditMode={isEditMode} isRestoringLayout={isRestoringLayout}
-                                            showLabels={showLabels} nodeLoad={nodeLoad} hasShunt={hasShunt} 
-                                            onMouseDown={handleNodeMouseDown} onClick={handleNodeClick}
-                                            onMouseEnter={handleNodeMouseEnter} onMouseLeave={handleNodeMouseLeave}
-                                            currentScale={transform.scale}
-                                        />
-                                        {hasShunt && (
-                                            <g transform={`translate(${pos.x + 18}, ${pos.y - 18})`} style={{ cursor: isEditMode ? 'default' : 'pointer', pointerEvents: 'all' }}>
-                                                <title>{`Banco de Capacitores (${injectedQ} kVAr)\nPassos LIGADOS: ${shuntData.steps} de ${shuntData.maxSteps}`}</title>
-                                                <circle cx="0" cy="0" r="12" fill={isShuntOn ? (darkMode ? 'rgba(0, 188, 212, 0.2)' : 'rgba(0, 188, 212, 0.15)') : (darkMode ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)')} stroke={isShuntOn ? '#00bcd4' : (darkMode ? '#555' : '#aaa')} strokeWidth="1.5" />
-                                                <text x="0" y="3" textAnchor="middle" fontSize="9" fontWeight="bold" fill={isShuntOn ? '#00bcd4' : (darkMode ? '#888' : '#aaa')} pointerEvents="none">
-                                                    {shuntData.steps}
-                                                </text>
-                                            </g>
-                                        )}
-                                    </g>
-                                );
-                            })}
-
-                            {selectionBox && (
-                                <rect x={Math.min(selectionBox.x1, selectionBox.x2)} y={Math.min(selectionBox.y1, selectionBox.y2)} width={Math.abs(selectionBox.x2 - selectionBox.x1)} height={Math.abs(selectionBox.y2 - selectionBox.y1)} fill="rgba(41, 98, 255, 0.1)" stroke="#2962ff" strokeWidth="2" strokeDasharray="5,5" pointerEvents="none" />
-                            )}
-
-                            {!dragInfo && !isEditMode && !selectionBox && (
-                                <SvgTooltips 
-                                    isHoveringSVG={isHoveringSVG}
-                                    localHoveredLine={localHoveredLine}
-                                    hoveredBranch={hoveredBranch}
-                                    hoveredLineData={hoveredLineData}
-                                    localHoveredNode={localHoveredNode}
-                                    hoveredNodeInfo={hoveredNodeInfo}
-                                    manualPositions={manualPositions}
-                                    animPositions={renderPositions}
-                                    sources={sources}
-                                    branches={branches}
-                                    lineCurrents={lineCurrents}
-                                    loads={loads}
-                                    systemLoads={systemLoads}
-                                    sses={sses}
-                                    feedersList={feedersList}
-                                    svgWorldBounds={svgWorldBounds}
-                                    pinnedCards={pinnedCards}
-                                    setPinnedCards={setPinnedCards}
-                                    nodeData={nodeData}
-                                    mouseSvgPt={mouseSvgPt}
-                                    currentScale={transform.scale} // 👈 Mantém essa linha!
-                                />
-                            )}
-                        </g> 
-                    )}
+                                {selectionBox && (
+                                    <rect x={Math.min(selectionBox.x1, selectionBox.x2)} y={Math.min(selectionBox.y1, selectionBox.y2)} width={Math.abs(selectionBox.x2 - selectionBox.x1)} height={Math.abs(selectionBox.y2 - selectionBox.y1)} fill="rgba(41, 98, 255, 0.1)" stroke="#2962ff" strokeWidth="2" strokeDasharray="5,5" pointerEvents="none" />
+                                )}
+                            </>
+                        )}
+                        {!dragInfo && !isEditMode && !selectionBox && (
+                            <SvgTooltips 
+                                isHoveringSVG={isHoveringSVG}
+                                localHoveredLine={localHoveredLine}
+                                hoveredBranch={hoveredBranch}
+                                hoveredLineData={hoveredLineData}
+                                localHoveredNode={localHoveredNode}
+                                hoveredNodeInfo={hoveredNodeInfo}
+                                manualPositions={manualPositions}
+                                animPositions={renderPositions}
+                                sources={sources}
+                                branches={branches}
+                                lineCurrents={lineCurrents}
+                                loads={loads}
+                                systemLoads={systemLoads}
+                                sses={sses}
+                                feedersList={feedersList}
+                                svgWorldBounds={svgWorldBounds}
+                                pinnedCards={pinnedCards}
+                                setPinnedCards={setPinnedCards}
+                                nodeData={nodeData}
+                                mouseSvgPt={mouseSvgPt}
+                                currentScale={transform.scale} // 👈 Mantém essa linha!
+                            />
+                        )}
+                    </g>
                 </svg>
-
                 {children}
             </div>
         </div>
