@@ -44,6 +44,11 @@ function applyProportionalScaling(nodesArray, branchesArray, actualPositions, ta
 }
 
 export function calculateForceLayout(nodesArray, branchesArray, sourcesArray, config = {}) {
+    // 👇 BLINDAGEM DE TIPOS (Garante que todos os IDs sejam Strings estritas) 👇
+    nodesArray = nodesArray.map(String);
+    branchesArray = branchesArray.map(b => ({ ...b, id: String(b.id), from: String(b.from), to: String(b.to) }));
+    sourcesArray = sourcesArray.map(String);
+    
     const distVal = config.distance !== undefined ? config.distance : D3_DEFAULTS.distance;
     const targetCharge = config.charge !== undefined ? config.charge : D3_DEFAULTS.charge; 
     const col = config.collide !== undefined ? config.collide : D3_DEFAULTS.collide;
@@ -296,6 +301,11 @@ async function applySmartCompaction(pos, nodesArray, branchesArray, sourcesArray
 // AS FUNÇÕES EXPORTADAS AGORA SÃO ASYNC!
 // =========================================================
 export async function calculateOrthogonalLayout(nodesArray, branchesArray, sourcesArray, config = {}) {
+    // 👇 BLINDAGEM DE TIPOS (Garante que todos os IDs sejam Strings estritas) 👇
+    nodesArray = nodesArray.map(String);
+    branchesArray = branchesArray.map(b => ({ ...b, id: String(b.id), from: String(b.from), to: String(b.to) }));
+    sourcesArray = sourcesArray.map(String);
+
     const radialStep = config.gridSize || 100;
     const basePos = calculateForceLayout(nodesArray, branchesArray, sourcesArray, {
         distance: radialStep * 0.8, charge: -500, openWeight: config.openWeight, currentPos: config.currentPos
@@ -323,6 +333,11 @@ export async function calculateOrthogonalLayout(nodesArray, branchesArray, sourc
 }
 
 export async function calculateVNSLayout(nodesArray, branchesArray, sourcesArray, config = {}) {
+    // 👇 BLINDAGEM DE TIPOS (Garante que todos os IDs sejam Strings estritas) 👇
+    nodesArray = nodesArray.map(String);
+    branchesArray = branchesArray.map(b => ({ ...b, id: String(b.id), from: String(b.from), to: String(b.to) }));
+    sourcesArray = sourcesArray.map(String);
+    
     const gridSize = config.gridSize || 100;
     const maxIter = config.maxIter || 30; 
     let pos = {}; const occupied = new Set();

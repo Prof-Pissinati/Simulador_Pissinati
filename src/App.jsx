@@ -254,9 +254,10 @@ function App() {
                 
                 try {
                     // Chama o operário terceirizado!
-                    const newLayout = await runAsyncLayout('vns', allNodes, branches, sources, { 
+                    const newLayout = await runAsyncLayout('force', allNodes, branches, sources, { 
                         gridSize: 100, 
                         maxIter: 30,
+                        currentPos: projectPositions,
                         onProgress: (passes, msg1, msg2) => {
                             setLayoutProgress({ passes, msg1, msg2 });
                         }
