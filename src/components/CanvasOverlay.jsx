@@ -2,7 +2,8 @@ import React, { useRef, useEffect } from 'react';
 
 const CanvasOverlay = ({ 
     allNodes, branches, activePositions, activeWaypoints, 
-    transform, getNodeColor, getEdgeColor, width, height, darkMode 
+    transform, getNodeColor, getEdgeColor, width, height, darkMode,
+    sources = [], feedersList = [], systemShunts = {} // 👈 NOVAS PROPS AQUI
 }) => {
     const canvasRef = useRef(null);
 
@@ -11,21 +12,18 @@ const CanvasOverlay = ({
         const ctx = canvas.getContext('2d');
         if (!ctx) return;
 
-        // Ajuste de DPI para telas Retina/Alta Resolução
         const dpr = window.devicePixelRatio || 1;
         canvas.width = width * dpr;
         canvas.height = height * dpr;
         ctx.scale(dpr, dpr);
 
-        // Limpa a tela
         ctx.clearRect(0, 0, width, height);
 
-        // Aplica a Transformação (Pan e Zoom do React)
         ctx.save();
         ctx.translate(transform.x, transform.y);
         ctx.scale(transform.scale, transform.scale);
 
-        // 1. DESENHAR LINHAS (Arestas)
+        // 1. DESENHAR LINHAS
         branches.forEach(b => {
             const p1 = activePositions[b.from];
             const p2 = activePositions[b.to];
@@ -33,56 +31,63 @@ const CanvasOverlay = ({
 
             ctx.beginPath();
             ctx.moveTo(p1.x, p1.y);
-            
-            // Waypoints (se existirem)
             const wps = activeWaypoints[b.id] || [];
             wps.forEach(wp => ctx.lineTo(wp.x, wp.y));
-            
             ctx.lineTo(p2.x, p2.y);
 
             ctx.strokeStyle = getEdgeColor(b);
-            ctx.lineWidth = 1 / transform.scale; // Mantém espessura visual constante
+            ctx.lineWidth = 2.5 / transform.scale;
             ctx.lineCap = 'round';
             ctx.lineJoin = 'round';
-            
-            if (b.state === 0) ctx.setLineDash([5, 5]); // Tracejado para chaves abertas
+            if (b.state === 0) ctx.setLineDash([5, 5]);
             else ctx.setLineDash([]);
-            
             ctx.stroke();
         });
 
-        // 2. DESENHAR BARRAS (Nós)
+        // 2. DESENHAR BARRAS (AGORA COM GEOMETRIA)
         allNodes.forEach(nodeId => {
             const pos = activePositions[nodeId];
             if (!pos) return;
 
-            ctx.beginPath();
-            ctx.arc(pos.x, pos.y, 4 / transform.scale, 0, Math.PI * 2);
-            ctx.fillStyle = getNodeColor(nodeId);
-            ctx.fill();
+            // Lógica de Identificação
+            const isSource = sources.includes(nodeId) || feedersList.includes(nodeId);
+            const hasShunt = !!systemShunts[nodeId];
             
-            // Borda sutil para destacar no fundo escuro
-            ctx.strokeStyle = darkMode ? 'rgba(255,255,255,0.2)' : 'rgba(0,0,0,0.1)';
-            ctx.lineWidth = 0.5 / transform.scale;
-            ctx.stroke();
+            const baseR = 7 / transform.scale;
+            ctx.fillStyle = getNodeColor(nodeId);
+            ctx.beginPath();
+
+            if (isSource) {
+                // 👇 SUBESTAÇÕES: Hexágono (Levemente maior para destaque)
+                const hexR = baseR * 1.5;
+                for (let i = 0; i < 6; i++) {
+                    const angle = (Math.PI / 3) * i - (Math.PI / 6); // Rotação para ter bico em cima/baixo
+                    const px = pos.x + hexR * Math.cos(angle);
+                    const py = pos.y + hexR * Math.sin(angle);
+                    if (i === 0) ctx.moveTo(px, py);
+                    else ctx.lineTo(px, py);
+                }
+                ctx.closePath();
+            } else if (hasShunt) {
+                // 👇 SHUNTS: Losango (Diamante)
+                const rhoR = baseR * 1.5;
+                ctx.moveTo(pos.x, pos.y - rhoR);
+                ctx.lineTo(pos.x + rhoR, pos.y);
+                ctx.lineTo(pos.x, pos.y + rhoR);
+                ctx.lineTo(pos.x - rhoR, pos.y);
+                ctx.closePath();
+            } else {
+                // 👇 BARRAS COMUNS: Bolinha (Alta Performance)
+                ctx.arc(pos.x, pos.y, baseR, 0, Math.PI * 2);
+            }
+            
+            ctx.fill();
         });
 
         ctx.restore();
-    }, [allNodes, branches, activePositions, activeWaypoints, transform, width, height, darkMode, getNodeColor, getEdgeColor]);
+    }, [allNodes, branches, activePositions, activeWaypoints, transform, width, height, darkMode, getNodeColor, getEdgeColor, sources, feedersList, systemShunts]);
 
-    return (
-        <canvas 
-            ref={canvasRef} 
-            style={{ 
-                width: '100%', 
-                height: '100%', 
-                position: 'absolute', 
-                top: 0, 
-                left: 0, 
-                pointerEvents: 'none' // Interação continua via SVG transparente se necessário
-            }} 
-        />
-    );
+    return <canvas ref={canvasRef} style={{ width: '100%', height: '100%', position: 'absolute', top: 0, left: 0, pointerEvents: 'none' }} />;
 };
 
 export default CanvasOverlay;
