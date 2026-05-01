@@ -59,7 +59,7 @@ const CanvasOverlay = ({
             const isSource = sources.includes(nodeId) || feedersList.includes(nodeId);
             const hasShunt = !!systemShunts[nodeId];
             
-            const baseR = 7 / transform.scale;
+            const baseR = 10 / transform.scale;
             ctx.fillStyle = getNodeColor(nodeId);
             ctx.beginPath();
 

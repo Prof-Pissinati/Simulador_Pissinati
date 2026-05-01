@@ -47,7 +47,7 @@ const GraphNode = memo(function GraphNode({
 
     // Pontos do hexágono (raio 22) calculados uma única vez via memo
     const hexPoints = useMemo(() => {
-        const r = 22;
+        const r = 31;
         return Array.from({ length: 6 }, (_, i) => {
             const a = (Math.PI / 3) * i - Math.PI / 6;
             return `${(r * Math.cos(a)).toFixed(2)},${(r * Math.sin(a)).toFixed(2)}`;
@@ -55,7 +55,7 @@ const GraphNode = memo(function GraphNode({
     }, []);
 
     // Tamanho da fonte do ID varia por tipo
-    const idFontSize = isSource ? '13px' : '10px';
+    const idFontSize = isSource ? '16px' : '13px';
 
     return (
         <g
@@ -73,59 +73,24 @@ const GraphNode = memo(function GraphNode({
             onMouseLeave={() => onMouseLeave(nodeId)}
         >
             {isSource ? (
-                /* SUBESTAÇÃO PRINCIPAL: círculo com anel interno e cruz */
+                /* SUBESTAÇÃO PRINCIPAL */
                 <g style={shapeStyle}>
-                    <circle
-                        cx="0" cy="0"
-                        r={isHighlighted ? 26 : 22}
-                        fill={color}
-                        stroke={strokeColor}
-                        strokeWidth={strokeWidth}
-                    />
-                    {/* Anel interno decorativo */}
-                    <circle
-                        cx="0" cy="0"
-                        r={isHighlighted ? 17 : 14}
-                        fill="none"
-                        stroke="rgba(255,255,255,0.25)"
-                        strokeWidth="1.5"
-                    />
-                    {/* Cruz central (símbolo de subestação) */}
-                    <line x1="-7" y1="0"  x2="7"  y2="0"  stroke="rgba(255,255,255,0.35)" strokeWidth="1.5" />
-                    <line x1="0"  y1="-7" x2="0"  y2="7"  stroke="rgba(255,255,255,0.35)" strokeWidth="1.5" />
+                    <circle cx="0" cy="0" r={isHighlighted ? 36 : 31} fill={color} stroke={strokeColor} strokeWidth={strokeWidth} />
                 </g>
             ) : isFeeder ? (
-                /* ALIMENTADOR: hexágono com traço de barramento */
+                /* ALIMENTADOR */
                 <g style={shapeStyle}>
-                    <polygon
-                        points={hexPoints}
-                        fill={color}
-                        stroke={strokeColor}
-                        strokeWidth={strokeWidth}
-                    />
-                    <line x1="-12" y1="0" x2="12" y2="0" stroke="rgba(255,255,255,0.30)" strokeWidth="1.5" />
+                    <polygon points={hexPoints} fill={color} stroke={strokeColor} strokeWidth={strokeWidth} />
+                    <line x1="-16" y1="0" x2="16" y2="0" stroke="rgba(255,255,255,0.30)" strokeWidth="1.5" />
                 </g>
             ) : hasShunt ? (
-                /* CAPACITOR / SHUNT: losango */
-                <polygon
-                    points="0,-18 18,0 0,18 -18,0"
-                    fill={color}
-                    stroke={strokeColor}
-                    strokeWidth={strokeWidth}
-                    style={shapeStyle}
-                />
+                /* CAPACITOR / SHUNT */
+                <polygon points="0,-25 25,0 0,25 -25,0" fill={color} stroke={strokeColor} strokeWidth={strokeWidth} style={shapeStyle} />
             ) : (
-                /* CARGA NORMAL: retângulo arredondado */
+                /* CARGA NORMAL */
                 <g>
-                    {/* Área de hit maior para facilitar o clique em nós pequenos */}
-                    <rect x="-20" y="-12" width="40" height="24" fill="transparent" />
-                    <rect
-                        x="-14" y="-8" width="28" height="16" rx="3"
-                        fill={color}
-                        stroke={strokeColor}
-                        strokeWidth={strokeWidth}
-                        style={shapeStyle}
-                    />
+                    <rect x="-28" y="-16" width="56" height="32" fill="transparent" /> {/* Hitbox aumentada */}
+                    <rect x="-20" y="-11" width="40" height="22" rx="4" fill={color} stroke={strokeColor} strokeWidth={strokeWidth} style={shapeStyle} />
                 </g>
             )}
 
@@ -145,13 +110,7 @@ const GraphNode = memo(function GraphNode({
 
             {/* Rótulo de carga em MW (visível quando showLabels=true) */}
             {showLabels && !isSource && !isFeeder && nodeLoad && (
-                <text
-                    x="0" y="22"
-                    textAnchor="middle"
-                    fill={darkMode ? '#aaa' : '#666'}
-                    fontSize="9px"
-                    pointerEvents="none"
-                >
+                <text x="0" y="30" textAnchor="middle" fill={darkMode ? '#aaa' : '#666'} fontSize="9px" pointerEvents="none" >
                     {nodeLoad} MW
                 </text>
             )}

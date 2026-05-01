@@ -48,9 +48,8 @@ export default function GraphArea({
     const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
 
     // Níveis de Detalhe
-    const isDetailed = transform.scale > 0.9; // LOD 0: Componentes SVG Completos
-    //const isSimplified = transform.scale <= 0.9 && transform.scale >= 0.35; // LOD 1: SVG Simplificado (Ativo apenas no "meio do caminho")
-    const isCanvas = transform.scale < 0.9;  // LOD 2: Renderizador de Alta Performance (Canvas)
+    const isDetailed = transform.scale > 0.6; // LOD 0: Componentes SVG Completos
+    const isCanvas = transform.scale <= 0.6;  // LOD 2: Renderizador de Alta Performance (Canvas)
 
     // 👇 ANTENA DE RASTREIO DO MOUSE NO SVG 👇
     const [mouseSvgPt, setMouseSvgPt] = useState({ x: 0, y: 0 });
@@ -551,13 +550,18 @@ export default function GraphArea({
 
         if (minX === Infinity) return;
 
-        const padding = 80; 
+        // Usamos 15% de margem dinâmica em relação ao tamanho da tela atual
+        const paddingX = vbW * 0.15; 
+        const paddingY = vbH * 0.15; 
+
         const width = maxX - minX;
         const height = maxY - minY;
 
-        const scaleX = (vbW - padding * 2) / (width || 1);
-        const scaleY = (vbH - padding * 2) / (height || 1);
-        const newScale = Math.max(0.02, Math.min(scaleX, scaleY, 2.5));
+        const scaleX = (vbW - paddingX * 2) / (width || 1);
+        const scaleY = (vbH - paddingY * 2) / (height || 1);
+        
+        // Limite travado em 1.0 (100% de zoom). Ele nunca vai "dar super close" em sistemas pequenos.
+        const newScale = Math.max(0.02, Math.min(scaleX, scaleY, 1.0));
 
         const centerX = minX + width / 2;
         const centerY = minY + height / 2;
@@ -565,7 +569,7 @@ export default function GraphArea({
         const newY = (vbH / 2) - (centerY * newScale);
 
         setIsAnimatingZoom(true);
-        setTransform({ x: newX, y: newY, scale: newScale });
+        setTransform({ x: newX, y: newY, scale: newScale })
         
         if (zoomTimeout.current) clearTimeout(zoomTimeout.current);
         zoomTimeout.current = setTimeout(() => { setIsAnimatingZoom(false); }, 500);
@@ -1137,7 +1141,7 @@ export default function GraphArea({
                             const isSource = sources.includes(activeNodeId) || feedersList.includes(activeNodeId);
                             const hasShunt = !!systemShunts[activeNodeId];
                             
-                            const r = 9 / transform.scale; 
+                            const r = 12 / transform.scale; 
                             const color = getNodeColor(activeNodeId);
                             const strokeW = 2.5 / transform.scale;
                             const hoverProps = { fill: color, stroke: "#fff", strokeWidth: strokeW, pointerEvents: "none", className: "voltage-glow-wrapper", style: { transition: 'all 0.1s ease-out' } };
@@ -1193,7 +1197,7 @@ export default function GraphArea({
                             const connectedBranches = branches.filter(b => Number(b.from) === nodeIdNum || Number(b.to) === nodeIdNum);
                             const isSource = sources.includes(nodeId) || feedersList.includes(nodeId);
                             const hasShunt = !!systemShunts[nodeId];
-                            const r = 7 / transform.scale; 
+                            const r = 10 / transform.scale; 
 
                             return (
                                 <g className="canvas-drag-ghost" style={{ pointerEvents: 'none' }}>

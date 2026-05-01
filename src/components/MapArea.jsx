@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { MapContainer, TileLayer, Tooltip, Polyline, Marker, useMapEvents } from 'react-leaflet';
+import { MapContainer, TileLayer, Tooltip, Polyline, Marker, useMapEvents, ZoomControl } from 'react-leaflet';
 import L from 'leaflet';
 import { GEO_POSITIONS as INITIAL_GEO } from '../data/systemDataGeo';
 import { fetchStreetRoute } from '../utils/geoRouting';
@@ -338,7 +338,9 @@ export default function MapArea({
                 </div>
             )}
 
-            <MapContainer center={center} zoom={15} doubleClickZoom={false} style={{ width: '100%', height: '100%', background: darkMode ? '#121212' : '#f0f2f5' }}>
+            <MapContainer center={center} zoom={15} zoomControl={false} style={{ width: '100%', height: '100%', background: darkMode ? '#121212' : '#f0f2f5' }}>
+
+                <ZoomControl position="topright" />
                 
                 {/* 👇 MAPA OUVE CLIQUES VAZIOS (E RESPEITA A TRAVA) */}
                 <MapBackgroundEvents setSelectedElement={setSelectedElement} isEditMode={isEditMode} ignoreMapClickRef={ignoreMapClickRef} />
