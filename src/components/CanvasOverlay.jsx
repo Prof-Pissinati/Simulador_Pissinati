@@ -3,7 +3,7 @@ import React, { useRef, useEffect } from 'react';
 const CanvasOverlay = ({ 
     allNodes, branches, activePositions, activeWaypoints, 
     transform, getNodeColor, getEdgeColor, width, height, darkMode,
-    sources = [], feedersList = [], systemShunts = {} // 👈 NOVAS PROPS AQUI
+    sources = [], feedersList = [], systemShunts = {}, draggedNodeId
 }) => {
     const canvasRef = useRef(null);
 
@@ -23,8 +23,12 @@ const CanvasOverlay = ({
         ctx.translate(transform.x, transform.y);
         ctx.scale(transform.scale, transform.scale);
 
+        const dragIdNum = draggedNodeId ? Number(draggedNodeId) : null;
+
         // 1. DESENHAR LINHAS
         branches.forEach(b => {
+            if (dragIdNum !== null && (Number(b.from) === dragIdNum || Number(b.to) === dragIdNum)) return;
+
             const p1 = activePositions[b.from];
             const p2 = activePositions[b.to];
             if (!p1 || !p2) return;
@@ -46,6 +50,8 @@ const CanvasOverlay = ({
 
         // 2. DESENHAR BARRAS (AGORA COM GEOMETRIA)
         allNodes.forEach(nodeId => {
+            if (dragIdNum !== null && Number(nodeId) === dragIdNum) return;
+
             const pos = activePositions[nodeId];
             if (!pos) return;
 
@@ -85,7 +91,7 @@ const CanvasOverlay = ({
         });
 
         ctx.restore();
-    }, [allNodes, branches, activePositions, activeWaypoints, transform, width, height, darkMode, getNodeColor, getEdgeColor, sources, feedersList, systemShunts]);
+    }, [allNodes, branches, activePositions, activeWaypoints, transform, getNodeColor, getEdgeColor, width, height, darkMode, sources, feedersList, systemShunts, draggedNodeId]);
 
     return <canvas ref={canvasRef} style={{ width: '100%', height: '100%', position: 'absolute', top: 0, left: 0, pointerEvents: 'none' }} />;
 };

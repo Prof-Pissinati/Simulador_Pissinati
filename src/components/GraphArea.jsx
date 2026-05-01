@@ -626,6 +626,12 @@ export default function GraphArea({
         }
 
         if (isBackgroundClick) {
+            if (isEditMode && isCanvas && localHoveredNode !== null) {
+                // A genialidade da reutilização: chamamos a função original do SVG!
+                handleNodeMouseDown(e, localHoveredNode);
+                return; // Aborta para não abrir a selectionBox
+            }
+            
             if (isEditMode && e.shiftKey) {
                 isSelecting.current = true;
                 setSelectionBox({ x1: svgPt.x, y1: svgPt.y, x2: svgPt.x, y2: svgPt.y });
@@ -990,6 +996,7 @@ export default function GraphArea({
                             sources={sources} 
                             feedersList={feedersList}
                             systemShunts={systemShunts}
+                            draggedNodeId={dragInfo?.type === 'mixed' && dragInfo.leaderType === 'node' ? dragInfo.leaderId : null}
                         />
                     )}
                         
@@ -1174,6 +1181,66 @@ export default function GraphArea({
                             );
                         })()}
                         {/* 👆 FIM DO FANTASMA INTERATIVO 👆 */}
+                        
+                        {/* 👇 ATOR SUBSTITUTO DO ARRASTO NO CANVAS (SVG TEMPORÁRIO) 👇 */}
+                        {isCanvas && dragInfo?.type === 'mixed' && dragInfo.leaderType === 'node' && (() => {
+                            const nodeId = dragInfo.leaderId;
+                            const nodeIdNum = Number(nodeId); // Garante a matemática estrita
+                            
+                            const pos = manualPositions[nodeId] || activePositions[nodeId];
+                            if (!pos) return null;
+
+                            const connectedBranches = branches.filter(b => Number(b.from) === nodeIdNum || Number(b.to) === nodeIdNum);
+                            const isSource = sources.includes(nodeId) || feedersList.includes(nodeId);
+                            const hasShunt = !!systemShunts[nodeId];
+                            const r = 7 / transform.scale; 
+
+                            return (
+                                <g className="canvas-drag-ghost" style={{ pointerEvents: 'none' }}>
+                                    {/* 1. As Linhas de Borracha */}
+                                    {connectedBranches.map(b => {
+                                        const p1 = b.from === nodeId ? pos : (activePositions[b.from]);
+                                        const p2 = b.to === nodeId ? pos : (activePositions[b.to]);
+                                        const wps = manualWaypoints[b.id] || activeWaypoints[b.id] || [];
+                                        if (!p1 || !p2) return null;
+                                        return (
+                                            <path
+                                                key={`drag-line-${b.id}`}
+                                                d={getPathData(p1, p2, wps)}
+                                                stroke={getEdgeColor(b)}
+                                                strokeWidth={2.5 / transform.scale}
+                                                fill="none"
+                                                strokeLinecap="round"
+                                                strokeLinejoin="round"
+                                                strokeDasharray={b.state === 0 ? "5,5" : "none"}
+                                            />
+                                        );
+                                    })}
+                                    
+                                    {/* 2. O Nó sendo Arrastado (Mantendo Geometria do Canvas) */}
+                                    {(() => {
+                                        const color = getNodeColor(nodeId);
+                                        const hoverProps = { fill: color, stroke: "#fff", strokeWidth: 2 / transform.scale };
+
+                                        if (isSource) {
+                                            const hexR = r * 1.5;
+                                            const points = Array.from({length: 6}).map((_, i) => {
+                                                const angle = (Math.PI / 3) * i - (Math.PI / 6);
+                                                return `${pos.x + hexR * Math.cos(angle)},${pos.y + hexR * Math.sin(angle)}`;
+                                            }).join(' ');
+                                            return <polygon points={points} {...hoverProps} />;
+                                        } else if (hasShunt) {
+                                            const rhoR = r * 1.5;
+                                            const points = `${pos.x},${pos.y - rhoR} ${pos.x + rhoR},${pos.y} ${pos.x},${pos.y + rhoR} ${pos.x - rhoR},${pos.y}`;
+                                            return <polygon points={points} {...hoverProps} />;
+                                        } else {
+                                            return <circle cx={pos.x} cy={pos.y} r={r} {...hoverProps} />;
+                                        }
+                                    })()}
+                                </g>
+                            );
+                        })()}
+                        {/* 👆 FIM DO ATOR SUBSTITUTO 👆 */}
 
                         {isCanvas && localHoveredLine && hoveredLineData && (
                             <path 
