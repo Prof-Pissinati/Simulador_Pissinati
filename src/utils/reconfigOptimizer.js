@@ -101,7 +101,7 @@ export async function runOptimizer(initialSequence, initialState, targetBranches
 
             if (!valid) {
                 if (ldf.reason === "Loop detectado") {
-                    const pfResult = runPowerFlow(testSnapshot.branches, testSnapshot.faults, 'NR', sysData);
+                    const pfResult = runPowerFlow(testSnapshot.branches, testSnapshot.faults, 'SIMULATION', sysData, new Set([move.from, move.to]));
                     if (!checkViolations(pfResult, testSnapshot.branches)) {
                         console.log(`⚠️ LOOP SEGURO (NR Aprovou): ${move.from}-${move.to}`);
                         valid = true;
@@ -115,7 +115,7 @@ export async function runOptimizer(initialSequence, initialState, targetBranches
             } else {
                 // 👇 A CORREÇÃO DO BUG OCULTO 👇
                 // LDF aprovou manobra radial. Mas LDF é impreciso! Vamos rodar o NR para carimbar.
-                const pfResult = runPowerFlow(testSnapshot.branches, testSnapshot.faults, 'NR', sysData);
+                const pfResult = runPowerFlow(testSnapshot.branches, testSnapshot.faults, 'SIMULATION', sysData, new Set([move.from, move.to]));
                 if (checkViolations(pfResult, testSnapshot.branches)) {
                     console.log(`❌ FALSO POSITIVO LDF! NR Rejeitou ${move.from}-${move.to} por violação oculta.`);
                     valid = false;
@@ -173,7 +173,7 @@ export async function runOptimizer(initialSequence, initialState, targetBranches
                 
                 // Se for fisicamente seguro (ignora que a ENS aumentou)
                 if (ldf.valid || ldf.reason === "Loop detectado") {
-                    const pfResult = runPowerFlow(testSnapshot.branches, testSnapshot.faults, 'NR', sysData);
+                    const pfResult = runPowerFlow(testSnapshot.branches, testSnapshot.faults, 'SIMULATION', sysData, new Set([move.from, move.to]));
                     if (!checkViolations(pfResult, testSnapshot.branches)) {
                         forcedOpen = move;
                         break; // Pega a primeira abertura segura
@@ -318,7 +318,8 @@ function checkViolations(pfResult, branches) {
     
     let vViolation = false;
     if (pfResult.nodes) {
-        vViolation = Object.values(pfResult.nodes).some(n => n.v < V_MIN || n.v > V_MAX);
+        // 👇 A CORREÇÃO: Ignora os nós desenergizados (v < 0.1) na hora de julgar 👇
+        vViolation = Object.values(pfResult.nodes).some(n => n.v > 0.1 && (n.v < V_MIN || n.v > V_MAX));
     }
 
     let iViolation = false;
@@ -478,7 +479,7 @@ function fragmentDeadIsland(failedClosures, currentSnapshot, sysData, targetBran
         
         if (ldf.valid) {
             // 2º Escudo: Newton-Raphson (Pesado)
-            const pfResult = runPowerFlow(pair.testSnapshot.branches, pair.testSnapshot.faults, 'NR', sysData);
+            const pfResult = runPowerFlow(pair.testSnapshot.branches, pair.testSnapshot.faults, 'SIMULATION', sysData, new Set([pair.openMove.from, pair.openMove.to, pair.closeMove.from, pair.closeMove.to]));
             
             if (!checkViolations(pfResult, pair.testSnapshot.branches)) {
                 // 🎉 BINGO! O primeiro que passa é o melhor, pois a fila já está ordenada!

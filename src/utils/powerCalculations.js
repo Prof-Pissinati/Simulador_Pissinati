@@ -95,7 +95,10 @@ function partitionIntoIslands(branches, sources, faultNodes) {
 
 // --- FUNÇÃO PRINCIPAL DE FLUXO DE POTÊNCIA ---
 export function runPowerFlow(branches, faultNodes, method = 'NR', sysData, eventNodes = new Set()){ 
-    CacheManager.cache.clear();
+    // Só limpa o cache global se não for uma simulação do otimizador
+    if (method !== 'SIMULATION') {
+        CacheManager.cache.clear();
+    }
 
     const { Vbase = 13.8, Sbase = 1000, sources = [] } = sysData || {};
     
@@ -106,7 +109,10 @@ export function runPowerFlow(branches, faultNodes, method = 'NR', sysData, event
 
     // 👇 1. O PARTICIONADOR DIVIDE O MAPA EM PEDAÇOS 👇
     const islands = partitionIntoIslands(branches, sources, faultNodes);
-    console.log(`🧩 Fatoração em Blocos: O sistema foi dividido em ${islands.length} ilha(s) eletricamente independente(s).`);
+    // Removemos os logs excessivos para não poluir o console durante o Otimizador
+    if (method !== 'SIMULATION') {
+        console.log(`🧩 Fatoração em Blocos: O sistema foi dividido em ${islands.length} ilha(s) eletricamente independente(s).`);
+    }
 
     const finalNodes = {};
     const finalLines = {};
@@ -133,10 +139,11 @@ export function runPowerFlow(branches, faultNodes, method = 'NR', sysData, event
             return h;
         }).join(',');
         
+        // 👇 A MÁGICA AQUI: A chave da Ilha agora embute a tag 'SIMULATION' se for o Otimizador
         const islandKey = `${method}-${Vbase}-${Sbase}|${islandBranchHash}|${islandNodeHash}`;
 
         if (CacheManager.islandCache.has(islandKey)) {
-            console.log(`   ♻️ Ilha ${index + 1}: Recuperada do cache 🚀`);
+            if (method !== 'SIMULATION') console.log(`   ♻️ Ilha ${index + 1}: Recuperada do cache 🚀`);
             const cachedIsland = CacheManager.islandCache.get(islandKey);
             Object.assign(finalNodes, cachedIsland.nodes);
             Object.assign(finalLines, cachedIsland.lines);
@@ -148,7 +155,6 @@ export function runPowerFlow(branches, faultNodes, method = 'NR', sysData, event
         const hasActiveShunt = Array.from(island.nodes).some(id => 
             islandSysData.shunts[id] && islandSysData.shunts[id].steps > 0
         );
-        
 
         // NOVO: Se tiver BC, blinda a ilha inteira. Se não, usa só o escudo de manobras normal.
         const currentShield = new Set(eventNodes);
