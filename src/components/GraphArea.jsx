@@ -1134,19 +1134,23 @@ export default function GraphArea({
 
                         {/* 👇 FANTASMA INTERATIVO DO CANVAS (HOVER UNIVERSAL) 👇 */}
                         {isCanvas && (localHoveredNode || hoveredNodeId) && (() => {
-                            const activeNodeId = localHoveredNode || hoveredNodeId; // 👈 Escuta o Mapa OU o Painel
+                            const activeNodeId = localHoveredNode || hoveredNodeId; 
                             const pos = manualPositions[activeNodeId] || renderPositions[activeNodeId];
                             if (!pos) return null;
                             
-                            const isSource = sources.includes(activeNodeId) || feedersList.includes(activeNodeId);
+                            // Separação de Tipos
+                            const isSource = sources.includes(activeNodeId);
+                            const isFeeder = feedersList.includes(activeNodeId);
                             const hasShunt = !!systemShunts[activeNodeId];
                             
-                            const r = 12 / transform.scale; 
+                            const r = 12 / transform.scale; // Pouquinho maior para dar o glow
                             const color = getNodeColor(activeNodeId);
                             const strokeW = 2.5 / transform.scale;
                             const hoverProps = { fill: color, stroke: "#fff", strokeWidth: strokeW, pointerEvents: "none", className: "voltage-glow-wrapper", style: { transition: 'all 0.1s ease-out' } };
 
                             if (isSource) {
+                                return <circle cx={pos.x} cy={pos.y} r={r * 1.3} {...hoverProps} />;
+                            } else if (isFeeder) {
                                 const hexR = r * 1.5;
                                 const points = Array.from({length: 6}).map((_, i) => {
                                     const angle = (Math.PI / 3) * i - (Math.PI / 6);
@@ -1158,7 +1162,8 @@ export default function GraphArea({
                                 const points = `${pos.x},${pos.y - rhoR} ${pos.x + rhoR},${pos.y} ${pos.x},${pos.y + rhoR} ${pos.x - rhoR},${pos.y}`;
                                 return <polygon points={points} {...hoverProps} />;
                             } else {
-                                return <circle cx={pos.x} cy={pos.y} r={r} {...hoverProps} />;
+                                const w = r * 2.5; const h = r * 1.2;
+                                return <rect x={pos.x - w/2} y={pos.y - h/2} width={w} height={h} rx={2/transform.scale} {...hoverProps} />;
                             }
                         })()}
 
@@ -1223,10 +1228,16 @@ export default function GraphArea({
                                     
                                     {/* 2. O Nó sendo Arrastado (Mantendo Geometria do Canvas) */}
                                     {(() => {
+                                        const isSource = sources.includes(nodeId);
+                                        const isFeeder = feedersList.includes(nodeId);
+                                        const hasShunt = !!systemShunts[nodeId];
+                                        
                                         const color = getNodeColor(nodeId);
                                         const hoverProps = { fill: color, stroke: "#fff", strokeWidth: 2 / transform.scale };
 
                                         if (isSource) {
+                                            return <circle cx={pos.x} cy={pos.y} r={r * 1.3} {...hoverProps} />;
+                                        } else if (isFeeder) {
                                             const hexR = r * 1.5;
                                             const points = Array.from({length: 6}).map((_, i) => {
                                                 const angle = (Math.PI / 3) * i - (Math.PI / 6);
@@ -1238,7 +1249,8 @@ export default function GraphArea({
                                             const points = `${pos.x},${pos.y - rhoR} ${pos.x + rhoR},${pos.y} ${pos.x},${pos.y + rhoR} ${pos.x - rhoR},${pos.y}`;
                                             return <polygon points={points} {...hoverProps} />;
                                         } else {
-                                            return <circle cx={pos.x} cy={pos.y} r={r} {...hoverProps} />;
+                                            const w = r * 2.5; const h = r * 1.2;
+                                            return <rect x={pos.x - w/2} y={pos.y - h/2} width={w} height={h} rx={2/transform.scale} {...hoverProps} />;
                                         }
                                     })()}
                                 </g>
