@@ -254,6 +254,91 @@ export function calculateForceLayout(nodesArray, branchesArray, sourcesArray, co
     return positions;
 }
 
+// =========================================================
+// FASE 4: SWAP GLOBAL INTELIGENTE (Escalável O(N log N))
+// =========================================================
+function applySmartGlobalSwap(pos, nodesArray, branchesArray, sourcesArray, feederMap, getLocalCost, getSystemCost) {
+    let improved = false;
+    
+    // 1. Calcula Níveis de Profundidade (BFS rápida) para a Regra 1
+    const levels = {};
+    const adj = {};
+    nodesArray.forEach(id => adj[id] = []);
+    branchesArray.forEach(b => {
+        if (b.state === 1) {
+            if (adj[b.from]) adj[b.from].push(b.to);
+            if (adj[b.to]) adj[b.to].push(b.from);
+        }
+    });
+    
+    const queue = [...sourcesArray].map(id => ({id, depth: 0}));
+    const visited = new Set(sourcesArray);
+    sourcesArray.forEach(id => levels[id] = 0);
+
+    while(queue.length > 0) {
+        const {id, depth} = queue.shift();
+        if(adj[id]) {
+            adj[id].forEach(nxt => {
+                if(!visited.has(nxt)) {
+                    visited.add(nxt);
+                    levels[nxt] = depth + 1;
+                    queue.push({id: nxt, depth: depth + 1});
+                }
+            });
+        }
+    }
+
+    let evaluations = 0;
+    let bestSystemCost = getSystemCost(pos);
+
+    // Loop principal (limitado para proteger a CPU)
+    for (let i = 0; i < nodesArray.length; i++) {
+        if (evaluations > 5000) break; // Regra 3: Teto de segurança
+        
+        for (let j = i + 1; j < nodesArray.length; j++) {
+            if (evaluations > 5000) break;
+
+            const idA = nodesArray[i];
+            const idB = nodesArray[j];
+
+            // Regra 1: Só testa nós do mesmo nível OU mesmo alimentador
+            const sameLevel = levels[idA] !== undefined && levels[idA] === levels[idB];
+            const sameFeeder = feederMap[idA] !== undefined && feederMap[idA] === feederMap[idB];
+
+            if (sameLevel || sameFeeder) {
+                evaluations++;
+                
+                const posA = pos[idA];
+                const posB = pos[idB];
+
+                // Regra 2: Pré-filtro ultra rápido usando custo Local
+                const localCostBefore = getLocalCost(idA, posA.x, posA.y, pos) + getLocalCost(idB, posB.x, posB.y, pos);
+                const localCostAfter = getLocalCost(idA, posB.x, posB.y, pos) + getLocalCost(idB, posA.x, posA.y, pos);
+
+                // Se o custo local piorar muito (> 20.000), nem tenta calcular o global
+                if ((localCostAfter - localCostBefore) < 20000) {
+                    
+                    // Regra 4: Teste Real de Fogo (Swap Provisório)
+                    pos[idA] = posB;
+                    pos[idB] = posA;
+                    
+                    const newSystemCost = getSystemCost(pos);
+                    
+                    if (newSystemCost < bestSystemCost) {
+                        bestSystemCost = newSystemCost;
+                        improved = true;
+                    } else {
+                        // Reverte se não melhorou
+                        pos[idA] = posA;
+                        pos[idB] = posB;
+                    }
+                }
+            }
+        }
+    }
+    return improved;
+}
+
 // =============================================================================
 // MOTOR DE INTELIGÊNCIA: ASSÍNCRONO & CUSTO LOCAL OTIMIZADO (100x mais rápido)
 // =============================================================================
@@ -400,19 +485,12 @@ async function applySmartCompaction(pos, nodesArray, branchesArray, sourcesArray
             }
         }
 
-        // NÍVEL 1: Swaps Globais (TRAVA DE SEGURANÇA: Desativa se houver mais de 150 barras)
-        if (nodesArray.length <= 150) {
-            let bestSystemCost = getSystemCost(pos);
-            for (let i = 0; i < nodesArray.length; i++) {
-                for (let j = i + 1; j < nodesArray.length; j++) {
-                    const idA = nodesArray[i], idB = nodesArray[j];
-                    const tmp = pos[idA]; pos[idA] = pos[idB]; pos[idB] = tmp;
-                    const cost = getSystemCost(pos);
-                    if (cost < bestSystemCost) { bestSystemCost = cost; improved = true; }
-                    else { pos[idB] = pos[idA]; pos[idA] = tmp; }
-                }
-            }
-        }
+        // NÍVEL 1: Swaps Globais Inteligentes (Escalável para sistemas gigantes)
+        const swapImproved = applySmartGlobalSwap(
+            pos, nodesArray, branchesArray, sourcesArray, feederMap, 
+            getLocalCost, getSystemCost
+        );
+        if (swapImproved) improved = true;
 
         // NÍVEL 2 e 3: Fuga e Micro-Ajustes (Agora 100x mais rápido usando Custo Local)
         for (const id of nodesArray) {
