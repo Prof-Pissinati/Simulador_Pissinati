@@ -92,9 +92,16 @@ function App() {
     const [isProjectLoaded, setIsProjectLoaded] = useState(false);
     const welcomeFileInputRef = useRef(null);
     const datFileInputRef = useRef(null);
-    const allNodes = Array.from(new Set(branches.flatMap(b => [b.from, b.to]))).sort((a, b) => a - b);
+    // 👇 BLINDAGEM CONTRA LOOP INFINITO 👇
+    const allNodes = useMemo(() => 
+        Array.from(new Set(branches.flatMap(b => [b.from, b.to]))).sort((a, b) => a - b)
+    , [branches]);
+    
     const sources = activeSources;
-    const loadNodes = allNodes.filter(n => !sources.includes(n) && !systemFeeders.includes(n));
+    
+    const loadNodes = useMemo(() => 
+        allNodes.filter(n => !sources.includes(n) && !systemFeeders.includes(n))
+    , [allNodes, sources, systemFeeders]);
     
     // 👇 IMPORTANTE: Esta lista mista blinda os barramentos para o Sequenciador 👇
     const allBoundaryNodes = useMemo(() => [...sources, ...systemFeeders], [sources, systemFeeders]);
@@ -250,14 +257,14 @@ function App() {
 
     // 👇 EFEITO DO LAYOUT ORGÂNICO ASYNC 👇
     useEffect(() => {
-        if (layoutMode === 'organic' && !organicPositions && allNodes.length > 0) {
+        if (layoutMode === 'organic' && !organicPositions && allNodes.length > 0 && !isCalculatingLayout) {
             const calculateAsync = async () => {
                 setIsCalculatingLayout(true);
                 setLayoutProgress({ passes: 0, msg1: "Iniciando Motor Físico...", msg2: "Preparando nós" });
                 
                 try {
                     // Chama o operário terceirizado!
-                    const newLayout = await runAsyncLayout('force', allNodes, branches, sources, { 
+                    const newLayout = await runAsyncLayout('auto', allNodes, branches, sources, { 
                         gridSize: 100, 
                         maxIter: 30,
                         currentPos: projectPositions,

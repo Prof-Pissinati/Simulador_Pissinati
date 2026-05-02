@@ -1,5 +1,66 @@
 import * as d3 from 'd3-force';
 
+// =========================================================
+// FASE 1: CLASSIFICADOR TOPOLÓGICO
+// Analisa a rede para definir o motor de layout ideal
+// =========================================================
+export function classifyTopology(nodesArray, branchesArray, config = {}) {
+    const nodeCount = nodesArray.length;
+    const edgeCount = branchesArray.length;
+    
+    // L = E - V + 1 (Assumindo 1 componente conexo principal)
+    const loops = Math.max(0, edgeCount - nodeCount + 1);
+    const avgDegree = nodeCount > 0 ? (edgeCount * 2) / nodeCount : 0;
+
+    const sources = config.sources || [];
+    const adj = {};
+    nodesArray.forEach(id => adj[id] = []);
+    branchesArray.forEach(b => {
+        if (adj[b.from]) adj[b.from].push(b.to);
+        if (adj[b.to]) adj[b.to].push(b.from);
+    });
+
+    // BFS para descobrir profundidade máxima
+    let maxDepth = 0;
+    const visited = new Set(sources);
+    const queue = sources.map(id => ({ id, depth: 0 }));
+
+    while (queue.length > 0) {
+        const { id, depth } = queue.shift();
+        if (depth > maxDepth) maxDepth = depth;
+
+        if (adj[id]) {
+            adj[id].forEach(neighbor => {
+                if (!visited.has(neighbor)) {
+                    visited.add(neighbor);
+                    queue.push({ id: neighbor, depth: depth + 1 });
+                }
+            });
+        }
+    }
+
+    // Regras de Decisão de Motor
+    let type = 'large';
+    let suggestedEngine = 'force';
+
+    if (nodeCount >= 250 || loops > 10) {
+        type = 'large';
+        suggestedEngine = 'force';
+    } else if (loops === 0) {
+        type = 'radial';
+        suggestedEngine = 'orthogonal';
+    } else {
+        type = 'weakly_meshed';
+        suggestedEngine = 'vns';
+    }
+
+    return {
+        type,
+        suggestedEngine,
+        metrics: { loops, maxDepth, avgDegree, nodeCount }
+    };
+}
+
 export const D3_DEFAULTS = { distance: 10, charge: -40, openWeight: 0.65, collide: 40 };
 
 export function getDistToSegment(p, a, b) {

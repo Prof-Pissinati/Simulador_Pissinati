@@ -1,4 +1,4 @@
-import { calculateForceLayout, calculateOrthogonalLayout, calculateVNSLayout } from './autoLayout';
+import { calculateForceLayout, calculateOrthogonalLayout, calculateVNSLayout, classifyTopology } from './autoLayout';
 
 // =========================================================
 // TRAVA DO PONTO CENTRAL
@@ -57,10 +57,8 @@ function lockLayoutCenter(initialPos, calculatedPos, nodesArray) {
 // COMUNICAÇÃO COM O REACT
 // =========================================================
 self.onmessage = async (e) => {
-    // 1. Recebe a "encomenda" de trabalho do React
     const { type, nodesArray, branchesArray, sourcesArray, config, jobId } = e.data;
 
-    // 2. Intercepta relatórios de progresso
     if (config && config.reportProgress) {
         config.onProgress = (passes, msg1, msg2) => {
             self.postMessage({ type: 'progress', jobId, passes, msg1, msg2 });
@@ -69,22 +67,37 @@ self.onmessage = async (e) => {
 
     try {
         let result;
+        let actualType = type; // 👇 AQUI ESTÁ A VARIÁVEL QUE FALTAVA!
+
+        // 👇 FASE 1: O CÉREBRO ENTRA EM AÇÃO 👇
+        if (type === 'auto') {
+            const analysis = classifyTopology(nodesArray, branchesArray, config);
+            actualType = analysis.suggestedEngine;
+            
+            console.log('🧠 [AUTO-LAYOUT] Análise Topológica:', analysis);
+            
+            if (config && config.reportProgress) {
+                config.onProgress(0, `Topologia: ${analysis.type}`, `Motor: ${actualType}`);
+            }
+        }
+
         // 3. Executa APENAS os 3 motores oficiais
-        if (type === 'force') {
+        if (actualType === 'force') {
             result = calculateForceLayout(nodesArray, branchesArray, sourcesArray, config);
-        } else if (type === 'vns') {
+        } else if (actualType === 'vns') {
             result = await calculateVNSLayout(nodesArray, branchesArray, sourcesArray, config);
-        } else if (type === 'orthogonal') {
+        } else if (actualType === 'orthogonal') {
             result = await calculateOrthogonalLayout(nodesArray, branchesArray, sourcesArray, config);
+        } else {
+            throw new Error(`Motor de layout não reconhecido: ${actualType}`);
         }
         
-        // 👇 A MÁGICA ACONTECE AQUI 👇
-        // Se temos a posição atual da tela (config.currentPos), aplicamos a trava!
+        // 4. Trava o Ponto Central
         if (config && config.currentPos) {
             result = lockLayoutCenter(config.currentPos, result, nodesArray);
         }
         
-        // 4. Devolve o mapa pronto (e centralizado) para o React
+        // 5. Devolve o mapa pronto
         self.postMessage({ type: 'success', jobId, result });
     } catch (error) {
         self.postMessage({ type: 'error', jobId, error: error.message });
