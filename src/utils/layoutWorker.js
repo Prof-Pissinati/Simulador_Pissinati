@@ -67,7 +67,41 @@ self.onmessage = async (e) => {
 
     try {
         let result;
-        let actualType = type; // 👇 AQUI ESTÁ A VARIÁVEL QUE FALTAVA!
+        let actualType = type;
+
+        // 👇 FASE 3: MAPA DE ALIMENTADORES (BFS) 👇
+        const feederMap = {};
+        if (config && config.feeders) {
+            const queue = [...config.feeders];
+            config.feeders.forEach(f => feederMap[f] = String(f));
+            
+            // Cria lista de adjacência rápida apenas com chaves fechadas
+            const adj = {};
+            branchesArray.forEach(b => {
+                if (b.state === 1) {
+                    if (!adj[b.from]) adj[b.from] = [];
+                    if (!adj[b.to]) adj[b.to] = [];
+                    adj[b.from].push(b.to);
+                    adj[b.to].push(b.from);
+                }
+            });
+
+            let head = 0;
+            while (head < queue.length) {
+                const currId = queue[head++];
+                const myFeeder = feederMap[currId];
+                if (adj[currId]) {
+                    adj[currId].forEach(nxt => {
+                        if (!feederMap[nxt] && !sourcesArray.includes(nxt)) {
+                            feederMap[nxt] = myFeeder;
+                            queue.push(nxt);
+                        }
+                    });
+                }
+            }
+        }
+        config.feederMap = feederMap; // Injeta no config para os motores usarem!
+        // 👆 FIM DA FASE 3 👆
 
         // 👇 FASE 1: O CÉREBRO ENTRA EM AÇÃO 👇
         if (type === 'auto') {

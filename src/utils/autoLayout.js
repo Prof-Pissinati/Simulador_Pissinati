@@ -257,7 +257,7 @@ export function calculateForceLayout(nodesArray, branchesArray, sourcesArray, co
 // =============================================================================
 // MOTOR DE INTELIGÊNCIA: ASSÍNCRONO & CUSTO LOCAL OTIMIZADO (100x mais rápido)
 // =============================================================================
-async function applySmartCompaction(pos, nodesArray, branchesArray, sourcesArray, gridSize, maxIter, onProgress) {
+async function applySmartCompaction(pos, nodesArray, branchesArray, sourcesArray, gridSize, maxIter, onProgress, feederMap = {}) {
     // PRÉ-CALCULO: Mapeia as conexões para avaliação super-rápida (Custo Local)
     const myEdgesMap = {};
     const otherEdgesMap = {};
@@ -298,7 +298,17 @@ async function applySmartCompaction(pos, nodesArray, branchesArray, sourcesArray
                 const ob = otherEdges[k];
                 const p3 = currentPos[ob.from], p4 = currentPos[ob.to];
                 if (p3 && p4 && segmentsIntersect(p1, p2, p3, p4)) {
-                    cost += (b.state === 1 && ob.state === 1) ? 100000 : 50000;
+                    // 👇 AI-PENALTY: Penalização inteligente de cruzamentos
+                    let penalty = 10000; // Padrão: Mesmo alimentador
+                    
+                    const isSourceInvolved = sourcesArray.includes(b.from) || sourcesArray.includes(b.to) || sourcesArray.includes(ob.from) || sourcesArray.includes(ob.to);
+                    
+                    if (isSourceInvolved) {
+                        penalty = 100000; // Máxima prioridade: Não cruzar ramais-fonte
+                    } else if (feederMap[b.from] !== feederMap[ob.from]) {
+                        penalty = 50000; // Alimentadores diferentes se cruzando
+                    }
+                    cost += penalty;
                 }
             }
         }
@@ -334,7 +344,16 @@ async function applySmartCompaction(pos, nodesArray, branchesArray, sourcesArray
                 const b = branchesArray[j];
                 if (a.from === b.from || a.from === b.to || a.to === b.from || a.to === b.to) continue;
                 const p3 = currentPos[b.from], p4 = currentPos[b.to];
-                if (p3 && p4 && segmentsIntersect(p1, p2, p3, p4)) cost += (a.state === 1 && b.state === 1) ? 100000 : 50000;
+                if (p3 && p4 && segmentsIntersect(p1, p2, p3, p4)) {
+                    // 👇 AI-PENALTY: Penalização global
+                    let penalty = 10000; 
+                    if (sourcesArray.includes(a.from) || sourcesArray.includes(a.to) || sourcesArray.includes(b.from) || sourcesArray.includes(b.to)) {
+                        penalty = 100000;
+                    } else if (feederMap[a.from] !== feederMap[b.from]) {
+                        penalty = 50000;
+                    }
+                    cost += penalty;
+                }
             }
         }
         return cost;
@@ -474,7 +493,7 @@ export async function calculateOrthogonalLayout(nodesArray, branchesArray, sourc
         }
     });
     pos = applyBarycenterSweep(pos, nodesArray, branchesArray, sourcesArray, radialStep);
-    return await applySmartCompaction(pos, nodesArray, branchesArray, sourcesArray, radialStep, 8, config.onProgress);
+    return await applySmartCompaction(pos, nodesArray, branchesArray, sourcesArray, radialStep, 8, config.onProgress, config.feederMap);
 }
 
 export async function calculateVNSLayout(nodesArray, branchesArray, sourcesArray, config = {}) {
@@ -505,7 +524,7 @@ export async function calculateVNSLayout(nodesArray, branchesArray, sourcesArray
 
     if (config.onProgress) config.onProgress(1, "Iniciando...", "Aguarde...");
     pos = applyBarycenterSweep(pos, nodesArray, branchesArray, sourcesArray, gridSize);
-    const finalPos = await applySmartCompaction(pos, nodesArray, branchesArray, sourcesArray, gridSize, maxIter, config.onProgress);
+    const finalPos = await applySmartCompaction(pos, nodesArray, branchesArray, sourcesArray, gridSize, maxIter, config.onProgress, config.feederMap);
     if (config.onProgress) config.onProgress("Concluído", "Finalizado", "-");
     return finalPos;
 }
