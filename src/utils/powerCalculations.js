@@ -511,21 +511,21 @@ function buildResult(nodes, V, Theta, Zbase, branches, nodeMap, energizedNodes, 
     return { nodes: nodeResults, lines: lineResults };
 }
 
-// 👇 O CÉREBRO UNIFICADO: Propagação, Zonas e Detecção de Loops 👇
+// 👇 O CÉREBRO UNIFICADO: Propagação com Dependência Hierárquica 👇
 export function analyzeTopology(branches, faultNodes, sysData) {
     const { sources = [], feeders = [] } = sysData || {};
     const nZ = {}; const eZ = {};
     const loopN = new Set(); const loopE = new Set();
-    const roots = [...sources, ...feeders];
     const nodeFeeds = {}; 
+    const colorRoots = [...sources, ...feeders]; // A paleta de cores continua precisando de todos
 
-    let queue = [...roots];
-    roots.forEach(r => {
-        nodeFeeds[r] = new Set([r]);
-        nZ[r] = r;
+    // 1. A REVOLUÇÃO: O Big Bang começa APENAS nas Subestações
+    let queue = [...sources];
+    sources.forEach(s => {
+        nodeFeeds[s] = new Set([s]);
+        nZ[s] = s;
     });
 
-    // 1. Monta Lista de Adjacência Segura (Ignora ramos com defeito)
     const adj = {};
     branches.forEach(b => {
         if (b.state === 1 && !faultNodes.has(b.from) && !faultNodes.has(b.to)) {
@@ -540,12 +540,21 @@ export function analyzeTopology(branches, faultNodes, sysData) {
     while(queue.length > 0) {
         const curr = queue.shift();
         
-        // Alimentador age como escudo e propaga apenas a si mesmo.
-        const zonesToPropagate = feeders.includes(curr) ? new Set([curr]) : nodeFeeds[curr];
+        let zonesToPropagate;
+        
+        // 👇 A MÁGICA DO PEDÁGIO 👇
+        // Se a energia alcançou um Alimentador, ele assume a "paternidade" da onda daqui pra frente
+        if (feeders.includes(curr)) {
+            zonesToPropagate = new Set([curr]);
+            nZ[curr] = curr; // O próprio alimentador assume sua cor característica
+            nodeFeeds[curr].add(curr); 
+        } else {
+            zonesToPropagate = nodeFeeds[curr];
+        }
 
         if (adj[curr]) {
             adj[curr].forEach(({ node: neighbor, edgeId }) => {
-                if (sources.includes(neighbor)) return; // Nunca invade a Subestação
+                if (sources.includes(neighbor)) return; // Nunca invade a Subestação Mãe de volta
 
                 if (!nodeFeeds[neighbor]) {
                     // Energia nova chega na barra
@@ -554,7 +563,7 @@ export function analyzeTopology(branches, faultNodes, sysData) {
                     eZ[edgeId] = nZ[neighbor];
                     queue.push(neighbor);
                 } else {
-                    // 👇 VÁLVULA DE RETENÇÃO (Efeito Salmão) 👇
+                    // VÁLVULA DE RETENÇÃO (Efeito Salmão)
                     const neighborHasSource = Array.from(nodeFeeds[neighbor]).some(s => sources.includes(s));
                     const tryingToPropagateFeeder = Array.from(zonesToPropagate).some(f => feeders.includes(f));
                     
@@ -562,7 +571,6 @@ export function analyzeTopology(branches, faultNodes, sysData) {
                         return; // Barreira topológica acionada!
                     }
 
-                    // Verifica se há novas fontes alimentando o mesmo nó (Potencial Loop)
                     let isNewConflict = false;
                     zonesToPropagate.forEach(z => {
                         if (!nodeFeeds[neighbor].has(z)) {
@@ -591,8 +599,7 @@ export function analyzeTopology(branches, faultNodes, sysData) {
         if (sourceCount >= 2 || feederCount >= 2) {
             loopN.add(node);
             
-            // 👇 A LINHA MÁGICA DA RETROALIMENTAÇÃO 👇
-            // Se esta barra está em loop, puxa as raízes (Alimentadores) para ficarem amarelos também!
+            // Retroalimentação: puxa as raízes que causaram o choque para o amarelo também
             zones.forEach(z => loopN.add(z)); 
         }
     });
@@ -620,7 +627,7 @@ export function analyzeTopology(branches, faultNodes, sysData) {
         }
     });
 
-    return { nodeFeeds, nodeZones: nZ, edgeZones: eZ, loopNodes: loopN, loopEdges: loopE, colorRoots: roots };
+    return { nodeFeeds, nodeZones: nZ, edgeZones: eZ, loopNodes: loopN, loopEdges: loopE, colorRoots };
 }
 
 // 👇 CÁLCULO DE CARGA (Com Contagem Hierárquica Múltipla) 👇
