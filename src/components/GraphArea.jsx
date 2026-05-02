@@ -44,7 +44,7 @@ export default function GraphArea({
     const svgRef = useRef(null);
     const measureRef = useRef(null); 
     
-    const [transform, setTransform] = useState({ x: -50, y: 0, scale: 1 });
+    const [transform, setTransform] = useState({ x: 0, y: 0, scale: 1 });
     const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
 
     // Níveis de Detalhe
@@ -551,22 +551,31 @@ export default function GraphArea({
         if (minX === Infinity) return;
 
         // Usamos 15% de margem dinâmica em relação ao tamanho da tela atual
-        const paddingX = vbW * 0.15; 
-        const paddingY = vbH * 0.15; 
+        // Margens bem menores nas laterais e no teto (ex: 5%)
+        const paddingX = vbW * 0.1; 
+        const paddingTop = vbH * 0.1; 
+        
+        // 👇 A MÁGICA: Reservamos 30% da parte de baixo da tela para o Sequenciador!
+        const paddingBottom = vbH * 0.15; 
 
         const width = maxX - minX;
         const height = maxY - minY;
 
+        // O espaço vertical útil agora desconta o teto e o chão de forma separada
         const scaleX = (vbW - paddingX * 2) / (width || 1);
-        const scaleY = (vbH - paddingY * 2) / (height || 1);
+        const scaleY = (vbH - (paddingTop + paddingBottom)) / (height || 1);
         
-        // Limite travado em 1.0 (100% de zoom). Ele nunca vai "dar super close" em sistemas pequenos.
-        const newScale = Math.max(0.02, Math.min(scaleX, scaleY, 1.0));
+        const newScale = Math.max(0.02, Math.min(scaleX, scaleY, 2.0));
 
         const centerX = minX + width / 2;
         const centerY = minY + height / 2;
+        
         const newX = (vbW / 2) - (centerX * newScale);
-        const newY = (vbH / 2) - (centerY * newScale);
+        
+        // Em vez de centralizar no meio exato da tela (vbH / 2), 
+        // nós centralizamos no meio da "área livre" que sobrou acima do sequenciador
+        const usefulCenterY = paddingTop + ((vbH - paddingTop - paddingBottom) / 2);
+        const newY = usefulCenterY - (centerY * newScale);
 
         setIsAnimatingZoom(true);
         setTransform({ x: newX, y: newY, scale: newScale })
