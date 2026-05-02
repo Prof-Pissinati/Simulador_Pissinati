@@ -61,6 +61,89 @@ export function classifyTopology(nodesArray, branchesArray, config = {}) {
     };
 }
 
+// =========================================================
+// FASE 2: BARYCENTER SWEEP (Ordenação Hierárquica)
+// Reduz cruzamentos alinhando barras por profundidade elétrica
+// =========================================================
+export function applyBarycenterSweep(positions, nodesArray, branchesArray, sourcesArray, gridSize = 100) {
+    if (!positions || Object.keys(positions).length === 0) return positions;
+    const newPos = JSON.parse(JSON.stringify(positions));
+
+    // 1. Mapa de Adjacência (Apenas chaves fechadas)
+    const adj = {};
+    nodesArray.forEach(id => adj[id] = []);
+    branchesArray.forEach(b => {
+        if (b.state === 1) { 
+            if (adj[b.from]) adj[b.from].push(b.to);
+            if (adj[b.to]) adj[b.to].push(b.from);
+        }
+    });
+
+    // 2. BFS para calcular níveis (Profundidade)
+    const levels = {};
+    const nodesByLevel = {};
+    const visited = new Set(sourcesArray);
+    const queue = sourcesArray.map(id => ({ id, depth: 0 }));
+
+    sourcesArray.forEach(id => {
+        levels[id] = 0;
+        if (!nodesByLevel[0]) nodesByLevel[0] = [];
+        nodesByLevel[0].push(id);
+    });
+
+    let maxLevel = 0;
+    while (queue.length > 0) {
+        const { id, depth } = queue.shift();
+        if (adj[id]) {
+            adj[id].forEach(neighbor => {
+                if (!visited.has(neighbor)) {
+                    visited.add(neighbor);
+                    const nextDepth = depth + 1;
+                    levels[neighbor] = nextDepth;
+                    if (!nodesByLevel[nextDepth]) nodesByLevel[nextDepth] = [];
+                    nodesByLevel[nextDepth].push(neighbor);
+                    queue.push({ id: neighbor, depth: nextDepth });
+                    if (nextDepth > maxLevel) maxLevel = nextDepth;
+                }
+            });
+        }
+    }
+
+    // 3. Varredura de Baricentro (Barycenter Sweep) - Top-Down
+    for (let lvl = 1; lvl <= maxLevel; lvl++) {
+        const currentNodes = nodesByLevel[lvl];
+        if (!currentNodes || currentNodes.length <= 1) continue;
+
+        const nodeStats = currentNodes.map(nodeId => {
+            // Encontra os pais deste nó (vizinhos que estão no nível anterior)
+            const parents = adj[nodeId].filter(neighbor => levels[neighbor] === lvl - 1);
+            
+            let barycenterX = 0;
+            if (parents.length > 0) {
+                const sumX = parents.reduce((sum, parentId) => sum + (newPos[parentId]?.x || 0), 0);
+                barycenterX = sumX / parents.length;
+            } else {
+                barycenterX = newPos[nodeId]?.x || 0;
+            }
+            return { id: nodeId, barycenterX };
+        });
+
+        // 4. Ordene os nós pela atração gravitacional dos pais
+        nodeStats.sort((a, b) => a.barycenterX - b.barycenterX);
+
+        // 5. Pega o grid/espaço que estava ocupado por esse nível e repassa na nova ordem
+        const availableXCoords = currentNodes.map(id => newPos[id]?.x || 0).sort((a, b) => a - b);
+
+        nodeStats.forEach((stat, index) => {
+            if (newPos[stat.id]) {
+                newPos[stat.id].x = availableXCoords[index];
+            }
+        });
+    }
+
+    return newPos;
+}
+
 export const D3_DEFAULTS = { distance: 10, charge: -40, openWeight: 0.65, collide: 40 };
 
 export function getDistToSegment(p, a, b) {
@@ -390,6 +473,7 @@ export async function calculateOrthogonalLayout(nodesArray, branchesArray, sourc
             } ring++;
         }
     });
+    pos = applyBarycenterSweep(pos, nodesArray, branchesArray, sourcesArray, radialStep);
     return await applySmartCompaction(pos, nodesArray, branchesArray, sourcesArray, radialStep, 8, config.onProgress);
 }
 
@@ -420,6 +504,7 @@ export async function calculateVNSLayout(nodesArray, branchesArray, sourcesArray
     });
 
     if (config.onProgress) config.onProgress(1, "Iniciando...", "Aguarde...");
+    pos = applyBarycenterSweep(pos, nodesArray, branchesArray, sourcesArray, gridSize);
     const finalPos = await applySmartCompaction(pos, nodesArray, branchesArray, sourcesArray, gridSize, maxIter, config.onProgress);
     if (config.onProgress) config.onProgress("Concluído", "Finalizado", "-");
     return finalPos;
