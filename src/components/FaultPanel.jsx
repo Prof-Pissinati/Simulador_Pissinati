@@ -7,6 +7,7 @@ export default function FaultPanel({
     loadNodes,
     faultNodes,
     nodeFeeds,
+    loopNodes, 
     toggleFault,
     selectedElement,
     setSelectedElement,
@@ -20,18 +21,19 @@ export default function FaultPanel({
     setHoveredLineId
 }) {
     const [unlockFixed, setUnlockFixed] = useState(false);
-    // 👇 NOVO ESTADO PARA A BARRA DE PESQUISA 👇
     const [searchTerm, setSearchTerm] = useState('');
 
     const getStatusText = (id) => {
         if (faultNodes.has(id)) return 'EM FALTA';
+        if (loopNodes && loopNodes.has(id)) return 'EM LOOP';
+        
         const feeds = nodeFeeds[id];
         if (!feeds || feeds.size === 0) return 'DESENERGIZADO';
-        if (feeds.size > 1) return 'EM LOOP';
+        
         return 'ENERGIZADO';
     };
 
-    // 👇 LÓGICA DE FILTRAGEM 👇
+    // LÓGICA DE FILTRAGEM
     const term = searchTerm.toLowerCase().trim();
 
     const matchNode = (id, prefix) => {
@@ -62,6 +64,17 @@ export default function FaultPanel({
     const hasNoResults = filteredSources.length === 0 && filteredFeeders.length === 0 && 
                          filteredLoads.length === 0 && filteredSwitchable.length === 0 && filteredFixed.length === 0;
 
+    // A propriedade 'flex: 1' é o que define o espaço do texto. 
+    // Colocamos um 'maxWidth' para garantir que ele não empurre o botão.
+    const itemContainerStyle = { display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'nowrap', gap: '4px' };
+    const labelStyle = { fontSize: '13px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', flex: 1, maxWidth: '100px', fontWeight: '500' };
+
+    // Lógica para suprimir o texto: Se o ID for grande (>= 4 dígitos) ou for linha complexa, suprime o prefixo
+    const formatName = (prefix, id) => {
+        const str = String(id);
+        return str.length >= 4 ? str : `${prefix} ${str}`;
+    };
+
     return (
         <div className={`right-sidebar ${isFaultSidebarOpen ? 'open' : ''}`} style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
              
@@ -69,7 +82,6 @@ export default function FaultPanel({
              <div style={{padding:'15px', borderBottom:'1px solid var(--border-color)', flexShrink:0, background: 'var(--bg-color)', zIndex: 10 }}>
                 <h2 style={{fontSize:'16px', margin:'0 0 12px 0'}}>Diretório de Elementos</h2>
                 
-                {/* A BARRA DE PESQUISA */}
                 <div style={{ position: 'relative' }}>
                     <span style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', opacity: 0.5, fontSize: '14px' }}>🔍</span>
                     <input 
@@ -119,10 +131,11 @@ export default function FaultPanel({
                             <div key={id} className={`fault-item ${selectedElement?.id === id ? 'selected' : ''}`}
                                 onClick={() => setSelectedElement({ type: 'node', id: id })}
                                 onMouseEnter={() => { setHoveredNodeId(id); setSelectedElement({ type: 'node', id: id }); }} 
-                                onMouseLeave={() => { setHoveredNodeId(null); }}>
-                                <span>SUB {id}</span>
+                                onMouseLeave={() => { setHoveredNodeId(null); }}
+                                style={itemContainerStyle}>
+                                <span style={labelStyle}>{formatName('SUB', id)}</span>
                                 <button className={`fault-btn-rect ${faultNodes.has(id)?'is-fault':''}`} 
-                                        style={{ background: faultNodes.has(id) ? '' : getNodeColor(id), color: faultNodes.has(id) || getNodeColor(id) !== (darkMode ? THEME.dark.de : THEME.light.de) ? 'black' : 'white', minWidth: '110px' }} 
+                                        style={{ background: faultNodes.has(id) ? '' : getNodeColor(id), color: faultNodes.has(id) || getNodeColor(id) !== (darkMode ? THEME.dark.de : THEME.light.de) ? 'black' : 'white', minWidth: '105px', flexShrink: 0, padding: '4px 6px', fontSize: '11px' }} 
                                         onClick={(e) => { e.stopPropagation(); toggleFault(id); }}>
                                     {getStatusText(id)}
                                 </button>
@@ -139,10 +152,11 @@ export default function FaultPanel({
                             <div key={id} className={`fault-item ${selectedElement?.id === id ? 'selected' : ''}`}
                                 onClick={() => setSelectedElement({ type: 'node', id: id })}
                                 onMouseEnter={() => { setHoveredNodeId(id); setSelectedElement({ type: 'node', id: id }); }} 
-                                onMouseLeave={() => { setHoveredNodeId(null); }}>
-                                <span>Alim. {id}</span>
+                                onMouseLeave={() => { setHoveredNodeId(null); }}
+                                style={itemContainerStyle}>
+                                <span style={labelStyle}>{formatName('Alim.', id)}</span>
                                 <button className={`fault-btn-rect ${faultNodes.has(id)?'is-fault':''}`} 
-                                        style={{ background: faultNodes.has(id) ? '' : getNodeColor(id), color: faultNodes.has(id) || getNodeColor(id) !== (darkMode ? THEME.dark.de : THEME.light.de) ? 'black' : 'white', minWidth: '110px' }} 
+                                        style={{ background: faultNodes.has(id) ? '' : getNodeColor(id), color: faultNodes.has(id) || getNodeColor(id) !== (darkMode ? THEME.dark.de : THEME.light.de) ? 'black' : 'white', minWidth: '105px', flexShrink: 0, padding: '4px 6px', fontSize: '11px' }} 
                                         onClick={(e) => { e.stopPropagation(); toggleFault(id); }}>
                                     {getStatusText(id)}
                                 </button>
@@ -159,10 +173,11 @@ export default function FaultPanel({
                             <div key={id} className={`fault-item ${selectedElement?.id === id ? 'selected' : ''}`}
                                 onClick={() => setSelectedElement({ type: 'node', id: id })}
                                 onMouseEnter={() => { setHoveredNodeId(id); setSelectedElement({ type: 'node', id: id }); }} 
-                                onMouseLeave={() => { setHoveredNodeId(null); }}>
-                                <span>Barra {id}</span>
+                                onMouseLeave={() => { setHoveredNodeId(null); }}
+                                style={itemContainerStyle}>
+                                <span style={labelStyle}>{formatName('Barra', id)}</span>
                                 <button className={`fault-btn-rect ${faultNodes.has(id)?'is-fault':''}`} 
-                                        style={{ background: faultNodes.has(id) ? '' : getNodeColor(id), color: faultNodes.has(id) || getNodeColor(id) !== (darkMode ? THEME.dark.de : THEME.light.de) ? 'black' : 'white', minWidth: '110px' }} 
+                                        style={{ background: faultNodes.has(id) ? '' : getNodeColor(id), color: faultNodes.has(id) || getNodeColor(id) !== (darkMode ? THEME.dark.de : THEME.light.de) ? 'black' : 'white', minWidth: '105px', flexShrink: 0, padding: '4px 6px', fontSize: '11px' }} 
                                         onClick={(e) => { e.stopPropagation(); toggleFault(id); }}>
                                     {getStatusText(id)}
                                 </button>
@@ -188,12 +203,21 @@ export default function FaultPanel({
                         const canClick = !isFixedType || unlockFixed; 
                         const isSelected = selectedElement?.type === 'edge' && selectedElement?.data?.id === branch.id;
 
+                        // 👇 NOVA LÓGICA DE NOME DA LINHA 👇
+                        const lineStr = `${Math.min(branch.from, branch.to)}-${Math.max(branch.from, branch.to)}`;
+                        // Se a string de números for grande (ex: "101-102" tem 7 chars), oculta a palavra "Linha"
+                        const displayLabel = lineStr.length >= 7 ? lineStr : `Linha ${lineStr}`;
+
                         return (
                             <div key={branch.id} className={`fault-item ${isSelected ? 'selected' : ''}`} 
                                  onClick={() => setSelectedElement({ type: 'edge', data: branch })}
                                  onMouseEnter={() => { setSelectedElement({ type: 'edge', data: branch }); setHoveredLineId(branch.id); }} 
-                                 onMouseLeave={() => setHoveredLineId(null)}>
-                                <span style={{fontSize:'13px'}}>Linha {Math.min(branch.from, branch.to)}-{Math.max(branch.from, branch.to)}</span>
+                                 onMouseLeave={() => setHoveredLineId(null)}
+                                 style={itemContainerStyle}>
+                                 
+                                {/* 👇 O title exibe a dica completa no hover do mouse 👇 */}
+                                <span style={labelStyle} title={`Linha ${lineStr}`}>{displayLabel}</span>
+                                
                                 <button 
                                     className={`fault-btn-rect`} 
                                     onClick={(e) => { e.stopPropagation(); if (canClick) toggleSwitch(branch.id); }}
@@ -201,10 +225,11 @@ export default function FaultPanel({
                                         background: canClick ? (isOn ? nodeColor : (darkMode ? '#333' : '#eee')) : 'transparent', 
                                         color: canClick ? (isOn ? '#000' : (darkMode ? '#aaa' : '#666')) : '#999',
                                         border: canClick ? 'none' : '1px solid #555', cursor: canClick ? 'pointer' : 'default', opacity: canClick ? 1 : 0.6,
-                                        minWidth: '70px'
+                                        minWidth: '85px', flexShrink: 0, padding: '4px 6px', fontSize: '11px', fontWeight: 'bold' // Ajustado para FECHADO/ABERTO
                                     }}
                                 >
-                                    {!canClick ? 'FIXO' : (isOn ? 'ON' : 'OFF')}
+                                    {/* 👇 O NOVO TEXTO EM PORTUGUÊS 👇 */}
+                                    {!canClick ? 'FIXO' : (isOn ? 'FECHADO' : 'ABERTO')}
                                 </button>
                             </div>
                         );

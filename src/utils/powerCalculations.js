@@ -511,123 +511,116 @@ function buildResult(nodes, V, Theta, Zbase, branches, nodeMap, energizedNodes, 
     return { nodes: nodeResults, lines: lineResults };
 }
 
-// 👇 PROPAGAÇÃO DE ENERGIA (Com Hierarquia e Barreiras Radiais) 👇
-export function propagateFeeds(branches, faultNodes, sysData) {
-    const nodeFeeds = {};
+// 👇 O CÉREBRO UNIFICADO: Propagação, Zonas e Detecção de Loops 👇
+export function analyzeTopology(branches, faultNodes, sysData) {
     const { sources = [], feeders = [] } = sysData || {};
-    const activeBranches = branches.filter(b => b.state === 1);
+    const nZ = {}; const eZ = {};
+    const loopN = new Set(); const loopE = new Set();
+    const roots = [...sources, ...feeders];
+    const nodeFeeds = {}; 
 
+    let queue = [...roots];
+    roots.forEach(r => {
+        nodeFeeds[r] = new Set([r]);
+        nZ[r] = r;
+    });
+
+    // 1. Monta Lista de Adjacência Segura (Ignora ramos com defeito)
     const adj = {};
-    activeBranches.forEach(b => {
-        if (!adj[b.from]) adj[b.from] = [];
-        if (!adj[b.to]) adj[b.to] = [];
-        adj[b.from].push(b.to);
-        adj[b.to].push(b.from);
-    });
-
-    const allSources = [...sources, ...feeders];
-    allSources.forEach(s => {
-        if (!nodeFeeds[s]) nodeFeeds[s] = new Set();
-        nodeFeeds[s].add(s);
-    });
-
-    // 1. A Transmissão (Fontes Principais): Propagam por TUDO
-    sources.forEach(source => {
-        if (faultNodes.has(source)) return;
-        const queue = [source];
-        const visited = new Set([source]);
-
-        let head = 0;
-        while (head < queue.length) {
-            const u = queue[head++];
-            if (!adj[u]) continue;
-            adj[u].forEach(v => {
-                if (!visited.has(v) && !faultNodes.has(v)) {
-                    visited.add(v);
-                    if (!nodeFeeds[v]) nodeFeeds[v] = new Set();
-                    nodeFeeds[v].add(source);
-                    queue.push(v);
-                }
-            });
+    branches.forEach(b => {
+        if (b.state === 1 && !faultNodes.has(b.from) && !faultNodes.has(b.to)) {
+            if (!adj[b.from]) adj[b.from] = [];
+            if (!adj[b.to]) adj[b.to] = [];
+            adj[b.from].push({ node: b.to, edgeId: b.id });
+            adj[b.to].push({ node: b.from, edgeId: b.id });
         }
     });
 
-    // 2. A Distribuição (Alimentadores): Propagam apenas no seu ramal
-    feeders.forEach(feeder => {
-        if (faultNodes.has(feeder)) return;
-        const queue = [feeder];
-        const visited = new Set([feeder]);
+    // 2. Busca em Largura (BFS) Unificada
+    while(queue.length > 0) {
+        const curr = queue.shift();
+        
+        // Alimentador age como escudo e propaga apenas a si mesmo.
+        const zonesToPropagate = feeders.includes(curr) ? new Set([curr]) : nodeFeeds[curr];
 
-        let head = 0;
-        while (head < queue.length) {
-            const u = queue[head++];
-            if (!adj[u]) continue;
-            adj[u].forEach(v => {
-                if (!visited.has(v) && !faultNodes.has(v)) {
-                    // 👇 A BARREIRA INVISÍVEL: Impede que o Alimentador invada a rede vizinha 👇
-                    if (sources.includes(v) || feeders.includes(v)) return;
+        if (adj[curr]) {
+            adj[curr].forEach(({ node: neighbor, edgeId }) => {
+                if (sources.includes(neighbor)) return; // Nunca invade a Subestação
 
-                    visited.add(v);
-                    if (!nodeFeeds[v]) nodeFeeds[v] = new Set();
-                    nodeFeeds[v].add(feeder);
-                    queue.push(v);
+                if (!nodeFeeds[neighbor]) {
+                    // Energia nova chega na barra
+                    nodeFeeds[neighbor] = new Set(zonesToPropagate);
+                    nZ[neighbor] = Array.from(zonesToPropagate)[0];
+                    eZ[edgeId] = nZ[neighbor];
+                    queue.push(neighbor);
+                } else {
+                    // 👇 VÁLVULA DE RETENÇÃO (Efeito Salmão) 👇
+                    const neighborHasSource = Array.from(nodeFeeds[neighbor]).some(s => sources.includes(s));
+                    const tryingToPropagateFeeder = Array.from(zonesToPropagate).some(f => feeders.includes(f));
+                    
+                    if (tryingToPropagateFeeder && neighborHasSource) {
+                        return; // Barreira topológica acionada!
+                    }
+
+                    // Verifica se há novas fontes alimentando o mesmo nó (Potencial Loop)
+                    let isNewConflict = false;
+                    zonesToPropagate.forEach(z => {
+                        if (!nodeFeeds[neighbor].has(z)) {
+                            nodeFeeds[neighbor].add(z);
+                            isNewConflict = true;
+                        }
+                    });
+                    if (isNewConflict) queue.push(neighbor);
                 }
             });
         }
-    });
+    }
 
-    return nodeFeeds;
-}
+    // 3. Determinar Nós em Loop
+    Object.keys(nodeFeeds).forEach(nStr => {
+        const node = Number(nStr);
+        const zones = Array.from(nodeFeeds[node]);
 
-/**
- * Calcula zonas visuais para clustering.
- * Cada ramal que sai diretamente de uma source ou feeder define uma zona.
- * Barras sem zona (ilhas sem energia) recebem zona 'blackout'.
- */
-export function computeVisualZones(branches, sources, feeders, faultNodes = new Set()) {
-    const nodeZone = {};
-    const activeBranches = branches.filter(b => b.state === 1);
-
-    // Monta adjacência
-    const adj = {};
-    activeBranches.forEach(b => {
-        if (!adj[b.from]) adj[b.from] = [];
-        if (!adj[b.to]) adj[b.to] = [];
-        adj[b.from].push({ neighbor: b.to, branchId: b.id });
-        adj[b.to].push({ neighbor: b.from, branchId: b.id });
-    });
-
-    const allBoundary = new Set([...sources, ...feeders]);
-
-    allBoundary.forEach(rootId => {
-        if (faultNodes.has(rootId)) return;
-        const neighbors = adj[rootId] || [];
-
-        neighbors.forEach(({ neighbor, branchId }) => {
-            if (allBoundary.has(neighbor)) return;
-            if (faultNodes.has(neighbor)) return;
-
-            const zoneId = `zone-${rootId}-branch-${branchId}`;
-
-            const queue = [neighbor];
-            const visited = new Set([rootId, neighbor]);
-            nodeZone[neighbor] = zoneId;
-
-            let head = 0;
-            while (head < queue.length) {
-                const u = queue[head++];
-                (adj[u] || []).forEach(({ neighbor: v }) => {
-                    if (visited.has(v) || faultNodes.has(v)) return;
-                    if (allBoundary.has(v)) return;
-                    visited.add(v);
-                    if (!nodeZone[v]) nodeZone[v] = zoneId;
-                    queue.push(v);
-                });
-            }
+        let sourceCount = 0; let feederCount = 0;
+        zones.forEach(z => {
+            if (sources.includes(z)) sourceCount++;
+            if (feeders.includes(z)) feederCount++;
         });
+
+        // Loop Topológico Verdadeiro: 2 fontes principais OU 2 alimentadores.
+        if (sourceCount >= 2 || feederCount >= 2) {
+            loopN.add(node);
+            
+            // 👇 A LINHA MÁGICA DA RETROALIMENTAÇÃO 👇
+            // Se esta barra está em loop, puxa as raízes (Alimentadores) para ficarem amarelos também!
+            zones.forEach(z => loopN.add(z)); 
+        }
     });
 
-    return nodeZone;
+    // 4. Determinar Arestas em Loop
+    branches.forEach(b => {
+        if (b.state === 1) {
+            if (loopN.has(b.from) && loopN.has(b.to)) {
+                loopE.add(b.id);
+            } else {
+                const zF = Array.from(nodeFeeds[b.from] || []);
+                const zT = Array.from(nodeFeeds[b.to] || []);
+                
+                if (zF.length > 0 && zT.length > 0 && zF[0] !== zT[0]) {
+                    const isSourceF = sources.includes(zF[0]);
+                    const isSourceT = sources.includes(zT[0]);
+                    const isFeederF = feeders.includes(zF[0]);
+                    const isFeederT = feeders.includes(zT[0]);
+
+                    if ((isSourceF && isSourceT) || (isFeederF && isFeederT)) {
+                        loopE.add(b.id); loopN.add(b.from); loopN.add(b.to);
+                    }
+                }
+            }
+        }
+    });
+
+    return { nodeFeeds, nodeZones: nZ, edgeZones: eZ, loopNodes: loopN, loopEdges: loopE, colorRoots: roots };
 }
 
 // 👇 CÁLCULO DE CARGA (Com Contagem Hierárquica Múltipla) 👇

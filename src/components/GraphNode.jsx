@@ -81,7 +81,6 @@ const GraphNode = memo(function GraphNode({
                 /* ALIMENTADOR */
                 <g style={shapeStyle}>
                     <polygon points={hexPoints} fill={color} stroke={strokeColor} strokeWidth={strokeWidth} />
-                    <line x1="-16" y1="0" x2="16" y2="0" stroke="rgba(255,255,255,0.30)" strokeWidth="1.5" />
                 </g>
             ) : hasShunt ? (
                 /* CAPACITOR / SHUNT */

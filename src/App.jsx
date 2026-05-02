@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { propagateFeeds, calculateLoads, runPowerFlow, CacheManager } from './utils/powerCalculations';
+import { analyzeTopology, calculateLoads, runPowerFlow, CacheManager } from './utils/powerCalculations';
 import { THEME } from './utils/theme';
 import Sidebar from './components/Sidebar';
 import FaultPanel from './components/FaultPanel';
@@ -94,7 +94,7 @@ function App() {
     const datFileInputRef = useRef(null);
     const allNodes = Array.from(new Set(branches.flatMap(b => [b.from, b.to]))).sort((a, b) => a - b);
     const sources = activeSources;
-    const loadNodes = allNodes.filter(n => !sources.includes(n));
+    const loadNodes = allNodes.filter(n => !sources.includes(n) && !systemFeeders.includes(n));
     
     // 👇 IMPORTANTE: Esta lista mista blinda os barramentos para o Sequenciador 👇
     const allBoundaryNodes = useMemo(() => [...sources, ...systemFeeders], [sources, systemFeeders]);
@@ -243,6 +243,9 @@ function App() {
         runBlackStart(targetBranches, data.sources || [], data.feeders || []);
 
         console.log(`⚙️ Sistema [${sourceName}] carregado com sucesso na Engine Unificada.`);
+
+        setTimeout(() => window.dispatchEvent(new CustomEvent('triggerZoomExtents')), 50);
+        setTimeout(() => window.dispatchEvent(new CustomEvent('triggerZoomExtents')), 650);
     }, [runBlackStart]);
 
     // 👇 EFEITO DO LAYOUT ORGÂNICO ASYNC 👇
@@ -350,7 +353,9 @@ function App() {
         sses: sses    // 👈 Dinâmico
     }), [activeSources, systemLoads, systemShunts, systemFeeders, vBase, sBase, sses]);
 
-    const nodeFeeds = useMemo(() => propagateFeeds(branches, faultNodes, sysData), [branches, faultNodes, sysData]);
+    const topology = useMemo(() => analyzeTopology(branches, faultNodes, sysData), [branches, faultNodes, sysData]);
+    const { nodeFeeds, loopNodes } = topology; // Extraímos o que o App e o Painel precisam
+    
     const loads = useMemo(() => calculateLoads(nodeFeeds, faultNodes, sysData), [nodeFeeds, faultNodes, sysData]);
     
     const disconnectedStats = useMemo(() => {
@@ -389,7 +394,7 @@ function App() {
 
     // Usa o Estado Oficial do React
     const { getNodeColor, getEdgeColor } = useColorIntelligence({
-        branches, faultNodes, activeSources, nodeFeeds, lineCurrents, darkMode, feedersList: systemFeeders
+        faultNodes, activeSources, lineCurrents, darkMode, topology
     });
 
     const effectiveHoveredLineId = hoveredSeqBranch !== null ? hoveredSeqBranch : hoveredLineId;
@@ -1326,6 +1331,7 @@ const handleShuntChange = useCallback((nodeId, increment) => {
                         // 👇 ADICIONADO PARA A LISTA DE CHAVES QUE AGORA FICA AQUI 👇
                         toggleSwitch={toggleSwitch}
                         setHoveredLineId={setHoveredLineId}
+                        loopNodes={loopNodes}
                     />
                 </div>
             </div>
