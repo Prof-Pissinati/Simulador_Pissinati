@@ -43,7 +43,7 @@ const CanvasOverlay = ({
             ctx.lineTo(p2.x, p2.y);
 
             ctx.strokeStyle = getEdgeColor(b);
-            ctx.lineWidth = 2.5 / transform.scale;
+            ctx.lineWidth = 4;
             ctx.lineCap = 'round';
             ctx.lineJoin = 'round';
             if (b.state === 0) ctx.setLineDash([5, 5]);
@@ -84,37 +84,39 @@ const CanvasOverlay = ({
             const hasShunt = !!systemShunts[nodeId] || !!systemShunts[numId];
             
             const baseR = 10 / transform.scale;
+            // ... (código do isSource, isFeeder, hasShunt)
+
             ctx.fillStyle = getNodeColor(nodeId);
             ctx.beginPath();
 
             if (isSource) {
-                // SUBESTAÇÃO: Círculo (Prioridade 1)
-                ctx.arc(pos.x, pos.y, baseR * 1.3, 0, Math.PI * 2);
+                // SUBESTAÇÃO: Círculo (Raio 42 -> vira exatos 25px no zoom 0.6)
+                ctx.arc(pos.x, pos.y, 42, 0, Math.PI * 2);
             } else if (isFeeder) {
-                // ALIMENTADOR: Hexágono (Prioridade 2)
-                const hexR = baseR * 1.5;
+                // ALIMENTADOR: Hexágono (Raio 42)
                 for (let i = 0; i < 6; i++) {
                     const angle = (Math.PI / 3) * i - (Math.PI / 6);
-                    const px = pos.x + hexR * Math.cos(angle);
-                    const py = pos.y + hexR * Math.sin(angle);
+                    const px = pos.x + 42 * Math.cos(angle);
+                    const py = pos.y + 42 * Math.sin(angle);
                     if (i === 0) ctx.moveTo(px, py);
                     else ctx.lineTo(px, py);
                 }
                 ctx.closePath();
             } else if (hasShunt) {
-                // SHUNT: Losango
-                const rhoR = baseR * 1.5;
-                ctx.moveTo(pos.x, pos.y - rhoR);
-                ctx.lineTo(pos.x + rhoR, pos.y);
-                ctx.lineTo(pos.x, pos.y + rhoR);
-                ctx.lineTo(pos.x - rhoR, pos.y);
+                // SHUNT: Losango (Raio 34)
+                ctx.moveTo(pos.x, pos.y - 34);
+                ctx.lineTo(pos.x + 34, pos.y);
+                ctx.lineTo(pos.x, pos.y + 34);
+                ctx.lineTo(pos.x - 34, pos.y);
                 ctx.closePath();
             } else {
-                // BARRA COMUM: Retângulo
-                const w = baseR * 2.5;
-                const h = baseR * 1.2;
+                // BARRA COMUM: Retângulo Arredondado 
+                // (50x28 -> vira exatos 30x16px no zoom 0.6)
+                const w = 50;
+                const h = 28;
+                const radius = 14;
                 if (ctx.roundRect) {
-                    ctx.roundRect(pos.x - w/2, pos.y - h/2, w, h, 2 / transform.scale);
+                    ctx.roundRect(pos.x - w/2, pos.y - h/2, w, h, radius);
                 } else {
                     ctx.rect(pos.x - w/2, pos.y - h/2, w, h);
                 }
@@ -122,9 +124,11 @@ const CanvasOverlay = ({
             
             ctx.fill();
             
-            // Adiciona o contorno das barras
-            ctx.strokeStyle = darkMode ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.1)';
-            ctx.lineWidth = 1.5 / transform.scale;
+            // Contorno das barras
+            ctx.strokeStyle = darkMode ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.15)';
+            
+            ctx.lineWidth = 3; 
+            
             ctx.stroke();
         });
 

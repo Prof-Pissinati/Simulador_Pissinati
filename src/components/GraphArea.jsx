@@ -48,8 +48,9 @@ export default function GraphArea({
     const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
 
     // Níveis de Detalhe
-    const isDetailed = transform.scale > 0.6; // LOD 0: Componentes SVG Completos
-    const isCanvas = transform.scale <= 0.6;  // LOD 2: Renderizador de Alta Performance (Canvas)
+    const isDetailed = transform.scale > 0.9; // LOD 0: Componentes SVG Completos
+    const isSimplified = transform.scale <= 0.9 && transform.scale >= 0.35; // LOD 1: SVG Simplificado (Ativo apenas no "meio do caminho")
+    const isCanvas = transform.scale < 0.35;  // LOD 2: Renderizador de Alta Performance (Canvas)
 
     // 👇 ANTENA DE RASTREIO DO MOUSE NO SVG 👇
     const [mouseSvgPt, setMouseSvgPt] = useState({ x: 0, y: 0 });
@@ -1098,7 +1099,6 @@ export default function GraphArea({
                             const isFeeder = feedersList.includes(nodeId);
 
 
-
                             const isSelectedEdit = selectedEditNodes.has(nodeId);
                             const isHighlighted = hoveredNodeId === nodeId || localHoveredNode === nodeId || isSelectedEdit || (!isEditMode && selectedElement?.id === nodeId);
                             const nodeLoad = systemLoads && systemLoads[nodeId] ? (systemLoads[nodeId].p / 1000).toFixed(1) : null;
@@ -1120,7 +1120,7 @@ export default function GraphArea({
                                         showLabels={showLabels} nodeLoad={nodeLoad} hasShunt={hasShunt} 
                                         onMouseDown={handleNodeMouseDown} onClick={handleNodeClick}
                                         onMouseEnter={handleNodeMouseEnter} onMouseLeave={handleNodeMouseLeave}
-                                        currentScale={transform.scale}
+                                        currentScale={transform.scale} isSimplified={isSimplified}
                                     />
                                     {hasShunt && (
                                         <g transform={`translate(${pos.x + 18}, ${pos.y - 18})`} style={{ cursor: isEditMode ? 'default' : 'pointer', pointerEvents: 'all' }}>
@@ -1152,27 +1152,31 @@ export default function GraphArea({
                             const isFeeder = feedersList.includes(activeNodeId);
                             const hasShunt = !!systemShunts[activeNodeId];
                             
-                            const r = 12 / transform.scale; // Pouquinho maior para dar o glow
                             const color = getNodeColor(activeNodeId);
-                            const strokeW = 2.5 / transform.scale;
+                            
+                            // 👇 O pulo do gato: removemos o /transform.scale do strokeWidth 
+                            // para ele não explodir de tamanho no zoom out 👇
+                            const strokeW = 4; 
                             const hoverProps = { fill: color, stroke: "#fff", strokeWidth: strokeW, pointerEvents: "none", className: "voltage-glow-wrapper", style: { transition: 'all 0.1s ease-out' } };
 
                             if (isSource) {
-                                return <circle cx={pos.x} cy={pos.y} r={r * 1.3} {...hoverProps} />;
+                                // Raio 42 (igual ao CanvasOverlay) + um chorinho pro brilho
+                                return <circle cx={pos.x} cy={pos.y} r={46} {...hoverProps} />;
                             } else if (isFeeder) {
-                                const hexR = r * 1.5;
+                                const hexR = 46;
                                 const points = Array.from({length: 6}).map((_, i) => {
                                     const angle = (Math.PI / 3) * i - (Math.PI / 6);
                                     return `${pos.x + hexR * Math.cos(angle)},${pos.y + hexR * Math.sin(angle)}`;
                                 }).join(' ');
                                 return <polygon points={points} {...hoverProps} />;
                             } else if (hasShunt) {
-                                const rhoR = r * 1.5;
+                                const rhoR = 38;
                                 const points = `${pos.x},${pos.y - rhoR} ${pos.x + rhoR},${pos.y} ${pos.x},${pos.y + rhoR} ${pos.x - rhoR},${pos.y}`;
                                 return <polygon points={points} {...hoverProps} />;
                             } else {
-                                const w = r * 2.5; const h = r * 1.2;
-                                return <rect x={pos.x - w/2} y={pos.y - h/2} width={w} height={h} rx={2/transform.scale} {...hoverProps} />;
+                                // O mesmo tamanho 50x28 + chorinho + o mesmo raio 14
+                                const w = 56; const h = 34;
+                                return <rect x={pos.x - w/2} y={pos.y - h/2} width={w} height={h} rx={14} {...hoverProps} />;
                             }
                         })()}
 
@@ -1242,24 +1246,24 @@ export default function GraphArea({
                                         const hasShunt = !!systemShunts[nodeId];
                                         
                                         const color = getNodeColor(nodeId);
-                                        const hoverProps = { fill: color, stroke: "#fff", strokeWidth: 2 / transform.scale };
+                                        const hoverProps = { fill: color, stroke: "#fff", strokeWidth: 3 };
 
                                         if (isSource) {
-                                            return <circle cx={pos.x} cy={pos.y} r={r * 1.3} {...hoverProps} />;
+                                            return <circle cx={pos.x} cy={pos.y} r={42} {...hoverProps} />;
                                         } else if (isFeeder) {
-                                            const hexR = r * 1.5;
+                                            const hexR = 42;
                                             const points = Array.from({length: 6}).map((_, i) => {
                                                 const angle = (Math.PI / 3) * i - (Math.PI / 6);
                                                 return `${pos.x + hexR * Math.cos(angle)},${pos.y + hexR * Math.sin(angle)}`;
                                             }).join(' ');
                                             return <polygon points={points} {...hoverProps} />;
                                         } else if (hasShunt) {
-                                            const rhoR = r * 1.5;
+                                            const rhoR = 34;
                                             const points = `${pos.x},${pos.y - rhoR} ${pos.x + rhoR},${pos.y} ${pos.x},${pos.y + rhoR} ${pos.x - rhoR},${pos.y}`;
                                             return <polygon points={points} {...hoverProps} />;
                                         } else {
-                                            const w = r * 2.5; const h = r * 1.2;
-                                            return <rect x={pos.x - w/2} y={pos.y - h/2} width={w} height={h} rx={2/transform.scale} {...hoverProps} />;
+                                            const w = 50; const h = 28;
+                                            return <rect x={pos.x - w/2} y={pos.y - h/2} width={w} height={h} rx={14} {...hoverProps} />;
                                         }
                                     })()}
                                 </g>
