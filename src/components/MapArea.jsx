@@ -3,8 +3,8 @@ import { MapContainer, TileLayer, Tooltip, Polyline, Marker, useMapEvents, ZoomC
 import L from 'leaflet';
 import { GEO_POSITIONS as INITIAL_GEO } from '../data/systemDataGeo';
 import { fetchStreetRoute } from '../utils/geoRouting';
-import systemRoutesData from '../data/systemRoutes.json';
 import { useGridInteraction } from '../hooks/useGridInteraction';
+import GeoImportModal from './GeoImportModal';
 
 // 👇 IMPORTAMOS O SEU COMPONENTE INTACTO 👇
 import SvgTooltips from './SvgTooltips'; 
@@ -40,18 +40,31 @@ export default function MapArea({
     nodeData, lineCurrents, systemShunts, children, isEditMode,
     selectedElement, hoveredLineId, setHoveredLineId, hoveredNodeId, setHoveredNodeId,
     // 👇 Novas props necessárias para o SvgTooltips 👇
-    loads, systemLoads, sses 
+    loads, systemLoads, sses, allNodes, svgPositions, geoPositions, setGeoPositions, routedPaths, setRoutedPaths,
+    manualWaypoints, setManualWaypoints, straightSegments, setStraightSegments
 }) {
+
+    const [showGeoModal, setShowGeoModal] = useState(false);
+
+    useEffect(() => {
+        // Se a rede estiver vazia, não faz nada
+        if (!allNodes || allNodes.length === 0) return;
+
+        // Conta quantas barras atuais possuem latitude/longitude válidas
+        const covered = allNodes.filter(id => geoPositions[String(id)] || geoPositions[id]).length;
+        const coverage = covered / allNodes.length;
+
+        // Se menos da metade da rede tiver coordenadas geográficas...
+        if (coverage < 0.5) {
+            setShowGeoModal(true); // 🚨 Abre o modal pedindo ajuda ao usuário!
+        }
+    }, [allNodes, geoPositions]);
+
     const center = [-20.4319, -51.3425];
     const mapTileUrl = darkMode 
         ? 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png' 
         : 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
-
-    const [geoPositions, setGeoPositions] = useState(INITIAL_GEO);
-    const [routedPaths, setRoutedPaths] = useState(systemRoutesData?.routes || {});
-    const [manualWaypoints, setManualWaypoints] = useState(systemRoutesData?.waypoints || {});
-    const [straightSegments, setStraightSegments] = useState(systemRoutesData?.straightSegments || {});
-    
+   
     const [recalculatingBranchId, setRecalculatingBranchId] = useState(null);
     const fileInputRef = useRef(null);
 
@@ -73,6 +86,25 @@ export default function MapArea({
             setSvgBounds({ left: 0, top: 0, right: rect.width, bottom: rect.height });
         }
     }, [isEditMode]);
+
+    // 👇 SOLUÇÃO DO OFFSET: Força o Leaflet a recalcular a tela toda vez que ela muda 👇
+    useEffect(() => {
+        const resizeObserver = new ResizeObserver(() => {
+            if (containerRef.current) {
+                // Acessa a instância interna do mapa escondida pelo React-Leaflet (se disponível)
+                const mapInstance = containerRef.current.querySelector('.leaflet-container')?._leaflet_map;
+                if (mapInstance) {
+                    mapInstance.invalidateSize();
+                }
+            }
+        });
+
+        if (containerRef.current) {
+            resizeObserver.observe(containerRef.current);
+        }
+
+        return () => resizeObserver.disconnect();
+    }, []);
 
     // 👇 Função chamada pelo Hook ao usar Shift+Click
     const handlePinCard = (type, id, event) => {
@@ -286,6 +318,22 @@ export default function MapArea({
     return (
         <div ref={containerRef} style={{ width: '100%', height: '100%', position: 'relative', zIndex: 1 }}>
             
+            {/* 👇 O MODAL GEOGRÁFICO ENTRA AQUI 👇 */}
+            {showGeoModal && (
+                <GeoImportModal
+                    isOpen={showGeoModal}
+                    onConfirm={(newGeoPositions) => {
+                        setGeoPositions(newGeoPositions);
+                        setShowGeoModal(false);
+                    }}
+                    onCancel={() => setShowGeoModal(false)}
+                    allNodes={allNodes}
+                    svgPositions={svgPositions} // 👈 Props vindas do App.jsx
+                    darkMode={darkMode}
+                />
+            )}
+            {/* 👆 FIM DO MODAL 👆 */}
+            
             <div style={{ position: 'absolute', top: '20px', left: '50%', transform: 'translateX(-50%)', zIndex: 1000, background: darkMode ? 'rgba(30, 30, 30, 0.9)' : 'rgba(255, 255, 255, 0.9)', padding: '10px 20px', borderRadius: '12px', boxShadow: '0 4px 15px rgba(0,0,0,0.3)', display: 'flex', gap: '10px', backdropFilter: 'blur(5px)' }}>
                 <input type="file" ref={fileInputRef} onChange={handleImportRoutes} style={{ display: 'none' }} accept=".json" />
                 
@@ -309,7 +357,7 @@ export default function MapArea({
                     onMouseMove={handleSvgMouseMove}
                     onMouseUp={handleSvgMouseUp}
                     onMouseLeave={handleSvgMouseUp}
-                    style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', zIndex: 2000, pointerEvents: draggingCard ? 'all' : 'none' }}
+                    style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, margin: 0, padding: 0, zIndex: 2000, pointerEvents: draggingCard ? 'all' : 'none' }}
                 >
                     <svg style={{ width: '100%', height: '100%' }}>
                         <SvgTooltips 

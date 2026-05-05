@@ -52,6 +52,11 @@ function App() {
     const [systemLoads, setSystemLoads] = useState({});
     const [projectPositions, setProjectPositions] = useState({});
     const [projectWaypoints, setProjectWaypoints] = useState({});
+    const [geoPositions, setGeoPositions] = useState({});
+    // 👇 NOVOS ESTADOS ELEVADOS DAS ROTAS DO MAPA 👇
+    const [routedPaths, setRoutedPaths] = useState({});
+    const [manualWaypoints, setManualWaypoints] = useState({});
+    const [straightSegments, setStraightSegments] = useState({});
     
     const [sequenceData, setSequenceData] = useState(null);
     const [seqOverlayOpen, setSeqOverlayOpen] = useState(false);
@@ -243,7 +248,12 @@ function App() {
         const layoutData = data.layout || data;
         setProjectPositions(layoutData.positionsProject || layoutData.positions || {});
         setProjectWaypoints(layoutData.waypointsProject || layoutData.waypoints || {});
-        
+        setGeoPositions(layoutData.geoPositions || data.geoPositions || {});
+        // 👇 IMPORTA AS ROTAS DO ARQUIVO (OU ZERA SE FOR UM SISTEMA NOVO) 👇
+        setRoutedPaths(layoutData.routes || data.routes || {});
+        setManualWaypoints(layoutData.manualWaypoints || data.manualWaypoints || {});
+        setStraightSegments(layoutData.straightSegments || data.straightSegments || {});
+
         setFaultNodes(new Set(data.faults || []));
         setIsProjectLoaded(true);
 
@@ -917,7 +927,7 @@ const handleShuntChange = useCallback((nodeId, increment) => {
             loads: systemLoads,
             branches: branches, 
             faults: Array.from(faultNodes), 
-            layout: { positions: positions, waypoints: waypoints }
+            layout: { positions: positions, waypoints: waypoints, geoPositions: geoPositions, routes: routedPaths, manualWaypoints: manualWaypoints, straightSegments: straightSegments }
         };
         const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(exportData, null, 2));
         const downloadAnchorNode = document.createElement('a');
@@ -1289,6 +1299,16 @@ const handleShuntChange = useCallback((nodeId, increment) => {
                         setHoveredNodeId={setHoveredNodeId}
                         loads={loads}
                         systemLoads={systemLoads}
+                        allNodes={allNodes}
+                        svgPositions={activePositions}
+                        geoPositions={geoPositions}
+                        setGeoPositions={setGeoPositions}
+                        routedPaths={routedPaths}
+                        setRoutedPaths={setRoutedPaths}
+                        manualWaypoints={manualWaypoints}
+                        setManualWaypoints={setManualWaypoints}
+                        straightSegments={straightSegments}
+                        setStraightSegments={setStraightSegments}
                     >
                         {/* 👇 A LEGENDA AGORA É ENVIADA PARA DENTRO DO MAPA 👇 */}
                         {showLegend && (

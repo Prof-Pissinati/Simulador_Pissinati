@@ -519,71 +519,76 @@ export default function GraphArea({
     const isLandscape = printFrameMode === 'landscape';
     
     // 👇 O SVG agora usa os pixels reais da tela (containerSize), alinhando 100% com o Canvas!
-    const vbW = isPaper ? (isLandscape ? 2970 : 2100) : (containerSize.w || 900);
-    const vbH = isPaper ? (isLandscape ? 2100 : 2970) : (containerSize.h || 650);
+    const vbW = isPaper ? (isLandscape ? 2970 : 2100) : (containerSize.w || 2970);
+    const vbH = isPaper ? (isLandscape ? 2100 : 2970) : (containerSize.h || 2100);
 
     const handleZoomExtents = useCallback(() => {
-        const { positions, waypoints } = getCurrentFullLayout();
-        const nodeIds = Object.keys(positions);
-        if (nodeIds.length === 0) return;
+    const { positions, waypoints } = getCurrentFullLayout();
+    const nodeIds = Object.keys(positions);
+    if (nodeIds.length === 0) return;
 
-        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-        nodeIds.forEach(id => {
-            const p = positions[id];
-            if (!p) return; 
-            
-            if (p.x < minX) minX = p.x;
-            if (p.x > maxX) maxX = p.x;
-            if (p.y < minY) minY = p.y;
-            if (p.y > maxY) maxY = p.y;
+    // Lê dimensões reais do container no momento da chamada
+    // Evita usar containerSize desatualizado na montagem e na volta do MapArea
+    let currentW = containerSize.w;
+    let currentH = containerSize.h;
+    if (measureRef.current) {
+        const rect = measureRef.current.getBoundingClientRect();
+        if (rect.width > 0 && rect.height > 0) {
+            currentW = rect.width;
+            currentH = rect.height;
+        }
+    }
+    const localVbW = isPaper ? (isLandscape ? 2970 : 2100) : currentW;
+    const localVbH = isPaper ? (isLandscape ? 2100 : 2970) : currentH;
+
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    nodeIds.forEach(id => {
+        const p = positions[id];
+        if (!p) return;
+        if (p.x < minX) minX = p.x;
+        if (p.x > maxX) maxX = p.x;
+        if (p.y < minY) minY = p.y;
+        if (p.y > maxY) maxY = p.y;
+    });
+
+    Object.values(waypoints).forEach(branchWps => {
+        branchWps.forEach(wp => {
+            if (!wp) return;
+            if (wp.x < minX) minX = wp.x;
+            if (wp.x > maxX) maxX = wp.x;
+            if (wp.y < minY) minY = wp.y;
+            if (wp.y > maxY) maxY = wp.y;
         });
+    });
 
-        Object.values(waypoints).forEach(branchWps => {
-            branchWps.forEach(wp => {
-                if (!wp) return; 
-                
-                if (wp.x < minX) minX = wp.x;
-                if (wp.x > maxX) maxX = wp.x;
-                if (wp.y < minY) minY = wp.y;
-                if (wp.y > maxY) maxY = wp.y;
-            });
-        });
+    if (minX === Infinity) return;
 
-        if (minX === Infinity) return;
+    const paddingX = localVbW * 0.1;
+    const paddingTop = localVbH * 0.1;
+    const paddingBottom = localVbH * 0.15;
 
-        // Usamos 15% de margem dinâmica em relação ao tamanho da tela atual
-        // Margens bem menores nas laterais e no teto (ex: 5%)
-        const paddingX = vbW * 0.1; 
-        const paddingTop = vbH * 0.1; 
-        
-        // 👇 A MÁGICA: Reservamos 30% da parte de baixo da tela para o Sequenciador!
-        const paddingBottom = vbH * 0.15; 
+    const width = maxX - minX;
+    const height = maxY - minY;
 
-        const width = maxX - minX;
-        const height = maxY - minY;
+    const scaleX = (localVbW - paddingX * 2) / (width || 1);
+    const scaleY = (localVbH - (paddingTop + paddingBottom)) / (height || 1);
 
-        // O espaço vertical útil agora desconta o teto e o chão de forma separada
-        const scaleX = (vbW - paddingX * 2) / (width || 1);
-        const scaleY = (vbH - (paddingTop + paddingBottom)) / (height || 1);
-        
-        const newScale = Math.max(0.02, Math.min(scaleX, scaleY, 2.0));
+    const newScale = Math.max(0.02, Math.min(scaleX, scaleY, 2.0));
 
-        const centerX = minX + width / 2;
-        const centerY = minY + height / 2;
-        
-        const newX = (vbW / 2) - (centerX * newScale);
-        
-        // Em vez de centralizar no meio exato da tela (vbH / 2), 
-        // nós centralizamos no meio da "área livre" que sobrou acima do sequenciador
-        const usefulCenterY = paddingTop + ((vbH - paddingTop - paddingBottom) / 2);
-        const newY = usefulCenterY - (centerY * newScale);
+    const centerX = minX + width / 2;
+    const centerY = minY + height / 2;
 
-        setIsAnimatingZoom(true);
-        setTransform({ x: newX, y: newY, scale: newScale })
-        
-        if (zoomTimeout.current) clearTimeout(zoomTimeout.current);
-        zoomTimeout.current = setTimeout(() => { setIsAnimatingZoom(false); }, 500);
-    }, [getCurrentFullLayout, vbW, vbH]);
+    const newX = (localVbW / 2) - (centerX * newScale);
+
+    const usefulCenterY = paddingTop + ((localVbH - paddingTop - paddingBottom) / 2);
+    const newY = usefulCenterY - (centerY * newScale);
+
+    setIsAnimatingZoom(true);
+    setTransform({ x: newX, y: newY, scale: newScale });
+
+    if (zoomTimeout.current) clearTimeout(zoomTimeout.current);
+    zoomTimeout.current = setTimeout(() => { setIsAnimatingZoom(false); }, 500);
+}, [getCurrentFullLayout, containerSize, measureRef, isPaper, isLandscape]);
 
     useEffect(() => { 
         if (printFrameMode !== 'none') {
