@@ -26,6 +26,9 @@ export default function EditSidebar({
     const [vnsMaxIter,  setVnsMaxIter]    = useState(30);
     const [usePhysics, setUsePhysics]     = useState(false); 
 
+    // Estado para o modo de visualização do grafo compactado (Depuração)
+    const [visualDebug, setVisualDebug] = useState(false);
+
     const handleApplyGenerator = async () => {
         let actualLayout = { positions: currentPositions, waypoints: {} };
         window.dispatchEvent(new CustomEvent('getLatestLayout', { 
@@ -34,22 +37,25 @@ export default function EditSidebar({
 
         window.dispatchEvent(new CustomEvent('saveToHistory', { detail: actualLayout }));
 
-        // 1. LIGA A TELA PRETA
         if (setIsCalculatingLayout) setIsCalculatingLayout(true);
         if (setLayoutProgress) setLayoutProgress({ passes: 0, msg1: "Calculando Geometria...", msg2: `Algoritmo: ${algoMode}` });
 
-        // Força a pintura da tela
         await new Promise(resolve => setTimeout(resolve, 50));
 
         try {
-            // 2. CHAMA O WORKER
-            const newPos = await runAsyncLayout(algoMode, allNodes, branches, sources, { 
+            const response = await runAsyncLayout(algoMode, allNodes, branches, sources, { 
                 gridSize: radialStep, distance: forceDist, charge: -forceCharge, openWeight: openWeight / 100, currentPos: actualLayout.positions, usePhysics,
+                visualizeCoarsened: visualDebug, // 👈 A FLAG MÁGICA LIGADA AO CHECKBOX
                 onProgress: (passes, msg1, msg2) => { if (setLayoutProgress) setLayoutProgress({ passes, msg1, msg2 }); }
             });
 
-            // 3. APLICA O RESULTADO
-            window.dispatchEvent(new CustomEvent('applyOrganicLayout', { detail: { positions: newPos } }));
+           // 👇 CINTO DE SEGURANÇA ANTIBUG 👇
+            if (visualDebug && response.macroData) {
+                window.dispatchEvent(new CustomEvent('applyMacroGraph', { detail: response }));
+            } else {
+                const finalPos = response.positions ? response.positions : response;
+                window.dispatchEvent(new CustomEvent('applyOrganicLayout', { detail: { positions: finalPos } }));
+            }
             
         } catch (error) {
             console.error("Erro no Worker de Layout:", error);
@@ -75,23 +81,58 @@ export default function EditSidebar({
         await new Promise(resolve => setTimeout(resolve, 50));
 
         try {
-            const resultPos = await runAsyncLayout('vns', allNodes, branches, sources, {
+            const response = await runAsyncLayout('vns', allNodes, branches, sources, {
                 gridSize: vnsGridSize,
                 maxIter: vnsMaxIter,
                 currentPos: actualLayout.positions,
+                visualizeCoarsened: visualDebug, // 👈 FLAG MÁGICA
                 onProgress: (iter, cost, crossings) => {
                     setVnsProgress({ iter, cost: cost, crossings });
                     if (setLayoutProgress) setLayoutProgress({ passes: iter, msg1: "Ajuste Fino VNS", msg2: `Tentativa ${iter} | Cruzamentos restantes: ${crossings}` });
                 },
             });
             
-            window.dispatchEvent(new CustomEvent('applyOrganicLayout', { detail: { positions: resultPos, waypoints: {} } }));
+            // 👇 CINTO DE SEGURANÇA ANTIBUG 👇
+            if (visualDebug && response.macroData) {
+                window.dispatchEvent(new CustomEvent('applyMacroGraph', { detail: response }));
+            } else {
+                const finalPos = response.positions ? response.positions : response;
+                window.dispatchEvent(new CustomEvent('applyOrganicLayout', { detail: { positions: finalPos } }));
+            }
             window.dispatchEvent(new CustomEvent('triggerZoomExtents'));
         } catch (error) {
             console.error("Erro no Worker VNS:", error);
         } finally {
             setVnsRunning(false);
             if (setIsCalculatingLayout) setIsCalculatingLayout(false);
+        }
+    };
+
+    const handleVisualCompact = async () => {
+        let actualLayout = { positions: currentPositions, waypoints: {} };
+        window.dispatchEvent(new CustomEvent('getLatestLayout', { detail: { callback: (layout) => { actualLayout = layout; } } }));
+
+        if (setIsCalculatingLayout) setIsCalculatingLayout(true);
+        if (setLayoutProgress) setLayoutProgress({ passes: 0, msg1: "Visualização Compacta", msg2: "Amassando a rede..." });
+
+        try {
+            const response = await runAsyncLayout(algoMode, allNodes, branches, sources, { 
+                gridSize: 100, maxIter: 1, currentPos: actualLayout.positions,
+                visualizeCoarsened: true, debugPhase: 'before', 
+                onProgress: (passes, msg1, msg2) => { if (setLayoutProgress) setLayoutProgress({ passes, msg1, msg2 }); }
+            });
+
+            // 👇 O CINTO DE SEGURANÇA VITAL 👇
+            if (response && response.macroData) {
+                window.dispatchEvent(new CustomEvent('applyMacroGraph', { detail: response }));
+            } else {
+                console.warn("⚠️ O Worker não conseguiu gerar o esqueleto (macroData ausente).", response);
+                alert("Aviso: Não foi possível gerar a compactação visual neste momento.");
+            }
+        } catch (error) { 
+            console.error("Erro na compactação visual:", error);
+        } finally { 
+            if (setIsCalculatingLayout) setIsCalculatingLayout(false); 
         }
     };
 
@@ -199,6 +240,20 @@ export default function EditSidebar({
                 
                 <button className="edit-ghost-btn" style={{...ghostBtnOrangeStyle, background: 'rgba(255, 152, 0, 0.05)', '--hover-color': '#ff9800'}} onClick={() => setIsEditMode(false)}>🚪 Sair e Salvar</button>
 
+                {/* Botão para ver o ANTES */}
+                <button onClick={handleVisualCompact} style={{ width: '100%', padding: '8px', marginTop: '12px', marginBottom: '12px', background: '#ff5722', color: '#fff', border: 'none', borderRadius: '4px', fontWeight: 'bold', cursor: 'pointer' }}>
+                    👁️ Ver Esqueleto (Antes do Layout)
+                </button>
+                
+                {/* Checkbox para modificar o DEPOIS */}
+                <div style={{ marginBottom: '15px', padding: '10px', background: darkMode ? 'rgba(255, 87, 34, 0.1)' : 'rgba(255, 87, 34, 0.05)', borderRadius: '8px', border: `1px solid ${darkMode ? 'rgba(255, 87, 34, 0.3)' : 'rgba(255, 87, 34, 0.4)'}` }}>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', color: '#ff5722', fontWeight: 'bold', fontSize: '13px' }}>
+                        <input type="checkbox" checked={visualDebug} onChange={e => setVisualDebug(e.target.checked)} style={{ accentColor: '#ff5722', width: '16px', height: '16px', cursor: 'pointer' }} />
+                        👁️ Manter Esqueleto (Pós-Layout)
+                    </label>
+                    <p style={{ margin: '5px 0 0 24px', fontSize: '10px', color: darkMode ? '#aaa' : '#666' }}>Se ativo, o motor aplicará o layout e vai congelar a tela no esqueleto.</p>
+                </div>
+
                 <div style={{ padding: '15px', background: darkMode ? '#2a2a2a' : '#f5f5f5', borderRadius: '8px', marginBottom: '15px', border: `1px solid ${darkMode ? '#444' : '#ddd'}` }}>
                     <h3 style={{ margin: '0 0 10px 0', fontSize: '13px', color: '#ff9800' }}>🛠️ Gerador Geométrico</h3>
                     
@@ -206,6 +261,7 @@ export default function EditSidebar({
                         <option value="force">Orgânico (D3 Force)</option>
                         <option value="orthogonal">Ortogonal (Grid Expansion)</option>
                         <option value="vns">Compactador VNS</option>
+                        <option value="hierarchical">Hierárquico (Árvore Sugiyama)</option>
                     </select>
 
                     {algoMode === 'force' && (
@@ -230,6 +286,14 @@ export default function EditSidebar({
                             </label>
                             <label style={{ color: '#00bcd4', fontWeight: 'bold' }}>Tamanho da Malha (Grid): {radialStep}px
                                 <input type="range" min="10" max="150" step="5" value={radialStep} onChange={e=>setRadialStep(Number(e.target.value))} style={{width:'100%'}}/>
+                            </label>
+                        </div>
+                    )}
+
+                    {algoMode === 'hierarchical' && (
+                        <div style={{ fontSize: '12px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                            <label style={{ color: '#00bcd4', fontWeight: 'bold' }}>Espaçamento da Árvore: {radialStep}px
+                                <input type="range" min="30" max="250" step="10" value={radialStep} onChange={e=>setRadialStep(Number(e.target.value))} style={{width:'100%'}}/>
                             </label>
                         </div>
                     )}

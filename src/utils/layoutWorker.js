@@ -1,4 +1,4 @@
-import { calculateForceLayout, calculateOrthogonalLayout, calculateVNSLayout, classifyTopology } from './autoLayout';
+import { calculateForceLayout, calculateOrthogonalLayout, calculateVNSLayout, calculateHierarchicalLayout, classifyTopology, contractTopology, expandTopology } from './autoLayout';
 
 // =========================================================
 // TRAVA DO PONTO CENTRAL
@@ -106,7 +106,9 @@ self.onmessage = async (e) => {
         // 👇 FASE 1: O CÉREBRO ENTRA EM AÇÃO 👇
         if (type === 'auto') {
             const analysis = classifyTopology(nodesArray, branchesArray, config);
-            actualType = analysis.suggestedEngine;
+            
+            // 👇 CORREÇÃO: Lendo a variável com o nome exato que vem da análise 👇
+            actualType = analysis.recommendedEngine; 
             
             console.log('🧠 [AUTO-LAYOUT] Análise Topológica:', analysis);
             
@@ -115,18 +117,67 @@ self.onmessage = async (e) => {
             }
         }
 
-        // 3. Executa APENAS os 3 motores oficiais
-        if (actualType === 'force') {
-            result = calculateForceLayout(nodesArray, branchesArray, sourcesArray, config);
-        } else if (actualType === 'vns') {
-            result = await calculateVNSLayout(nodesArray, branchesArray, sourcesArray, config);
-        } else if (actualType === 'orthogonal') {
-            result = await calculateOrthogonalLayout(nodesArray, branchesArray, sourcesArray, config);
-        } else {
-            throw new Error(`Motor de layout não reconhecido: ${actualType}`);
+        // ==========================================
+        // GRAPH COARSENING (Topologia Híbrida 2.0)
+        // ==========================================
+        let targetNodes = nodesArray;
+        let targetBranches = branchesArray;
+        let coarseData = null;
+        let isCoarsened = false;
+
+        // 👇 Correção do Erro: Agora amassa se for automático OU se o usuário pediu a depuração visual
+        const forceCoarsen = config && config.visualizeCoarsened;
+        const autoCoarsen = nodesArray.length > 150 && actualType !== 'force';
+
+        if (autoCoarsen || forceCoarsen) {
+            try {
+                if (config && config.reportProgress) config.onProgress(1, "Otimização", "Compactando topologia...");
+                const coarsened = contractTopology(nodesArray, branchesArray, sourcesArray);
+                targetNodes = coarsened.coarseNodesArray;
+                targetBranches = coarsened.coarseBranchesArray;
+                coarseData = coarsened.coarseData;
+                isCoarsened = true;
+            } catch (err) { console.warn("⚠️ Falha na compactação.", err); }
         }
-        
-        // 4. Trava o Ponto Central
+
+        // 👇 PEDÁGIO 1: ANTES DO MOTOR (Congelado nas posições originais)
+        if (config && config.visualizeCoarsened && config.debugPhase === 'before' && isCoarsened) {
+            const originalPos = config.currentPos || {};
+            const debugPositions = {};
+            targetNodes.forEach(id => { debugPositions[id] = originalPos[id] || {x: 0, y: 0}; });
+
+            self.postMessage({ type: 'success', jobId, result: debugPositions, macroData: { nodes: targetNodes, branches: targetBranches, contractionMap: coarseData } });
+            return; // 🛑 Para aqui!
+        }
+
+        // ==========================================
+        // EXECUÇÃO DOS MOTORES
+        // ==========================================
+        if (actualType === 'force') {
+            result = calculateForceLayout(targetNodes, targetBranches, sourcesArray, config);
+        } else if (actualType === 'vns') {
+            result = await calculateVNSLayout(targetNodes, targetBranches, sourcesArray, config);
+        } else if (actualType === 'orthogonal') {
+            result = await calculateOrthogonalLayout(targetNodes, targetBranches, sourcesArray, config);
+        } else if (actualType === 'hierarchical') {
+            result = calculateHierarchicalLayout(targetNodes, targetBranches, sourcesArray, config);
+        } else { throw new Error(`Motor não reconhecido: ${actualType}`); }
+
+        // 👇 PEDÁGIO 2: DEPOIS DO MOTOR (Esqueleto organizado)
+        if (config && config.visualizeCoarsened && config.debugPhase === 'after' && isCoarsened) {
+            self.postMessage({ type: 'success', jobId, result: result, macroData: { nodes: targetNodes, branches: targetBranches, contractionMap: coarseData } });
+            return; // 🛑 Para aqui, antes de expandir!
+        }
+
+        // ==========================================
+        // EXPANSÃO DUPLA (Restaurando geometria)
+        // ==========================================
+        if (isCoarsened && coarseData) {
+            if (config && config.reportProgress) config.onProgress(30, "Finalizando", "Desdobrando topologia...");
+            result = expandTopology(result, coarseData, config.currentPos || {});
+        }
+
+        // 4. Trava o Ponto Central (Usando a lista de nós ORIGINAL)
         if (config && config.currentPos) {
             result = lockLayoutCenter(config.currentPos, result, nodesArray);
         }

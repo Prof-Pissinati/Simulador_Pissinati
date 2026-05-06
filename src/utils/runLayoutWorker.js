@@ -11,13 +11,19 @@ export function runAsyncLayout(type, nodesArray, branchesArray, sourcesArray, co
 
         // 3. Fica ouvindo o rádio aguardando resposta
         worker.onmessage = (e) => {
-            const { type: responseType, result, error, passes, msg1, msg2, jobId: responseJobId } = e.data;
+            // 👇 Adicionamos o macroData aqui na extração de variáveis
+            const { type: responseType, result, error, passes, msg1, msg2, jobId: responseJobId, macroData } = e.data;
             if (responseJobId !== jobId) return;
 
             if (responseType === 'progress' && onProgress) {
                 onProgress(passes, msg1, msg2); // Atualiza barra de progresso no React
             } else if (responseType === 'success') {
-                resolve(result);
+                // 👇 A mágica do pacote duplo acontece aqui 👇
+                if (macroData) {
+                    resolve({ positions: result, macroData: macroData });
+                } else {
+                    resolve(result);
+                }
                 worker.terminate(); // Demite o operário (Libera RAM)
             } else if (responseType === 'error') {
                 reject(new Error(error));

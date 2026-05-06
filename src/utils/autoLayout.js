@@ -1,150 +1,7 @@
 import * as d3 from 'd3-force';
+export { calculateHierarchicalLayout } from './hierarchicalLayout';
 
-// =========================================================
-// FASE 1: CLASSIFICADOR TOPOLÓGICO
-// Analisa a rede para definir o motor de layout ideal
-// =========================================================
-export function classifyTopology(nodesArray, branchesArray, config = {}) {
-    const nodeCount = nodesArray.length;
-    const edgeCount = branchesArray.length;
-    
-    // L = E - V + 1 (Assumindo 1 componente conexo principal)
-    const loops = Math.max(0, edgeCount - nodeCount + 1);
-    const avgDegree = nodeCount > 0 ? (edgeCount * 2) / nodeCount : 0;
-
-    const sources = config.sources || [];
-    const adj = {};
-    nodesArray.forEach(id => adj[id] = []);
-    branchesArray.forEach(b => {
-        if (adj[b.from]) adj[b.from].push(b.to);
-        if (adj[b.to]) adj[b.to].push(b.from);
-    });
-
-    // BFS para descobrir profundidade máxima
-    let maxDepth = 0;
-    const visited = new Set(sources);
-    const queue = sources.map(id => ({ id, depth: 0 }));
-
-    while (queue.length > 0) {
-        const { id, depth } = queue.shift();
-        if (depth > maxDepth) maxDepth = depth;
-
-        if (adj[id]) {
-            adj[id].forEach(neighbor => {
-                if (!visited.has(neighbor)) {
-                    visited.add(neighbor);
-                    queue.push({ id: neighbor, depth: depth + 1 });
-                }
-            });
-        }
-    }
-
-    // Regras de Decisão de Motor
-    let type = 'large';
-    let suggestedEngine = 'force';
-
-    if (nodeCount >= 250 || loops > 10) {
-        type = 'large';
-        suggestedEngine = 'force';
-    } else if (loops === 0) {
-        type = 'radial';
-        suggestedEngine = 'orthogonal';
-    } else {
-        type = 'weakly_meshed';
-        suggestedEngine = 'vns';
-    }
-
-    return {
-        type,
-        suggestedEngine,
-        metrics: { loops, maxDepth, avgDegree, nodeCount }
-    };
-}
-
-// =========================================================
-// FASE 2: BARYCENTER SWEEP (Ordenação Hierárquica)
-// Reduz cruzamentos alinhando barras por profundidade elétrica
-// =========================================================
-export function applyBarycenterSweep(positions, nodesArray, branchesArray, sourcesArray, gridSize = 100) {
-    if (!positions || Object.keys(positions).length === 0) return positions;
-    const newPos = JSON.parse(JSON.stringify(positions));
-
-    // 1. Mapa de Adjacência (Apenas chaves fechadas)
-    const adj = {};
-    nodesArray.forEach(id => adj[id] = []);
-    branchesArray.forEach(b => {
-        if (b.state === 1) { 
-            if (adj[b.from]) adj[b.from].push(b.to);
-            if (adj[b.to]) adj[b.to].push(b.from);
-        }
-    });
-
-    // 2. BFS para calcular níveis (Profundidade)
-    const levels = {};
-    const nodesByLevel = {};
-    const visited = new Set(sourcesArray);
-    const queue = sourcesArray.map(id => ({ id, depth: 0 }));
-
-    sourcesArray.forEach(id => {
-        levels[id] = 0;
-        if (!nodesByLevel[0]) nodesByLevel[0] = [];
-        nodesByLevel[0].push(id);
-    });
-
-    let maxLevel = 0;
-    while (queue.length > 0) {
-        const { id, depth } = queue.shift();
-        if (adj[id]) {
-            adj[id].forEach(neighbor => {
-                if (!visited.has(neighbor)) {
-                    visited.add(neighbor);
-                    const nextDepth = depth + 1;
-                    levels[neighbor] = nextDepth;
-                    if (!nodesByLevel[nextDepth]) nodesByLevel[nextDepth] = [];
-                    nodesByLevel[nextDepth].push(neighbor);
-                    queue.push({ id: neighbor, depth: nextDepth });
-                    if (nextDepth > maxLevel) maxLevel = nextDepth;
-                }
-            });
-        }
-    }
-
-    // 3. Varredura de Baricentro (Barycenter Sweep) - Top-Down
-    for (let lvl = 1; lvl <= maxLevel; lvl++) {
-        const currentNodes = nodesByLevel[lvl];
-        if (!currentNodes || currentNodes.length <= 1) continue;
-
-        const nodeStats = currentNodes.map(nodeId => {
-            // Encontra os pais deste nó (vizinhos que estão no nível anterior)
-            const parents = adj[nodeId].filter(neighbor => levels[neighbor] === lvl - 1);
-            
-            let barycenterX = 0;
-            if (parents.length > 0) {
-                const sumX = parents.reduce((sum, parentId) => sum + (newPos[parentId]?.x || 0), 0);
-                barycenterX = sumX / parents.length;
-            } else {
-                barycenterX = newPos[nodeId]?.x || 0;
-            }
-            return { id: nodeId, barycenterX };
-        });
-
-        // 4. Ordene os nós pela atração gravitacional dos pais
-        nodeStats.sort((a, b) => a.barycenterX - b.barycenterX);
-
-        // 5. Pega o grid/espaço que estava ocupado por esse nível e repassa na nova ordem
-        const availableXCoords = currentNodes.map(id => newPos[id]?.x || 0).sort((a, b) => a - b);
-
-        nodeStats.forEach((stat, index) => {
-            if (newPos[stat.id]) {
-                newPos[stat.id].x = availableXCoords[index];
-            }
-        });
-    }
-
-    return newPos;
-}
-
-export const D3_DEFAULTS = { distance: 10, charge: -40, openWeight: 0.65, collide: 40 };
+const D3_DEFAULTS = { distance: 10, charge: -40, openWeight: 0.65, collide: 40 };
 
 export function getDistToSegment(p, a, b) {
     if (!p || !a || !b) return Infinity;
@@ -188,15 +45,19 @@ function applyProportionalScaling(nodesArray, branchesArray, actualPositions, ta
 }
 
 export function calculateForceLayout(nodesArray, branchesArray, sourcesArray, config = {}) {
-    // 👇 BLINDAGEM DE TIPOS (Garante que todos os IDs sejam Strings estritas) 👇
+    // Blindagem de Tipos
     nodesArray = nodesArray.map(String);
     branchesArray = branchesArray.map(b => ({ ...b, id: String(b.id), from: String(b.from), to: String(b.to) }));
     sourcesArray = sourcesArray.map(String);
     
-    const distVal = config.distance !== undefined ? config.distance : D3_DEFAULTS.distance;
-    const targetCharge = config.charge !== undefined ? config.charge : D3_DEFAULTS.charge; 
-    const col = config.collide !== undefined ? config.collide : D3_DEFAULTS.collide;
-    const openWeight = config.openWeight !== undefined ? config.openWeight : D3_DEFAULTS.openWeight; 
+    // Fator de Escala
+    const escalaDivisor = 20; 
+    const sizeFactor = Math.max(1, Math.sqrt(nodesArray.length / escalaDivisor));
+
+    const distVal = (config.distance !== undefined ? config.distance : 40) * sizeFactor;
+    const targetCharge = (config.charge !== undefined ? config.charge : -300) * sizeFactor; 
+    const col = (config.collide !== undefined ? config.collide : 30) * sizeFactor;
+    const openWeight = config.openWeight !== undefined ? config.openWeight : 0.65; 
     const currentPos = config.currentPos || null;
 
     const nodeDegree = {};
@@ -207,60 +68,135 @@ export function calculateForceLayout(nodesArray, branchesArray, sourcesArray, co
     });
 
     const d3Nodes = nodesArray.map(id => {
-        const nodeObj = { id: id.toString(), isSource: sourcesArray.includes(id), degree: nodeDegree[id] || 0 };
+        // 👇 NOVO: crossingCount anota o "estresse" do nó
+        const nodeObj = { id: id.toString(), isSource: sourcesArray.includes(id), degree: nodeDegree[id] || 0, crossingCount: 0 };
         if (currentPos && currentPos[id]) { nodeObj.x = currentPos[id].x; nodeObj.y = currentPos[id].y; }
         return nodeObj;
     });
     
-    const d3Links = branchesArray.map(b => ({ source: b.from.toString(), target: b.to.toString(), isOpen: b.state === 0 }));
+    const d3Links = branchesArray.map(b => ({ 
+        source: b.from.toString(), 
+        target: b.to.toString(), 
+        id: b.id,
+        isOpen: String(b.state) === '0' || String(b.initialState) === '0',
+        weight: b.__weight || 1,
+        isCrossing: false // 👇 NOVO: Flag de alerta da linha
+    }));
 
+    // Forças Base
     const chargeForce = d3.forceManyBody()
-        .strength(d => targetCharge * (1 + (d.degree * 5)))
-        .distanceMax(distVal * 6);
+        .strength(d => d.isSource ? targetCharge * 30 : targetCharge * (1 + (d.degree * 1.5)))
+        .distanceMax(distVal * 15); 
 
     const linkForce = d3.forceLink(d3Links)
         .id(d => d.id)
         .distance(d => {
             const degSource = nodeDegree[d.source.id || d.source] || 0;
             const degTarget = nodeDegree[d.target.id || d.target] || 0;
-            return (d.isOpen ? distVal * 1.5 : distVal) + ((degSource + degTarget) * 10);
+            const baseDist = (d.isOpen ? distVal * 1.5 : distVal) + ((degSource + degTarget) * 5); 
+            return baseDist * d.weight; 
         })
-        .strength(d => d.isOpen ? openWeight : ((nodeDegree[d.source.id] <= 2 || nodeDegree[d.target.id] <= 2) ? 1.5 : 1));
+        .strength(d => d.isOpen ? openWeight : 1.5); 
+
+    const collideForce = d3.forceCollide().radius(col);
 
     const simulation = d3.forceSimulation(d3Nodes)
         .force("link", linkForce).force("charge", chargeForce)
         .force("center", d3.forceCenter(0, 0))
-        .force("collide", d3.forceCollide().radius(col)).stop();
+        .force("collide", collideForce).stop();
 
-    const maxChargeMulti = 5; 
-    const totalTicks = 500; // Reduzido de 900 para otimizar velocidade em sistemas de 400 barras
-    const phaseTicks = totalTicks / 3;
+    // ===============================================================
+    // FASE 1: Assentamento Inicial (300 ciclos)
+    // O sistema monta a geometria bruta.
+    // ===============================================================
+    for (let i = 0; i < 300; ++i) {
+        simulation.tick(); 
+    }
 
-    for (let i = 0; i < totalTicks; ++i) {
-        let currentAlpha = 1; let phaseMultiplier;
-        if (i < phaseTicks) { phaseMultiplier = 1 + (maxChargeMulti - 1) * (i / phaseTicks); } 
-        else if (i < phaseTicks * 2) { phaseMultiplier = maxChargeMulti; } 
-        else {
-            const progress = (i - phaseTicks * 2) / phaseTicks;
-            phaseMultiplier = maxChargeMulti - (maxChargeMulti - 1) * progress;
-            currentAlpha = 1 - progress; 
+    // ===============================================================
+    // FASE 2: O Radar de Cruzamentos (Geometria Analítica)
+    // ===============================================================
+    let crossingsCount = 0;
+    
+    // Zera contadores (segurança)
+    d3Links.forEach(l => l.isCrossing = false);
+    d3Nodes.forEach(n => n.crossingCount = 0);
+
+    for (let i = 0; i < d3Links.length; i++) {
+        const l1 = d3Links[i];
+        for (let j = i + 1; j < d3Links.length; j++) {
+            const l2 = d3Links[j];
+            
+            // Se as duas linhas dividem a mesma barra, formando um "V", não é cruzamento.
+            if (l1.source === l2.source || l1.source === l2.target || l1.target === l2.source || l1.target === l2.target) continue;
+
+            // segmentsIntersect verifica a colisão no plano cartesiano usando a posição final (x,y)
+            if (segmentsIntersect(l1.source, l1.target, l2.source, l2.target)) {
+                l1.isCrossing = true;
+                l2.isCrossing = true;
+                l1.source.crossingCount++;
+                l1.target.crossingCount++;
+                l2.source.crossingCount++;
+                l2.target.crossingCount++;
+                crossingsCount++;
+            }
         }
-        chargeForce.strength(d => targetCharge * (1 + (d.degree * 5)) * phaseMultiplier);
-        simulation.alpha(Math.max(0.01, currentAlpha)).tick(); 
+    }
+
+    console.log(`[Motor Force] Radar ativado: ${crossingsCount} cruzamentos detectados no esqueleto.`);
+
+    // ===============================================================
+    // FASE 3 e 4: Mutação e Desembaraço (Somente se houver cruzamentos)
+    // ===============================================================
+    if (crossingsCount > 0) {
+        // Altera as regras da física!
+        
+        // 1. Injeta "bombas de repulsão" nos nós engavetados
+        chargeForce.strength(d => {
+            let base = d.isSource ? targetCharge * 30 : targetCharge * (1 + (d.degree * 1.5));
+            if (d.crossingCount > 0) {
+                // Multiplica a força de repulsão dependendo do nível de confusão do nó
+                base *= (1 + (d.crossingCount * 3)); 
+            }
+            return base;
+        });
+
+        // 2. Transforma as linhas cruzadas em hastes gigantes para forçar espaço
+        linkForce.distance(d => {
+            const degSource = nodeDegree[d.source.id || d.source] || 0;
+            const degTarget = nodeDegree[d.target.id || d.target] || 0;
+            const baseDist = (d.isOpen ? distVal * 1.5 : distVal) + ((degSource + degTarget) * 5); 
+            let finalDist = baseDist * d.weight;
+            
+            if (d.isCrossing) {
+                finalDist *= 3.5; // Cabo cruzado exige quase 4x mais espaço!
+            }
+            return finalDist;
+        });
+
+        // Reaquece o motor (Aquece a "temperatura" da simulação)
+        simulation.alpha(0.8);
+
+        // Roda mais 300 ciclos com as novas leis atuando como alavancas
+        for (let i = 0; i < 300; ++i) {
+            simulation.tick();
+        }
+        
+        console.log("[Motor Force] Operação de desembaraço concluída.");
+    } else {
+        console.log("[Motor Force] Grafo limpo na primeira passada!");
     }
 
     const positions = {};
     d3Nodes.forEach(n => positions[Number(n.id)] = { x: n.x, y: n.y });
     return positions;
 }
-
 // =========================================================
-// FASE 4: SWAP GLOBAL INTELIGENTE (Escalável O(N log N))
+// FASE 4: SWAP GLOBAL INTELIGENTE
 // =========================================================
 function applySmartGlobalSwap(pos, nodesArray, branchesArray, sourcesArray, feederMap, getLocalCost, getSystemCost) {
     let improved = false;
     
-    // 1. Calcula Níveis de Profundidade (BFS rápida) para a Regra 1
     const levels = {};
     const adj = {};
     nodesArray.forEach(id => adj[id] = []);
@@ -291,9 +227,8 @@ function applySmartGlobalSwap(pos, nodesArray, branchesArray, sourcesArray, feed
     let evaluations = 0;
     let bestSystemCost = getSystemCost(pos);
 
-    // Loop principal (limitado para proteger a CPU)
     for (let i = 0; i < nodesArray.length; i++) {
-        if (evaluations > 5000) break; // Regra 3: Teto de segurança
+        if (evaluations > 5000) break;
         
         for (let j = i + 1; j < nodesArray.length; j++) {
             if (evaluations > 5000) break;
@@ -301,7 +236,6 @@ function applySmartGlobalSwap(pos, nodesArray, branchesArray, sourcesArray, feed
             const idA = nodesArray[i];
             const idB = nodesArray[j];
 
-            // Regra 1: Só testa nós do mesmo nível OU mesmo alimentador
             const sameLevel = levels[idA] !== undefined && levels[idA] === levels[idB];
             const sameFeeder = feederMap[idA] !== undefined && feederMap[idA] === feederMap[idB];
 
@@ -311,14 +245,10 @@ function applySmartGlobalSwap(pos, nodesArray, branchesArray, sourcesArray, feed
                 const posA = pos[idA];
                 const posB = pos[idB];
 
-                // Regra 2: Pré-filtro ultra rápido usando custo Local
                 const localCostBefore = getLocalCost(idA, posA.x, posA.y, pos) + getLocalCost(idB, posB.x, posB.y, pos);
                 const localCostAfter = getLocalCost(idA, posB.x, posB.y, pos) + getLocalCost(idB, posA.x, posA.y, pos);
 
-                // Se o custo local piorar muito (> 20.000), nem tenta calcular o global
                 if ((localCostAfter - localCostBefore) < 20000) {
-                    
-                    // Regra 4: Teste Real de Fogo (Swap Provisório)
                     pos[idA] = posB;
                     pos[idB] = posA;
                     
@@ -328,7 +258,6 @@ function applySmartGlobalSwap(pos, nodesArray, branchesArray, sourcesArray, feed
                         bestSystemCost = newSystemCost;
                         improved = true;
                     } else {
-                        // Reverte se não melhorou
                         pos[idA] = posA;
                         pos[idB] = posB;
                     }
@@ -340,10 +269,9 @@ function applySmartGlobalSwap(pos, nodesArray, branchesArray, sourcesArray, feed
 }
 
 // =============================================================================
-// MOTOR DE INTELIGÊNCIA: ASSÍNCRONO & CUSTO LOCAL OTIMIZADO (100x mais rápido)
+// MOTOR DE INTELIGÊNCIA: ASSÍNCRONO & CUSTO LOCAL OTIMIZADO
 // =============================================================================
 async function applySmartCompaction(pos, nodesArray, branchesArray, sourcesArray, gridSize, maxIter, onProgress, feederMap = {}) {
-    // PRÉ-CALCULO: Mapeia as conexões para avaliação super-rápida (Custo Local)
     const myEdgesMap = {};
     const otherEdgesMap = {};
     nodesArray.forEach(id => {
@@ -351,14 +279,12 @@ async function applySmartCompaction(pos, nodesArray, branchesArray, sourcesArray
         otherEdgesMap[id] = branchesArray.filter(b => b.from !== id && b.to !== id);
     });
 
-    // Função ultra-rápida: Só calcula o custo do que está ligado à barra sendo testada
     const getLocalCost = (id, testX, testY, currentPos) => {
         let cost = 0;
         const testPos = { x: testX, y: testY };
         const myEdges = myEdgesMap[id];
         const otherEdges = otherEdgesMap[id];
 
-        // 1. Minhas Linhas
         for (let i = 0; i < myEdges.length; i++) {
             const b = myEdges[i];
             const isFrom = b.from === id;
@@ -371,34 +297,28 @@ async function applySmartCompaction(pos, nodesArray, branchesArray, sourcesArray
             const dx = Math.abs(p1.x - p2.x); const dy = Math.abs(p1.y - p2.y);
             if (dx > 0.1 && dy > 0.1) cost += Math.abs(dx - dy) < 0.1 ? 2000 : 20000;
 
-            // Meu cabo atropela alguém?
             for (let j = 0; j < nodesArray.length; j++) {
                 const oId = nodesArray[j];
                 if (oId !== b.from && oId !== b.to && getDistToSegment(currentPos[oId], p1, p2) < 5) {
                     cost += sourcesArray.includes(oId) ? 500000 : 200000;
                 }
             }
-            // Meu cabo cruza outra linha?
             for (let k = 0; k < otherEdges.length; k++) {
                 const ob = otherEdges[k];
                 const p3 = currentPos[ob.from], p4 = currentPos[ob.to];
                 if (p3 && p4 && segmentsIntersect(p1, p2, p3, p4)) {
-                    // 👇 AI-PENALTY: Penalização inteligente de cruzamentos
-                    let penalty = 10000; // Padrão: Mesmo alimentador
-                    
+                    let penalty = 10000; 
                     const isSourceInvolved = sourcesArray.includes(b.from) || sourcesArray.includes(b.to) || sourcesArray.includes(ob.from) || sourcesArray.includes(ob.to);
-                    
                     if (isSourceInvolved) {
-                        penalty = 100000; // Máxima prioridade: Não cruzar ramais-fonte
+                        penalty = 100000; 
                     } else if (feederMap[b.from] !== feederMap[ob.from]) {
-                        penalty = 50000; // Alimentadores diferentes se cruzando
+                        penalty = 50000; 
                     }
                     cost += penalty;
                 }
             }
         }
 
-        // 2. Cabos dos outros me atropelam?
         for (let k = 0; k < otherEdges.length; k++) {
             const ob = otherEdges[k];
             const p3 = currentPos[ob.from], p4 = currentPos[ob.to];
@@ -409,7 +329,6 @@ async function applySmartCompaction(pos, nodesArray, branchesArray, sourcesArray
         return cost;
     };
 
-    // Função pesada (Custo Global) usada apenas na Guilhotina
     const getSystemCost = (currentPos) => {
         let cost = 0;
         branchesArray.forEach(b => {
@@ -430,7 +349,6 @@ async function applySmartCompaction(pos, nodesArray, branchesArray, sourcesArray
                 if (a.from === b.from || a.from === b.to || a.to === b.from || a.to === b.to) continue;
                 const p3 = currentPos[b.from], p4 = currentPos[b.to];
                 if (p3 && p4 && segmentsIntersect(p1, p2, p3, p4)) {
-                    // 👇 AI-PENALTY: Penalização global
                     let penalty = 10000; 
                     if (sourcesArray.includes(a.from) || sourcesArray.includes(a.to) || sourcesArray.includes(b.from) || sourcesArray.includes(b.to)) {
                         penalty = 100000;
@@ -452,7 +370,6 @@ async function applySmartCompaction(pos, nodesArray, branchesArray, sourcesArray
         improved = false;
         passes++;
 
-        // A MÁGICA DE INTERFACE: Isso pausa a thread por 0ms, permitindo que a barra de progresso carregue!
         await new Promise(resolve => setTimeout(resolve, 0)); 
         if (onProgress) onProgress(passes, "Calculando Otimizações...", "Aguarde...");
 
@@ -462,7 +379,6 @@ async function applySmartCompaction(pos, nodesArray, branchesArray, sourcesArray
             if (pos[id].y < minY) minY = pos[id].y; if (pos[id].y > maxY) maxY = pos[id].y;
         });
 
-        // NÍVEL 1.5: TSM Magnético (Usando custo Local)
         for (const b of branchesArray) {
             if (b.state === 0) continue;
             const p1 = pos[b.from], p2 = pos[b.to];
@@ -485,14 +401,12 @@ async function applySmartCompaction(pos, nodesArray, branchesArray, sourcesArray
             }
         }
 
-        // NÍVEL 1: Swaps Globais Inteligentes (Escalável para sistemas gigantes)
         const swapImproved = applySmartGlobalSwap(
             pos, nodesArray, branchesArray, sourcesArray, feederMap, 
             getLocalCost, getSystemCost
         );
         if (swapImproved) improved = true;
 
-        // NÍVEL 2 e 3: Fuga e Micro-Ajustes (Agora 100x mais rápido usando Custo Local)
         for (const id of nodesArray) {
             const orig = { ...pos[id] };
             const currentMyCost = getLocalCost(id, orig.x, orig.y, pos);
@@ -507,7 +421,7 @@ async function applySmartCompaction(pos, nodesArray, branchesArray, sourcesArray
                     
                     if (!isOccupied(tx, ty, pos)) {
                         const testCost = getLocalCost(id, tx, ty, pos);
-                        if (testCost < bestLocalCost - 5) { // Precisa melhorar pelo menos 5 pontos
+                        if (testCost < bestLocalCost - 5) {
                             bestLocalCost = testCost; bestPos = { x: tx, y: ty };
                         }
                     }
@@ -516,7 +430,6 @@ async function applySmartCompaction(pos, nodesArray, branchesArray, sourcesArray
             if (bestPos) { pos[id] = bestPos; improved = true; }
         }
 
-        // NÍVEL 4: A PRENSA (Guilhotina Final)
         let currentSystemCost = getSystemCost(pos);
         for (let slice = maxX; slice > minX; slice -= gridSize) {
             const candidatePos = {}; nodesArray.forEach(id => { candidatePos[id] = { ...pos[id] }; if (candidatePos[id].x >= slice) candidatePos[id].x -= gridSize; });
@@ -538,11 +451,7 @@ async function applySmartCompaction(pos, nodesArray, branchesArray, sourcesArray
     return pos;
 }
 
-// =========================================================
-// AS FUNÇÕES EXPORTADAS AGORA SÃO ASYNC!
-// =========================================================
 export async function calculateOrthogonalLayout(nodesArray, branchesArray, sourcesArray, config = {}) {
-    // 👇 BLINDAGEM DE TIPOS (Garante que todos os IDs sejam Strings estritas) 👇
     nodesArray = nodesArray.map(String);
     branchesArray = branchesArray.map(b => ({ ...b, id: String(b.id), from: String(b.from), to: String(b.to) }));
     sourcesArray = sourcesArray.map(String);
@@ -570,12 +479,10 @@ export async function calculateOrthogonalLayout(nodesArray, branchesArray, sourc
             } ring++;
         }
     });
-    pos = applyBarycenterSweep(pos, nodesArray, branchesArray, sourcesArray, radialStep);
     return await applySmartCompaction(pos, nodesArray, branchesArray, sourcesArray, radialStep, 8, config.onProgress, config.feederMap);
 }
 
 export async function calculateVNSLayout(nodesArray, branchesArray, sourcesArray, config = {}) {
-    // 👇 BLINDAGEM DE TIPOS (Garante que todos os IDs sejam Strings estritas) 👇
     nodesArray = nodesArray.map(String);
     branchesArray = branchesArray.map(b => ({ ...b, id: String(b.id), from: String(b.from), to: String(b.to) }));
     sourcesArray = sourcesArray.map(String);
@@ -601,8 +508,370 @@ export async function calculateVNSLayout(nodesArray, branchesArray, sourcesArray
     });
 
     if (config.onProgress) config.onProgress(1, "Iniciando...", "Aguarde...");
-    pos = applyBarycenterSweep(pos, nodesArray, branchesArray, sourcesArray, gridSize);
     const finalPos = await applySmartCompaction(pos, nodesArray, branchesArray, sourcesArray, gridSize, maxIter, config.onProgress, config.feederMap);
     if (config.onProgress) config.onProgress("Concluído", "Finalizado", "-");
+    return finalPos;
+}
+
+export function classifyTopology(nodesArray, branchesArray) {
+    // 1. Contagem Básica
+    const nodesCount = nodesArray.length;
+    const edgesCount = branchesArray.length;
+    
+    let openSwitches = 0;
+    let closedEdges = 0;
+
+    const adj = {};
+    nodesArray.forEach(n => adj[String(n)] = []);
+    
+    // Filtramos para entender o que é o esqueleto (fechado) e o que são as tie-lines (abertas)
+    branchesArray.forEach(b => {
+        const isOpen = String(b.state) === '0' || String(b.initialState) === '0';
+        if (isOpen) {
+            openSwitches++;
+        } else {
+            closedEdges++;
+            const u = String(b.from);
+            const v = String(b.to);
+            if (!adj[u]) adj[u] = [];
+            if (!adj[v]) adj[v] = [];
+            adj[u].push(v);
+            adj[v].push(u);
+        }
+    });
+
+    // 2. Análise de Ilhas (Componentes Elétricos / Alimentadores isolados)
+    const visited = new Set();
+    let components = 0;
+
+    nodesArray.forEach(n => {
+        const nodeId = String(n);
+        if (!visited.has(nodeId)) {
+            components++;
+            const queue = [nodeId];
+            visited.add(nodeId);
+            while (queue.length > 0) {
+                const curr = queue.shift();
+                (adj[curr] || []).forEach(neighbor => {
+                    if (!visited.has(neighbor)) {
+                        visited.add(neighbor);
+                        queue.push(neighbor);
+                    }
+                });
+            }
+        }
+    });
+
+    // 3. Fórmula de Euler para Grafos (Calcula se existem anéis elétricos fechados)
+    const electricalLoops = closedEdges - nodesCount + components;
+
+    // =========================================================
+    // 4. A ÁRVORE DE DECISÃO: Como um Engenheiro escolhe o Layout
+    // =========================================================
+    let recommendedEngine = 'force'; // Default: Nosso motor poderoso
+    let typeName = "Desconhecida";
+
+    if (electricalLoops > 0) {
+        typeName = `Malhado (${electricalLoops} Anéis Fechados)`;
+        // Sistemas de transmissão malhados. Precisam de física se forem grandes.
+        recommendedEngine = nodesCount > 80 ? 'force' : 'vns';
+        
+    } else if (openSwitches > 0 || components > 1) {
+        typeName = `Radial Interligado (${components} Alimentadores, ${openSwitches} Chaves Abertas)`;
+        // O cenário clássico de Distribuição (IEEE 33, 69, 123...). 
+        // O Force é OBRIGATÓRIO aqui para forçar os alimentadores a se afastarem!
+        recommendedEngine = 'force';
+        
+    } else {
+        typeName = "Radial Simples (Árvore Pura)";
+        // Sem chaves abertas e apenas 1 raiz.
+        if (nodesCount < 30) {
+            recommendedEngine = 'orthogonal'; // Pequeno? Fica bonito como diagrama unifilar quadrado.
+        } else if (nodesCount < 80) {
+            recommendedEngine = 'vns';        // Médio? O VNS ajusta no grid sem esmagar.
+        } else {
+            recommendedEngine = 'force';      // Muito grande? Só a física resolve sem sobrepor.
+        }
+    }
+
+    return { 
+        type: typeName,
+        electricalLoops, 
+        components, 
+        nodesCount, 
+        edgesCount, 
+        openSwitches,
+        recommendedEngine 
+    };
+}
+
+export function applyBarycenterSweep(positions, nodesArray, branchesArray, sourcesArray, gridSize = 100) {
+    const adj = {};
+    nodesArray.forEach(n => adj[n] = []);
+    branchesArray.forEach(b => {
+        if (b.state === 1 || b.initialState === 1) {
+            if (!adj[b.from]) adj[b.from] = [];
+            if (!adj[b.to]) adj[b.to] = [];
+            adj[b.from].push(b.to);
+            adj[b.to].push(b.from);
+        }
+    });
+
+    const levels = {};
+    const nodeLevel = {};
+    const visited = new Set();
+    const queue = [];
+
+    sourcesArray.forEach(s => {
+        if (nodesArray.includes(s)) {
+            visited.add(s);
+            queue.push({ id: s, lvl: 0 });
+            nodeLevel[s] = 0;
+            if (!levels[0]) levels[0] = [];
+            levels[0].push(s);
+        }
+    });
+
+    nodesArray.forEach(n => {
+        if (!visited.has(n) && queue.length === 0) {
+            visited.add(n);
+            queue.push({ id: n, lvl: 0 });
+            nodeLevel[n] = 0;
+            if (!levels[0]) levels[0] = [];
+            levels[0].push(n);
+        }
+    });
+
+    while (queue.length > 0) {
+        const { id, lvl } = queue.shift();
+        const nextLvl = lvl + 1;
+        (adj[id] || []).forEach(neighbor => {
+            if (!visited.has(neighbor)) {
+                visited.add(neighbor);
+                nodeLevel[neighbor] = nextLvl;
+                if (!levels[nextLvl]) levels[nextLvl] = [];
+                levels[nextLvl].push(neighbor);
+                queue.push({ id: neighbor, lvl: nextLvl });
+            }
+        });
+    }
+
+    const newPositions = JSON.parse(JSON.stringify(positions));
+    const maxLvl = Math.max(...Object.keys(levels).map(Number));
+
+    if (levels[0]) {
+        const startX0 = -((levels[0].length - 1) * gridSize * 3) / 2;
+        levels[0].forEach((subId, idx) => {
+            if (newPositions[subId]) {
+                newPositions[subId].x = startX0 + idx * (gridSize * 3);
+                newPositions[subId].y = 0; 
+            }
+        });
+    }
+
+    for (let l = 1; l <= maxLvl; l++) {
+        const currentLevelNodes = levels[l];
+        if (!currentLevelNodes) continue;
+
+        const barycenters = currentLevelNodes.map(nodeId => {
+            const parents = (adj[nodeId] || []).filter(neighbor => nodeLevel[neighbor] === l - 1);
+            if (parents.length === 0) {
+                return { id: nodeId, barycenter: newPositions[nodeId]?.x || 0 }; 
+            }
+            const sumX = parents.reduce((sum, p) => sum + (newPositions[p]?.x || 0), 0);
+            return { id: nodeId, barycenter: sumX / parents.length };
+        });
+
+        barycenters.sort((a, b) => a.barycenter - b.barycenter);
+
+        const avgBarycenter = barycenters.reduce((sum, item) => sum + item.barycenter, 0) / (barycenters.length || 1);
+        const startX = avgBarycenter - ((barycenters.length - 1) * gridSize) / 2;
+
+        barycenters.forEach((item, index) => {
+            if (newPositions[item.id]) {
+                newPositions[item.id].x = startX + index * gridSize;
+                newPositions[item.id].y = l * (gridSize * 1.5); 
+            }
+        });
+    }
+
+    return newPositions;
+}
+
+// =========================================================
+// GRAPH COARSENING HÍBRIDO (PODA + CONTRAÇÃO DE CADEIAS)
+// =========================================================
+
+export function contractTopology(nodesArray, branchesArray, sourcesArray) {
+    const adj = {};
+    nodesArray.forEach(id => adj[String(id)] = new Set());
+    
+    branchesArray.forEach(b => {
+        const u = String(b.from), v = String(b.to);
+        if (adj[u] && adj[v]) {
+            adj[u].add(v); adj[v].add(u);
+        }
+    });
+
+    const sourceSet = new Set(sourcesArray.map(String));
+    let activeNodes = new Set(nodesArray.map(String));
+
+    // ==========================================
+    // FASE 1: PODA DE RAMOS TERMINAIS (Folhas)
+    // ==========================================
+    const prunedMap = {};
+    const leaves = [];
+    activeNodes.forEach(id => {
+        if (adj[id].size === 1 && !sourceSet.has(id)) leaves.push(id);
+    });
+
+    while (leaves.length > 0) {
+        const leaf = leaves.shift();
+        if (adj[leaf].size !== 1) continue;
+
+        const parent = Array.from(adj[leaf])[0];
+        
+        // 👇 A MÁGICA ENTRA AQUI 👇
+        // Se o pai for uma Fonte/Subestação, nós não engolimos esse nó!
+        // Ele sobrevive no mapa e atua como o "toco" (âncora) para o ramal.
+        if (sourceSet.has(parent)) {
+            continue; 
+        }
+        // 👆 ======================= 👆
+
+        activeNodes.delete(leaf);
+        adj[leaf].delete(parent); 
+        if (adj[parent]) adj[parent].delete(leaf);
+
+        if (!prunedMap[parent]) prunedMap[parent] = { nodes: [] };
+        prunedMap[parent].nodes.push(leaf);
+        
+        if (prunedMap[leaf]) {
+            prunedMap[parent].nodes.push(...prunedMap[leaf].nodes);
+            delete prunedMap[leaf];
+        }
+
+        if (adj[parent] && adj[parent].size === 1 && !sourceSet.has(parent)) leaves.push(parent);
+    }
+
+    // FASE 2: CONTRAÇÃO DE CADEIAS (Ligação Direta)
+    const chainMap = {};
+    let macroCounter = 1;
+    const visited = new Set();
+    const macroEdges = [];
+
+    Array.from(activeNodes).forEach(startNode => {
+        if (visited.has(startNode) || sourceSet.has(startNode) || adj[startNode].size !== 2) return;
+
+        const chain = [];
+        const queue = [startNode];
+        visited.add(startNode);
+
+        while (queue.length > 0) {
+            const curr = queue.shift();
+            chain.push(curr);
+            adj[curr].forEach(neighbor => {
+                if (adj[neighbor].size === 2 && !sourceSet.has(neighbor) && !visited.has(neighbor)) {
+                    visited.add(neighbor); queue.push(neighbor);
+                }
+            });
+        }
+
+        const chainSet = new Set(chain);
+        const anchors = new Set();
+        chain.forEach(node => {
+            adj[node].forEach(neighbor => { if (!chainSet.has(neighbor)) anchors.add(neighbor); });
+        });
+
+        if (chain.length > 0 && anchors.size > 0) {
+            const macroId = `__CHAIN_${macroCounter++}`;
+            
+            chain.forEach(n => activeNodes.delete(n)); 
+            
+            const ancArray = Array.from(anchors);
+            if (ancArray.length === 2) {
+                macroEdges.push({ 
+                    id: `__EDGE_${macroId}_DIRECT`, 
+                    from: ancArray[0], 
+                    to: ancArray[1], 
+                    state: 1, 
+                    __isMacroEdge: true,
+                    // 👇 A MÁGICA: A aresta sabe quantos pedaços ela representa!
+                    __weight: chain.length + 1 
+                });
+            }
+            
+            chainMap[macroId] = { chain: chain, anchors: ancArray };
+        }
+    });
+
+    // ==========================================
+    // FASE 3: A GUILHOTINA
+    // ==========================================
+    const finalBranches = branchesArray.filter(b => 
+        activeNodes.has(String(b.from)) && activeNodes.has(String(b.to))
+    );
+    finalBranches.push(...macroEdges);
+
+    // 👇 RESTAURADOR DE TIPAGEM PARA O REACT 👇
+    // Converte os IDs numéricos de volta para Number para o React reconhecer as Subestações
+    const restoreType = (val) => isNaN(val) ? val : Number(val);
+
+    const safeNodes = Array.from(activeNodes).map(restoreType);
+    const safeBranches = finalBranches.map(b => ({
+        ...b,
+        from: restoreType(b.from),
+        to: restoreType(b.to)
+    }));
+
+    return {
+        coarseNodesArray: safeNodes,
+        coarseBranchesArray: safeBranches,
+        coarseData: { prunedMap, chainMap }
+    };
+}
+
+export function expandTopology(coarsePos, coarseData, originalPos) {
+    const { prunedMap, chainMap } = coarseData;
+    const finalPos = { ...coarsePos };
+
+    if (chainMap) {
+        Object.keys(chainMap).forEach(macroId => {
+            const { chain, anchors } = chainMap[macroId];
+            
+            if (anchors.length === 2) {
+                const p1 = coarsePos[anchors[0]] || originalPos[anchors[0]];
+                const p2 = coarsePos[anchors[1]] || originalPos[anchors[1]];
+                
+                if (p1 && p2) {
+                    const segments = chain.length + 1;
+                    chain.forEach((nodeId, idx) => {
+                        const t = (idx + 1) / segments;
+                        finalPos[nodeId] = { x: p1.x + (p2.x - p1.x) * t, y: p1.y + (p2.y - p1.y) * t };
+                    });
+                }
+            } else if (anchors.length === 1) {
+                const p1 = coarsePos[anchors[0]] || originalPos[anchors[0]];
+                if (p1) chain.forEach(nodeId => finalPos[nodeId] = { ...p1 });
+            }
+        });
+    }
+
+    if (prunedMap) {
+        Object.keys(prunedMap).forEach(anchor => {
+            const anchorNewPos = finalPos[anchor] || coarsePos[anchor];
+            const anchorOldPos = originalPos[anchor];
+            
+            if (anchorNewPos && anchorOldPos) {
+                const deltaX = anchorNewPos.x - anchorOldPos.x;
+                const deltaY = anchorNewPos.y - anchorOldPos.y;
+                prunedMap[anchor].nodes.forEach(nodeId => {
+                    const oldP = originalPos[nodeId];
+                    if (oldP) finalPos[nodeId] = { x: oldP.x + deltaX, y: oldP.y + deltaY };
+                });
+            }
+        });
+    }
+
     return finalPos;
 }

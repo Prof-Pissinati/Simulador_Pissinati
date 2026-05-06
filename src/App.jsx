@@ -25,6 +25,14 @@ import { runOptimizer } from './utils/reconfigOptimizer';
 import { runVNS } from './utils/vnsOptimizer';
 
 function App() {
+
+    const [macroGraph, setMacroGraph] = useState(null);
+    // Escuta o evento que vem do botão da Sidebar
+    useEffect(() => {
+        const handleApplyMacro = (e) => setMacroGraph(e.detail);
+        window.addEventListener('applyMacroGraph', handleApplyMacro);
+        return () => window.removeEventListener('applyMacroGraph', handleApplyMacro);
+    }, []);
     
     // Configurações Base do Sistema (Unificadas)
     const [vBase, setVBase] = useState(13.8);
@@ -82,7 +90,11 @@ function App() {
         console.log(`🎥 [App.jsx] A variável isCalculatingLayout mudou para: ${isCalculatingLayout ? '🟢 LIGADA' : '🔴 DESLIGADA'}`);
     }, [isCalculatingLayout]);
 
-    const activePositions = useMemo(() => layoutMode === 'project' ? projectPositions : (organicPositions || projectPositions), [layoutMode, projectPositions, organicPositions]);
+    const activePositions = useMemo(() => {
+        if (macroGraph) return macroGraph.positions; // 👈 Posição amassada ganha prioridade
+        return layoutMode === 'project' ? projectPositions : (organicPositions || projectPositions);
+    }, [layoutMode, projectPositions, organicPositions, macroGraph]);
+
     const activeWaypoints = useMemo(() => layoutMode === 'project' ? projectWaypoints : (organicWaypoints || projectWaypoints), [layoutMode, projectWaypoints, organicWaypoints]);
     
     const [printFrameMode, setPrintFrameMode] = useState('none'); 
@@ -1192,6 +1204,15 @@ const handleShuntChange = useCallback((nodeId, increment) => {
                 )}
             </div>
 
+            {macroGraph && (
+                    <div style={{ position: 'absolute', top: '20px', left: '50%', transform: 'translateX(-50%)', zIndex: 2000, background: '#ff5722', color: '#fff', padding: '10px 20px', borderRadius: '20px', fontWeight: 'bold', display: 'flex', gap: '15px', alignItems: 'center', boxShadow: '0 4px 15px rgba(0,0,0,0.3)' }}>
+                        <span>⚠️ Modo de Depuração: Grafo Compactado (Coarsening)</span>
+                        <button onClick={() => setMacroGraph(null)} style={{ background: '#fff', color: '#ff5722', border: 'none', borderRadius: '15px', padding: '5px 15px', fontWeight: 'bold', cursor: 'pointer', transition: 'transform 0.2s' }} onMouseOver={e => e.target.style.transform='scale(1.05)'} onMouseOut={e => e.target.style.transform='scale(1)'}>
+                            Sair do Modo
+                        </button>
+                    </div>
+                )}
+
             <div className="graph-wrapper">
                 {/* ... Botões flutuantes mantidos ... */}
                 <div className="hide-on-print" style={{ background: darkMode ? 'rgba(30, 30, 30, 0.65)' : 'rgba(255, 255, 255, 0.75)', backdropFilter: 'blur(12px)', WebkitBackdropFilter: 'blur(12px)', border: `1px solid ${darkMode ? '#444' : '#ddd'}`, boxShadow: '0 8px 32px rgba(0,0,0,0.15)', position: 'absolute', top: '20px', left: '20px', zIndex: 1000, display: 'flex', flexDirection: 'column', gap: '4px', padding: '6px', borderRadius: '14px' }}>
@@ -1225,7 +1246,8 @@ const handleShuntChange = useCallback((nodeId, increment) => {
                         darkMode={darkMode}
                         printFrameMode={printFrameMode} 
                         isFaultSidebarOpen={isFaultSidebarOpen} 
-                        branches={branches} allNodes={allNodes} 
+                        branches={macroGraph?.macroData?.branches || branches} 
+                        allNodes={macroGraph?.macroData?.nodes || allNodes} 
                         sources={sources} showLabels={showLabels} 
                         getEdgeColor={getEdgeColor} 
                         getNodeColor={getNodeColor} 
