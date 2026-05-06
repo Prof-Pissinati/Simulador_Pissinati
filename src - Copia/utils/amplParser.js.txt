@@ -57,18 +57,8 @@ export function parseAMPLDat(text) {
                         shunts[id] = { maxSteps: nmax, steps: n0, stepSize: qbc };
                     }
 
-                    // 👇 EXTRAÇÃO DE GERAÇÃO DISTRIBUÍDA (GD) 👇
-                    // Lê as colunas do IMPL_GD.md, usando Pgdini/Qgdini como fallback caso o .dat seja antigo
-                    const pgd = getVal('Pgdi') || getVal('Pgdini', 0);
-                    const qgd = getVal('Qgdi') || getVal('Qgdini', 0);
-                    const sMax = getVal('Smxgd') || getVal('Sgd', 0);
-                    const fpMin = getVal('fpmgd', 0);
-                    const fpMax = getVal('fpMgd', 0);
-
-                    // Se a barra tem potência injetada ou limite S definido, nasce com GD ativa
-                    if (pgd > 0 || sMax > 0) {
-                        dgs[id] = { pg: pgd, qg: qgd, sMax: sMax, fpMin: fpMin, fpMax: fpMax, active: true };
-                    }
+                    const pgd = getVal('Pgdini'); const qgd = getVal('Qgdini'); const sgd = getVal('Sgd');
+                    if (sgd > 0 || pgd > 0 || qgd > 0) dgs[id] = { p: pgd, q: qgd, s: sgd };
 
                     const reg = getVal('reg_oltc'); const ntap = getVal('ntap_oltc');
                     if (ntap > 0) oltcs[id] = { reg, ntap };
@@ -148,9 +138,7 @@ export function parseAMPLDat(text) {
     });
 
     return {
-        baseKV, sBase, sefNode, sources, feeders, nodeTypes, loads, shunts, 
-        systemGD: dgs, 
-        oltcs, bfSet, sses,
+        baseKV, sBase, sefNode, sources, feeders, nodeTypes, loads, shunts, dgs, oltcs, bfSet, sses,
         branches: branches.map((b, idx) => ({ ...b, id: idx })),
         faults: [], layout: { positions, waypoints: {} }
     };

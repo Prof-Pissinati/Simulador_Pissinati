@@ -39,9 +39,7 @@ export default function GraphArea({
     selectedElement, hoveredLineId, setHoveredLineId, hoveredNodeId, setHoveredNodeId, maintenanceMode,
     activePositions = {}, activeWaypoints = {}, lineCurrents = {}, nodeData = {}, isEditMode, setIsEditMode, darkMode,
     printFrameMode, isFaultSidebarOpen, onSaveLayoutToHistory, children, onExportRequest, loads,
-    systemLoads, sses, feedersList = [], systemShunts, nodeFeeds, clusterThreshold = 0.35, faultNodes = new Set(), 
-    systemGD,    // 👈 Adicione aqui
-    toggleGD,    // 👈 Adicione aqui
+    systemLoads, sses, feedersList = [], systemShunts, nodeFeeds, clusterThreshold = 0.35, faultNodes = new Set()
 }) {
     const svgRef = useRef(null);
     const measureRef = useRef(null); 
@@ -1128,7 +1126,6 @@ export default function GraphArea({
                                         onMouseDown={handleNodeMouseDown} onClick={handleNodeClick}
                                         onMouseEnter={handleNodeMouseEnter} onMouseLeave={handleNodeMouseLeave}
                                         currentScale={transform.scale} isSimplified={isSimplified}
-                                        hasGD={!!systemGD[nodeId]} gdActive={systemGD[nodeId]?.active}                                        
                                     />
                                     {hasShunt && (
                                         <g transform={`translate(${pos.x + 18}, ${pos.y - 18})`} style={{ cursor: isEditMode ? 'default' : 'pointer', pointerEvents: 'all' }}>

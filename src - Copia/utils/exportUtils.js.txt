@@ -116,16 +116,6 @@ const pad = (num, width, decimals = 2) => {
 export const generateTextReport = (type, currentSnapshot, sequenceData, sysData, calcMethod) => {
     let reportContent = `==================================================\n RELATÓRIO DETALHADO DE FLUXO DE POTÊNCIA (${calcMethod})\n==================================================\n\n`;
 
-    const gdEntries = Object.entries(sysData.gd || {}).filter(([, v]) => v.active);
-
-    if (gdEntries.length > 0) {
-        reportContent += '\n--- GERAÇÃO DISTRIBUÍDA (ATIVAS) ---\n';
-        gdEntries.forEach(([id, gd]) => {
-            reportContent += `Barra ${id.padEnd(4)}: Pg=${gd.pg.toString().padEnd(6)} kW  | Qg=${gd.qg.toString().padEnd(6)} kVAr | Smáx=${gd.sMax} kVA\n`;
-        });
-        reportContent += '------------------------------------\n';
-    }
-
     const processSnapshot = (snapshot, stageName) => {
         let txt = `>>> ETAPA: ${stageName}\n--------------------------------------------------\n`;
         const pfResult = runPowerFlow(snapshot.branches, snapshot.faults, calcMethod, sysData);

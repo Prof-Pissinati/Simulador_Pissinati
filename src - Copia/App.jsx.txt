@@ -58,7 +58,6 @@ function App() {
     const [systemShunts, setSystemShunts] = useState({});
     const [systemFeeders, setSystemFeeders] = useState([]);
     const [systemLoads, setSystemLoads] = useState({});
-    const [systemGD, setSystemGD] = useState({}); // 👈 Novo estado para GD
     const [projectPositions, setProjectPositions] = useState({});
     const [projectWaypoints, setProjectWaypoints] = useState({});
     const [geoPositions, setGeoPositions] = useState({});
@@ -252,7 +251,6 @@ function App() {
         setSystemShunts(data.shunts || {});
         setActiveSources(data.sources || []); 
         setSystemFeeders(data.feeders || []);
-        setSystemGD(data.systemGD || data.gd || {}); // 👈 Injeta a GD vinda do Parser ou JSON
 
         // 👇 ADICIONADO: Suporte para nomes de variáveis tanto do JSON quanto do DAT
         setVBase(data.Vbase || data.baseKV || 13.8);
@@ -378,12 +376,11 @@ function App() {
         sources: activeSources, 
         feeders: systemFeeders,
         loads: systemLoads, 
-        gd: systemGD, // 👈 Agora o motor matemático recebe a GD
         Vbase: vBase, // 👈 Dinâmico
         Sbase: sBase, // 👈 Dinâmico
         shunts: systemShunts || {}, 
         sses: sses    // 👈 Dinâmico
-    }), [activeSources, systemLoads, systemShunts, systemFeeders, vBase, sBase, sses, systemGD]);
+    }), [activeSources, systemLoads, systemShunts, systemFeeders, vBase, sBase, sses]);
 
     const topology = useMemo(() => analyzeTopology(branches, faultNodes, sysData), [branches, faultNodes, sysData]);
     const { nodeFeeds, loopNodes } = topology; // Extraímos o que o App e o Painel precisam
@@ -729,50 +726,6 @@ const handleExportSequence = useCallback(() => {
         showToast('Chave alterada', 'success');
     };
 
-    const toggleGD = useCallback((nodeId) => {
-        // 👇 AVISA O MOTOR PARA ESQUECER O PASSADO E RECALCULAR TUDO 👇
-        CacheManager.cache.clear();
-        if (CacheManager.islandCache) CacheManager.islandCache.clear();
-
-        setSystemGD(prev => {
-            if (!prev[nodeId]) return prev;
-            return {
-                ...prev,
-                [nodeId]: { ...prev[nodeId], active: !prev[nodeId].active }
-            };
-        });
-        setLastEventNodes(new Set([nodeId]));
-    }, []);
-
-    // Função para ajustar o valor da Geração Distribuída dinamicamente
-    const handleGDChange = useCallback((nodeId, field, increment) => {
-        // 👇 AVISA O MOTOR PARA ESQUECER O PASSADO E RECALCULAR TUDO 👇
-        CacheManager.cache.clear();
-        if (CacheManager.islandCache) CacheManager.islandCache.clear();
-
-        setSystemGD(prev => {
-            const gd = prev[nodeId];
-            if (!gd) return prev;
-            
-            let newValue = gd[field] + increment;
-            
-            // Trava Mínima e Máxima
-            if (newValue < 0) newValue = 0;
-            // Para Qg permitimos absorver reativo (negativo) até o limite Smax
-            if (field === 'qg' && newValue < -gd.sMax) newValue = -gd.sMax;
-            if (newValue > gd.sMax) newValue = gd.sMax;
-            
-            if (newValue === gd[field]) return prev; 
-            
-            return {
-                ...prev,
-                [nodeId]: { ...gd, [field]: newValue }
-            };
-        });
-        
-        setLastEventNodes(new Set([nodeId]));
-    }, []);
-
     const handleTapChange = useCallback((branchId, increment) => {
         // 👇 MODO GRAVAÇÃO DO SEQUENCIADOR 👇
         if (seqOverlayOpen && sequenceData && isRecordingSeq) {
@@ -984,7 +937,6 @@ const handleShuntChange = useCallback((nodeId, increment) => {
             sses: sses,
             shunts: systemShunts,
             loads: systemLoads,
-            gd: systemGD, // 👈 Salva a GD no JSON
             branches: branches, 
             faults: Array.from(faultNodes), 
             layout: { positions: positions, waypoints: waypoints, geoPositions: geoPositions, routes: routedPaths, manualWaypoints: manualWaypoints, straightSegments: straightSegments }
@@ -1003,7 +955,6 @@ const handleShuntChange = useCallback((nodeId, increment) => {
             if (data.feeders) setSystemFeeders(data.feeders);
             if (data.sses) setSses(data.sses);
             if (data.shunts) setSystemShunts(data.shunts);
-            if (data.gd) setSystemGD(data.gd); // 👈 Recupera a GD do JSON
 
             if (data.branches) setBranches(data.branches);
             if (data.faults) setFaultNodes(new Set(data.faults));
@@ -1234,9 +1185,6 @@ const handleShuntChange = useCallback((nodeId, increment) => {
                         handleShuntChange={handleShuntChange}
                         viewMode={viewMode}
                         vBase={vBase} 
-                        systemGD={systemGD}
-                        toggleGD={toggleGD}
-                        handleGDChange={handleGDChange}
                     />
                 ) : (
                     <EditSidebar 
@@ -1327,8 +1275,6 @@ const handleShuntChange = useCallback((nodeId, increment) => {
                         handleTapChange={handleTapChange}
                         systemShunts={systemShunts} 
                         handleShuntChange={handleShuntChange}
-                        systemGD={systemGD}    // 👈 Adicione esta linha
-                        toggleGD={toggleGD}    // 👈 Adicione esta linha (se for usar dentro do GraphArea)
                     >
                         {showLegend && (
                             <div className="legend" style={{ position: 'absolute', bottom: '20px', right: '20px', zIndex: 1000, pointerEvents: 'all', background: darkMode ? '#121212' : '#ffffff', border: '1px solid #444', borderRadius: '8px', boxShadow: '0 6px 20px rgba(0,0,0,0.2)' }} onMouseDown={e=>e.stopPropagation()} onMouseUp={e=>e.stopPropagation()} onClick={e=>e.stopPropagation()} onWheel={e=>e.stopPropagation()} onDoubleClick={e=>e.stopPropagation()} >

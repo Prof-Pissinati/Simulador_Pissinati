@@ -9,8 +9,7 @@ export const CacheManager = {
         const branchState = branches.map(b => `${b.id}:${b.state}:${b.currentTap || 0}`).join('|');
         const faultState = Array.from(faultNodes).sort().join(',');
         const shuntState = sysData && sysData.shunts ? Object.entries(sysData.shunts).map(([id, s]) => `${id}:${s.steps}`).join(',') : '';
-        const gdState = sysData && sysData.gd ? Object.entries(sysData.gd).map(([id, g]) => `${id}:${g.active ? g.pg : 0}`).join(',') : '';
-        return `${method}-${branchState}-${faultState}-${shuntState}-${gdState}`;
+        return `${method}-${branchState}-${faultState}-${shuntState}`;
     },
     get: function(branches, faultNodes, method, sysData) {
         return this.cache.get(this.getKey(branches, faultNodes, method, sysData));
@@ -136,9 +135,7 @@ export function runPowerFlow(branches, faultNodes, method = 'NR', sysData, event
             let h = `${n}`;
             if (faultNodes.has(n)) h += 'F';
             if (islandSysData.shunts[n]) h += `S${islandSysData.shunts[n].steps}`;
-            if (islandSysData.gd && islandSysData.gd[n]) {
-                h += `G${islandSysData.gd[n].active ? islandSysData.gd[n].pg : 0}`;
-            }
+            if (islandSysData.loads[n]) h += `L${islandSysData.loads[n].p}-${islandSysData.loads[n].q}`;
             return h;
         }).join(',');
         
@@ -273,21 +270,10 @@ export function runPowerFlow(branches, faultNodes, method = 'NR', sysData, event
                 Theta[i] = 0.0;
             } else {
                 const load = reducedSysData.loads[id]; 
-                
-                // 1. Pega a carga (se existir), ou zero
-                let pNet = load ? load.p : 0;
-                let qNet = load ? load.q : 0;
-
-                // 2. Abate a Geração Distribuída (se existir e estiver ativa na barra)
-                if (reducedSysData.gd && reducedSysData.gd[id] && reducedSysData.gd[id].active) {
-                    pNet -= reducedSysData.gd[id].pg;
-                    qNet -= reducedSysData.gd[id].qg;
+                if (load) {
+                    P_spec[i] = -(load.p / Sbase);
+                    Q_spec[i] = -(load.q / Sbase);
                 }
-
-                // 3. Atualiza os vetores de potência especificada no NR
-                // Se pNet ficar negativo (GD > Carga), o sinal de menos inverte e vira injeção positiva!
-                P_spec[i] = -(pNet / Sbase);
-                Q_spec[i] = -(qNet / Sbase);
             }
         });
 
@@ -673,12 +659,6 @@ export function calculateLoads(nodeFeeds, faultNodes, sysData) {
                 if (shunts[id] && shunts[id].steps > 0) {
                     nodeQ -= (shunts[id].steps * shunts[id].stepSize);
                 }
-
-                // 👇 A GD ABATE A CARGA EM kW ANTES DE SOMAR NO ALIMENTADOR 👇
-                if (sysData.gd && sysData.gd[id] && sysData.gd[id].active) {
-                    nodeP -= sysData.gd[id].pg;
-                    nodeQ -= sysData.gd[id].qg;
-                }
                 
                 // 👇 A MÁGICA: Adiciona a barra em TODAS as fontes que a alimentam! 👇
                 feeds.forEach(s => {
@@ -742,12 +722,6 @@ export function reduceSystemTopology(branches, faultNodes, sysData, eventNodes =
         let qLeaf = reducedLoads[leafId]?.q || 0;
         if (shunts[leafId]) qLeaf -= (shunts[leafId].steps * shunts[leafId].stepSize);
 
-        // 👇 A GD INJETA POTÊNCIA NA FOLHA ANTES DELA SER ESMAGADA PARA O PAI 👇
-        if (sysData.gd && sysData.gd[leafId] && sysData.gd[leafId].active && !faultNodes.has(leafId)) {
-            pLeaf -= sysData.gd[leafId].pg;
-            qLeaf -= sysData.gd[leafId].qg;
-        }
-
         // 👇 A MÁGICA DA COMPENSAÇÃO DE PERDAS (I²R e I²X) 👇
         const Ppu = pLeaf / Sbase;
         const Qpu = qLeaf / Sbase;
@@ -780,12 +754,7 @@ export function reduceSystemTopology(branches, faultNodes, sysData, eventNodes =
     }
 
     const reducedBranches = Array.from(branchMap.values());
-    const prunedNodeIds = new Set(pruneHistory.map(r => r.leafId));
-    const reducedGD = {};
-    Object.entries(sysData.gd || {}).forEach(([id, gd]) => {
-        if (!prunedNodeIds.has(parseInt(id))) reducedGD[id] = gd;
-    });
-    const reducedSysData = { ...sysData, loads: reducedLoads, gd: reducedGD };
+    const reducedSysData = { ...sysData, loads: reducedLoads };
 
     return { reducedBranches, reducedSysData, pruneHistory };
 }

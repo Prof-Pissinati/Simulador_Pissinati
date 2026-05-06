@@ -38,10 +38,7 @@ export default function Sidebar({
     handleTapChange,
     handleShuntChange,
     viewMode,
-    setViewMode,
-    systemGD,
-    toggleGD,
-    handleGDChange
+    setViewMode
 }) {
     const fileInputRef = useRef(null);
     const isMini = sidebarMode !== 'full'; // 👈 Variável que identifica o estado compacto (não full)
@@ -381,66 +378,6 @@ export default function Sidebar({
                                     })()
                                 )}
 
-                                {/* 3.5 CONTROLES (Geração Distribuída) */}
-                                {systemGD && systemGD[selectedElement.id] && (
-                                    <div style={{ paddingBottom: '12px', borderBottom: `1px dashed ${darkMode ? '#444' : '#ccc'}`, marginTop: '10px' }}>
-                                        
-                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
-                                            <span style={{ fontSize: '13px', fontWeight: 'bold', color: '#b8860b', display: 'flex', alignItems: 'center', gap: '5px' }}>
-                                                ⚡ Geração Distribuída
-                                            </span>
-                                            <button 
-                                                onClick={() => toggleGD(selectedElement.id)}
-                                                style={{ background: systemGD[selectedElement.id].active ? '#ffc107' : 'transparent', color: systemGD[selectedElement.id].active ? '#000' : '#b8860b', border: '1px solid #b8860b', borderRadius: '4px', fontSize: '11px', padding: '3px 8px', cursor: 'pointer', fontWeight: 'bold', transition: 'all 0.2s' }}
-                                            >
-                                                {systemGD[selectedElement.id].active ? 'ON' : 'OFF'}
-                                            </button>
-                                        </div>
-
-                                        <div style={{ opacity: systemGD[selectedElement.id].active ? 1 : 0.4, pointerEvents: systemGD[selectedElement.id].active ? 'all' : 'none', transition: 'opacity 0.3s' }}>
-                                            
-                                            {/* SLIDER DE POTÊNCIA ATIVA (Pg) */}
-                                            <div style={{ marginBottom: '12px' }}>
-                                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
-                                                    <span style={{ fontSize: '12px', color: darkMode ? '#aaa' : '#666' }}>Potência Ativa (Pg)</span>
-                                                    <b style={{ color: '#ffd700', fontSize: '13px' }}>{systemGD[selectedElement.id].pg.toFixed(0)} <span style={{fontSize: '10px', color: '#888'}}>kW</span></b>
-                                                </div>
-                                                <input type="range" min="0" max={systemGD[selectedElement.id].sMax || 1000} step="10" 
-                                                    value={systemGD[selectedElement.id].pg}
-                                                    onChange={(e) => {
-                                                        const newVal = parseFloat(e.target.value);
-                                                        // Passamos a diferença para manter a lógica de incremento
-                                                        handleGDChange(selectedElement.id, 'pg', newVal - systemGD[selectedElement.id].pg);
-                                                    }}
-                                                    style={{ width: '100%', accentColor: '#ffd700', cursor: 'pointer', height: '4px', background: darkMode ? '#333' : '#ddd', borderRadius: '2px', appearance: 'auto' }}
-                                                />
-                                            </div>
-
-                                            {/* SLIDER DE POTÊNCIA REATIVA (Qg) */}
-                                            <div>
-                                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
-                                                    <span style={{ fontSize: '12px', color: darkMode ? '#aaa' : '#666' }}>Potência Reativa (Qg)</span>
-                                                    <b style={{ color: '#ffd700', fontSize: '13px' }}>{systemGD[selectedElement.id].qg.toFixed(0)} <span style={{fontSize: '10px', color: '#888'}}>kVAr</span></b>
-                                                </div>
-                                                <input type="range" min={-(systemGD[selectedElement.id].sMax || 1000)} max={systemGD[selectedElement.id].sMax || 1000} step="10" 
-                                                    value={systemGD[selectedElement.id].qg}
-                                                    onChange={(e) => {
-                                                        const newVal = parseFloat(e.target.value);
-                                                        // Passamos a diferença para manter a lógica de incremento
-                                                        handleGDChange(selectedElement.id, 'qg', newVal - systemGD[selectedElement.id].qg);
-                                                    }}
-                                                    style={{ width: '100%', accentColor: '#ffd700', cursor: 'pointer', height: '4px', background: darkMode ? '#333' : '#ddd', borderRadius: '2px', appearance: 'auto' }}
-                                                />
-                                            </div>
-                                            
-                                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px', color: darkMode ? '#777' : '#999', marginTop: '10px' }}>
-                                                <span>Smax: {systemGD[selectedElement.id].sMax} kVA</span>
-                                                <span>FP: {systemGD[selectedElement.id].fpMin}</span>
-                                            </div>
-                                        </div>
-                                    </div>
-                                )}
-                                
                                 {/* 4. DADOS BRUTOS */}
                                 <div style={{ display: 'flex', flexDirection: 'column' }}>
                                     <div className="inspector-row"><span>Tipo:</span><b>{isMainSource ? 'Subest. Principal' : (isFeeder ? 'Alimentador' : (systemShunts && systemShunts[selectedElement.id] ? 'Carga Shunt' : 'Carga'))}</b></div>
