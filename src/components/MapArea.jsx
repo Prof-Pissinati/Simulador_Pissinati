@@ -530,7 +530,7 @@ export default function MapArea({
                     const isFeeder = feedersList.includes(numId);
                     
                     const isPassedShunt = systemShunts && (systemShunts[nodeId] || systemShunts[String(numId)]);
-                    const hasShunt = isPassedShunt || numId === 16 || numId === 24; 
+                    const hasShunt = !!isPassedShunt;
                     
                     const gdEntry = systemGD && (systemGD[nodeId] || systemGD[String(numId)]);
                     const hasGD   = !!gdEntry;
