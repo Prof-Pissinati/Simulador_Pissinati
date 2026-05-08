@@ -383,7 +383,7 @@ function App() {
         Sbase: sBase, // 👈 Dinâmico
         shunts: systemShunts || {}, 
         sses: sses    // 👈 Dinâmico
-    }), [activeSources, systemLoads, systemShunts, systemFeeders, vBase, sBase, sses, systemGD]);
+    }), [activeSources, systemLoads, systemShunts, systemFeeders, vBase, sBase, sses]);
 
     const topology = useMemo(() => analyzeTopology(branches, faultNodes, sysData), [branches, faultNodes, sysData]);
     const { nodeFeeds, loopNodes } = topology; // Extraímos o que o App e o Painel precisam
@@ -730,10 +730,6 @@ const handleExportSequence = useCallback(() => {
     };
 
     const toggleGD = useCallback((nodeId) => {
-        // 👇 AVISA O MOTOR PARA ESQUECER O PASSADO E RECALCULAR TUDO 👇
-        CacheManager.cache.clear();
-        if (CacheManager.islandCache) CacheManager.islandCache.clear();
-
         setSystemGD(prev => {
             if (!prev[nodeId]) return prev;
             return {
@@ -741,32 +737,25 @@ const handleExportSequence = useCallback(() => {
                 [nodeId]: { ...prev[nodeId], active: !prev[nodeId].active }
             };
         });
+        // Força o redutor a recalcular a ilha afetada
         setLastEventNodes(new Set([nodeId]));
     }, []);
 
     // Função para ajustar o valor da Geração Distribuída dinamicamente
     const handleGDChange = useCallback((nodeId, field, increment) => {
-        // 👇 AVISA O MOTOR PARA ESQUECER O PASSADO E RECALCULAR TUDO 👇
-        CacheManager.cache.clear();
-        if (CacheManager.islandCache) CacheManager.islandCache.clear();
-
         setSystemGD(prev => {
             const gd = prev[nodeId];
             if (!gd) return prev;
             
             let newValue = gd[field] + increment;
             
-            if (field === 'pg') {
-                // Pg não pode ser negativo (gerador não vira carga ativa)
-                if (newValue < 0) newValue = 0;
-                if (newValue > gd.sMax) newValue = gd.sMax;
-            } else if (field === 'qg') {
-                // Qg PODE ser negativo (inversor absorvendo reativo) até o limite do Smax
-                if (newValue < -gd.sMax) newValue = -gd.sMax;
-                if (newValue > gd.sMax) newValue = gd.sMax;
-            }
+            // Trava Mínima: A geração não pode ser negativa (para não virar carga)
+            if (newValue < 0) newValue = 0;
             
-            if (newValue === gd[field]) return prev; 
+            // Trava Máxima: Limitamos pelo Smax cadastrado no gerador
+            if (newValue > gd.sMax) newValue = gd.sMax;
+            
+            if (newValue === gd[field]) return prev; // Nada mudou
             
             return {
                 ...prev,
@@ -774,6 +763,7 @@ const handleExportSequence = useCallback(() => {
             };
         });
         
+        // Acorda o Newton-Raphson avisando que a injeção de potência dessa barra mudou!
         setLastEventNodes(new Set([nodeId]));
     }, []);
 
@@ -1149,7 +1139,7 @@ const handleShuntChange = useCallback((nodeId, increment) => {
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                         <button onClick={() => welcomeFileInputRef.current.click()} style={{ width: '100%', padding: '14px', border: 'none', borderRadius: '8px', fontSize: '14px', fontWeight: 'bold', cursor: 'pointer', background: '#00bcd4', color: '#000', transition: 'transform 0.2s', boxShadow: '0 4px 10px rgba(0, 188, 212, 0.3)' }} onMouseOver={e => e.target.style.transform = 'translateY(-2px)'} onMouseOut={e => e.target.style.transform = 'translateY(0)'}> 📂 Carregar Projeto Salvo (.json) </button>
                         <button onClick={handleLoadExample} style={{ width: '100%', padding: '14px', border: `1px solid ${darkMode ? '#444' : '#ccc'}`, borderRadius: '8px', fontSize: '14px', fontWeight: 'bold', cursor: 'pointer', background: 'transparent', color: darkMode ? '#fff' : '#333', transition: 'background 0.2s' }} onMouseOver={e => e.target.style.background = darkMode ? '#333' : '#e0e0e0'} onMouseOut={e => e.target.style.background = 'transparent'}> 🚀 Iniciar Sistema Exemplo (IEEE 53) </button>
-                        <button onClick={handleLoadSystem54} style={{ width: '100%', padding: '14px', border: `1px solid ${darkMode ? '#444' : '#ccc'}`, borderRadius: '8px', fontSize: '14px', fontWeight: 'bold', cursor: 'pointer', background: 'transparent', color: darkMode ? '#00bcd4' : '#00bcd4', transition: 'background 0.2s' }} onMouseOver={e => e.target.style.background = darkMode ? '#333' : '#e0e0e0'} onMouseOut={e => e.target.style.background = 'transparent'}> 🚀 Iniciar Sistema SHUNT (IEEE 57) </button>
+                        <button onClick={handleLoadSystem54} style={{ width: '100%', padding: '14px', border: `1px solid ${darkMode ? '#444' : '#ccc'}`, borderRadius: '8px', fontSize: '14px', fontWeight: 'bold', cursor: 'pointer', background: 'transparent', color: darkMode ? '#00bcd4' : '#00bcd4', transition: 'background 0.2s' }} onMouseOver={e => e.target.style.background = darkMode ? '#333' : '#e0e0e0'} onMouseOut={e => e.target.style.background = 'transparent'}> 🚀 Iniciar Sistema 54 (com Capacitores) </button>
                         <div style={{ margin: '15px 0', display: 'flex', alignItems: 'center', color: darkMode ? '#555' : '#aaa' }}><div style={{ flex: 1, height: '1px', background: darkMode ? '#444' : '#ddd' }}></div><span style={{ padding: '0 10px', fontSize: '12px' }}> OU </span><div style={{ flex: 1, height: '1px', background: darkMode ? '#444' : '#ddd' }}></div></div>
                         <input type="file" ref={datFileInputRef} accept=".dat,.txt" style={{ display: 'none' }} onChange={handleDatFileUpload} />
                         <button onClick={() => datFileInputRef.current.click()} style={{ width: '100%', padding: '14px', border: 'none', borderRadius: '8px', fontSize: '14px', fontWeight: 'bold', cursor: 'pointer', background: darkMode ? '#ff9800' : '#ff9800', color: '#000', transition: 'transform 0.2s', boxShadow: '0 4px 10px rgba(255, 152, 0, 0.3)' }} onMouseOver={e => e.target.style.transform = 'translateY(-2px)'} onMouseOut={e => e.target.style.transform = 'translateY(0)'}> 📥 Importar Novo Sistema (.dat AMPL) </button>
@@ -1389,6 +1379,8 @@ const handleShuntChange = useCallback((nodeId, increment) => {
                         setManualWaypoints={setManualWaypoints}
                         straightSegments={straightSegments}
                         setStraightSegments={setStraightSegments}
+                        systemGD={systemGD}
+                        toggleGD={toggleGD}
                     >
                         {/* 👇 A LEGENDA AGORA É ENVIADA PARA DENTRO DO MAPA 👇 */}
                         {showLegend && (

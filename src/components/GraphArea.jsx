@@ -1139,6 +1139,31 @@ export default function GraphArea({
                                             </text>
                                         </g>
                                     )}
+                                    {/* Badge GD — mesmo padrão visual do BC */}
+                                    {systemGD[nodeId] && (
+                                        <g
+                                            transform={`translate(${pos.x + (hasShunt ? 38 : 18)}, ${pos.y - 18})`}
+                                            style={{ cursor: isEditMode ? 'default' : 'pointer', pointerEvents: 'all' }}
+                                            onClick={(e) => { if (!isEditMode) { e.stopPropagation(); toggleGD(nodeId); } }}
+                                        >
+                                            <title>{systemGD[nodeId].active ? `GD Ativa — Pg: ${systemGD[nodeId].pg} kW / Qg: ${systemGD[nodeId].qg} kVAr\nClique para desativar` : `GD Desativada — Pg: ${systemGD[nodeId].pg} kW\nClique para ativar`}</title>
+                                            {/* Círculo de fundo — idêntico ao BC */}
+                                            <circle
+                                                cx="0" cy="0" r="12"
+                                                fill={systemGD[nodeId].active
+                                                    ? (darkMode ? 'rgba(212, 212, 0, 0.2)' : 'rgba(212, 212, 0, 0.2)')
+                                                    : (darkMode ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)')}
+                                                stroke={systemGD[nodeId].active ? '#ffee00' : (darkMode ? '#555' : '#aaa')}
+                                                strokeWidth="1.5"
+                                            />
+                                            {/* Raio SVG — ziguezague simétrico no lugar do número */}
+                                            <path
+                                                d="M 1.5,-5.5 L -2,0 L 0.5,0 L -1.5,5.5 L 2,0 L -0.5,0 Z"
+                                                fill={systemGD[nodeId].active ? '#ffee00' : (darkMode ? '#888' : '#aaa')}
+                                                pointerEvents="none"
+                                            />
+                                        </g>
+                                    )}
                                 </g>
                             );
                         })}

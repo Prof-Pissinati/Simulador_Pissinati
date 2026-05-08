@@ -294,8 +294,38 @@ export default function Sidebar({
                                             <div style={{ fontSize: '9px', color: '#00bcd4', fontWeight: 'bold' }}>BC</div>
                                         </div>
                                     )}
-                                </div>
                                 
+                                
+                                {/* GD — toggle + Pg compacto */}
+                                {systemGD && systemGD[selectedElement.id] && (() => {
+                                    const gd = systemGD[selectedElement.id];
+                                    return (
+                                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px', marginTop: '4px' }}>
+                                            {/* bolinha de status clicável */}
+                                            <div
+                                                onClick={() => toggleGD(selectedElement.id)}
+                                                title={gd.active ? 'Desativar GD' : 'Ativar GD'}
+                                                style={{
+                                                    width: '20px', height: '20px', borderRadius: '50%',
+                                                    background: gd.active ? 'rgba(255,193,7,0.2)' : 'transparent',
+                                                    border: `2px solid ${gd.active ? '#ffc107' : (darkMode ? '#555' : '#ccc')}`,
+                                                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                                    cursor: 'pointer', transition: 'all 0.2s', flexShrink: 0,
+                                                }}
+                                            >
+                                                <span style={{ fontSize: '10px', lineHeight: 1 }}>⚡</span>
+                                            </div>
+                                            {/* Pg compacto */}
+                                            <div style={{ fontSize: '10px', fontWeight: 'bold', color: gd.active ? '#ffd700' : (darkMode ? '#555' : '#bbb'), fontFamily: 'monospace', textAlign: 'center', lineHeight: 1 }}>
+                                                {gd.active ? `${gd.pg.toFixed(0)}k` : 'OFF'}
+                                            </div>
+                                            <div style={{ fontSize: '8px', color: '#888', fontWeight: 'bold' }}>GD</div>
+                                        </div>
+                                    );
+                                })()}
+
+                                </div>
+
                                 {/* RODAPÉ: ÂNGULO */}
                                 <div style={{ fontSize: '10px', color: '#888', fontFamily: 'monospace', marginTop: '-5px' }}>θ: {angle.toFixed(1)}°</div>
                             </div>
@@ -382,64 +412,177 @@ export default function Sidebar({
                                 )}
 
                                 {/* 3.5 CONTROLES (Geração Distribuída) */}
-                                {systemGD && systemGD[selectedElement.id] && (
-                                    <div style={{ paddingBottom: '12px', borderBottom: `1px dashed ${darkMode ? '#444' : '#ccc'}`, marginTop: '10px' }}>
-                                        
-                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
-                                            <span style={{ fontSize: '13px', fontWeight: 'bold', color: '#b8860b', display: 'flex', alignItems: 'center', gap: '5px' }}>
-                                                ⚡ Geração Distribuída
-                                            </span>
-                                            <button 
-                                                onClick={() => toggleGD(selectedElement.id)}
-                                                style={{ background: systemGD[selectedElement.id].active ? '#ffc107' : 'transparent', color: systemGD[selectedElement.id].active ? '#000' : '#b8860b', border: '1px solid #b8860b', borderRadius: '4px', fontSize: '11px', padding: '3px 8px', cursor: 'pointer', fontWeight: 'bold', transition: 'all 0.2s' }}
-                                            >
-                                                {systemGD[selectedElement.id].active ? 'ON' : 'OFF'}
-                                            </button>
-                                        </div>
+                                {systemGD && systemGD[selectedElement.id] && (() => {
+                                    const gd = systemGD[selectedElement.id];
+                                    const sMax = gd.sMax || 1000;
 
-                                        <div style={{ opacity: systemGD[selectedElement.id].active ? 1 : 0.4, pointerEvents: systemGD[selectedElement.id].active ? 'all' : 'none', transition: 'opacity 0.3s' }}>
-                                            
-                                            {/* SLIDER DE POTÊNCIA ATIVA (Pg) */}
-                                            <div style={{ marginBottom: '12px' }}>
-                                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
-                                                    <span style={{ fontSize: '12px', color: darkMode ? '#aaa' : '#666' }}>Potência Ativa (Pg)</span>
-                                                    <b style={{ color: '#ffd700', fontSize: '13px' }}>{systemGD[selectedElement.id].pg.toFixed(0)} <span style={{fontSize: '10px', color: '#888'}}>kW</span></b>
-                                                </div>
-                                                <input type="range" min="0" max={systemGD[selectedElement.id].sMax || 1000} step="10" 
-                                                    value={systemGD[selectedElement.id].pg}
-                                                    onChange={(e) => {
-                                                        const newVal = parseFloat(e.target.value);
-                                                        // Passamos a diferença para manter a lógica de incremento
-                                                        handleGDChange(selectedElement.id, 'pg', newVal - systemGD[selectedElement.id].pg);
+                                    // Limites físicos corretos:
+                                    // Qg_max = sqrt(Smax² - Pg²)  — elipse de capacidade
+                                    const qMaxPhysical = Math.sqrt(Math.max(0, sMax * sMax - gd.pg * gd.pg));
+                                    // Pg_max = min(Smax, Smax) — sem Q poderia ir até Smax
+                                    // mas limitamos pelo FP mínimo: Pg_min_fp = |S| * fpMin
+                                    const fpMin = gd.fpMin || 0;
+
+                                    // Potência aparente atual e FP atual
+                                    const sAtual = Math.sqrt(gd.pg * gd.pg + gd.qg * gd.qg);
+                                    const fpAtual = sAtual > 0 ? gd.pg / sAtual : 1;
+                                    const fpViolation = fpMin > 0 && fpAtual < fpMin - 0.001;
+
+                                    // Cor do FP: verde ok, amarelo perto do limite, vermelho violação
+                                    const fpColor = fpViolation ? '#f44336' : (fpAtual < fpMin + 0.02 ? '#ff9800' : '#4caf50');
+
+                                    // Percentual de uso do Smax (semicírculo de capacidade)
+                                    const sUsoPct = Math.min(100, (sAtual / sMax) * 100);
+                                    const sUsoColor = sUsoPct > 95 ? '#f44336' : (sUsoPct > 80 ? '#ff9800' : '#ffd700');
+
+                                    return (
+                                        <div style={{
+                                            borderBottom: `1px dashed ${darkMode ? '#444' : '#ccc'}`,
+                                            marginTop: '4px',
+                                            paddingBottom: '14px',
+                                        }}>
+                                            {/* CABEÇALHO COM TOGGLE */}
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+                                                <span style={{ fontSize: '12px', fontWeight: 'bold', color: '#b8860b', letterSpacing: '0.04em', textTransform: 'uppercase' }}>
+                                                    ⚡ GD
+                                                </span>
+                                                {/* Toggle pill */}
+                                                <div
+                                                    onClick={() => toggleGD(selectedElement.id)}
+                                                    title={gd.active ? 'Clique para desativar a GD' : 'Clique para ativar a GD'}
+                                                    style={{
+                                                        display: 'flex', alignItems: 'center', gap: '5px',
+                                                        background: gd.active ? 'rgba(255,193,7,0.15)' : (darkMode ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)'),
+                                                        border: `1px solid ${gd.active ? '#ffc107' : (darkMode ? '#555' : '#ccc')}`,
+                                                        borderRadius: '20px', padding: '3px 10px 3px 7px',
+                                                        cursor: 'pointer', transition: 'all 0.2s',
+                                                        userSelect: 'none',
                                                     }}
-                                                    style={{ width: '100%', accentColor: '#ffd700', cursor: 'pointer', height: '4px', background: darkMode ? '#333' : '#ddd', borderRadius: '2px', appearance: 'auto' }}
-                                                />
+                                                >
+                                                    {/* bolinha de status */}
+                                                    <div style={{
+                                                        width: '7px', height: '7px', borderRadius: '50%',
+                                                        background: gd.active ? '#ffc107' : (darkMode ? '#555' : '#bbb'),
+                                                        boxShadow: gd.active ? '0 0 6px #ffc107' : 'none',
+                                                        transition: 'all 0.2s',
+                                                        flexShrink: 0,
+                                                    }}/>
+                                                    <span style={{ fontSize: '11px', fontWeight: 'bold', color: gd.active ? '#ffc107' : (darkMode ? '#666' : '#999') }}>
+                                                        {gd.active ? 'ATIVA' : 'OFF'}
+                                                    </span>
+                                                </div>
                                             </div>
 
-                                            {/* SLIDER DE POTÊNCIA REATIVA (Qg) */}
-                                            <div>
-                                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
-                                                    <span style={{ fontSize: '12px', color: darkMode ? '#aaa' : '#666' }}>Potência Reativa (Qg)</span>
-                                                    <b style={{ color: '#ffd700', fontSize: '13px' }}>{systemGD[selectedElement.id].qg.toFixed(0)} <span style={{fontSize: '10px', color: '#888'}}>kVAr</span></b>
+                                            {/* CONTEÚDO (dimmed quando desativado) */}
+                                            <div style={{ opacity: gd.active ? 1 : 0.35, pointerEvents: gd.active ? 'all' : 'none', transition: 'opacity 0.25s', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+
+                                                {/* ── POTÊNCIA ATIVA (Pg) ── */}
+                                                <div>
+                                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '5px' }}>
+                                                        <span style={{ fontSize: '11px', color: darkMode ? '#aaa' : '#777' }}>Pg (ativa)</span>
+                                                        {/* Input numérico direto */}
+                                                        <div style={{ display: 'flex', alignItems: 'baseline', gap: '3px' }}>
+                                                            <input
+                                                                type="number" min="0" max={sMax} step="1"
+                                                                value={Math.round(gd.pg)}
+                                                                onChange={(e) => {
+                                                                    const v = Math.max(0, Math.min(sMax, parseFloat(e.target.value) || 0));
+                                                                    handleGDChange(selectedElement.id, 'pg', v - gd.pg);
+                                                                }}
+                                                                style={{
+                                                                    width: '58px', textAlign: 'right',
+                                                                    background: 'transparent',
+                                                                    border: 'none', borderBottom: `1px solid ${darkMode ? '#555' : '#ccc'}`,
+                                                                    color: '#ffd700', fontSize: '14px', fontWeight: 'bold',
+                                                                    fontFamily: 'monospace', outline: 'none', padding: '0 2px',
+                                                                }}
+                                                            />
+                                                            <span style={{ fontSize: '10px', color: '#888' }}>kW</span>
+                                                        </div>
+                                                    </div>
+                                                    <input type="range" min="0" max={sMax} step="1"
+                                                        value={gd.pg}
+                                                        onChange={(e) => {
+                                                            const v = parseFloat(e.target.value);
+                                                            handleGDChange(selectedElement.id, 'pg', v - gd.pg);
+                                                        }}
+                                                        style={{ width: '100%', accentColor: '#ffd700', cursor: 'pointer', height: '3px', appearance: 'auto' }}
+                                                    />
+                                                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '9px', color: darkMode ? '#555' : '#bbb', marginTop: '2px' }}>
+                                                        <span>0</span><span>{sMax} kW</span>
+                                                    </div>
                                                 </div>
-                                                <input type="range" min={-(systemGD[selectedElement.id].sMax || 1000)} max={systemGD[selectedElement.id].sMax || 1000} step="10" 
-                                                    value={systemGD[selectedElement.id].qg}
-                                                    onChange={(e) => {
-                                                        const newVal = parseFloat(e.target.value);
-                                                        // Passamos a diferença para manter a lógica de incremento
-                                                        handleGDChange(selectedElement.id, 'qg', newVal - systemGD[selectedElement.id].qg);
-                                                    }}
-                                                    style={{ width: '100%', accentColor: '#ffd700', cursor: 'pointer', height: '4px', background: darkMode ? '#333' : '#ddd', borderRadius: '2px', appearance: 'auto' }}
-                                                />
-                                            </div>
-                                            
-                                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px', color: darkMode ? '#777' : '#999', marginTop: '10px' }}>
-                                                <span>Smax: {systemGD[selectedElement.id].sMax} kVA</span>
-                                                <span>FP: {systemGD[selectedElement.id].fpMin}</span>
+
+                                                {/* ── POTÊNCIA REATIVA (Qg) ── */}
+                                                <div>
+                                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '5px' }}>
+                                                        <span style={{ fontSize: '11px', color: darkMode ? '#aaa' : '#777' }}>Qg (reativa)</span>
+                                                        <div style={{ display: 'flex', alignItems: 'baseline', gap: '3px' }}>
+                                                            <input
+                                                                type="number" min={-qMaxPhysical} max={qMaxPhysical} step="1"
+                                                                value={Math.round(gd.qg)}
+                                                                onChange={(e) => {
+                                                                    const v = Math.max(-qMaxPhysical, Math.min(qMaxPhysical, parseFloat(e.target.value) || 0));
+                                                                    handleGDChange(selectedElement.id, 'qg', v - gd.qg);
+                                                                }}
+                                                                style={{
+                                                                    width: '58px', textAlign: 'right',
+                                                                    background: 'transparent',
+                                                                    border: 'none', borderBottom: `1px solid ${darkMode ? '#555' : '#ccc'}`,
+                                                                    color: '#ffd700', fontSize: '14px', fontWeight: 'bold',
+                                                                    fontFamily: 'monospace', outline: 'none', padding: '0 2px',
+                                                                }}
+                                                            />
+                                                            <span style={{ fontSize: '10px', color: '#888' }}>kVAr</span>
+                                                        </div>
+                                                    </div>
+                                                    <input type="range" min={-qMaxPhysical} max={qMaxPhysical} step="1"
+                                                        value={Math.max(-qMaxPhysical, Math.min(qMaxPhysical, gd.qg))}
+                                                        onChange={(e) => {
+                                                            const v = parseFloat(e.target.value);
+                                                            handleGDChange(selectedElement.id, 'qg', v - gd.qg);
+                                                        }}
+                                                        style={{ width: '100%', accentColor: '#ffd700', cursor: 'pointer', height: '3px', appearance: 'auto' }}
+                                                    />
+                                                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '9px', color: darkMode ? '#555' : '#bbb', marginTop: '2px' }}>
+                                                        <span>{-Math.round(qMaxPhysical)}</span><span>0</span><span>+{Math.round(qMaxPhysical)} kVAr</span>
+                                                    </div>
+                                                </div>
+
+                                                {/* ── BARRA DE CAPACIDADE (S/Smax) + FP ── */}
+                                                <div style={{
+                                                    background: darkMode ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.04)',
+                                                    borderRadius: '6px', padding: '8px 10px',
+                                                    display: 'flex', flexDirection: 'column', gap: '6px',
+                                                }}>
+                                                    {/* S atual / Smax */}
+                                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                                        <span style={{ fontSize: '10px', color: darkMode ? '#888' : '#999' }}>S utilizado</span>
+                                                        <span style={{ fontSize: '11px', fontWeight: 'bold', color: sUsoColor, fontFamily: 'monospace' }}>
+                                                            {sAtual.toFixed(0)} <span style={{ fontSize: '9px', color: '#888', fontWeight: 'normal' }}>/ {sMax} kVA</span>
+                                                        </span>
+                                                    </div>
+                                                    {/* Barra de progresso S */}
+                                                    <div style={{ height: '4px', background: darkMode ? '#333' : '#ddd', borderRadius: '2px', overflow: 'hidden' }}>
+                                                        <div style={{ width: `${sUsoPct}%`, height: '100%', background: sUsoColor, transition: 'width 0.3s, background 0.3s', borderRadius: '2px' }} />
+                                                    </div>
+                                                    {/* FP atual */}
+                                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '2px' }}>
+                                                        <span style={{ fontSize: '10px', color: darkMode ? '#888' : '#999' }}>
+                                                            FP atual
+                                                            {fpMin > 0 && <span style={{ color: darkMode ? '#666' : '#bbb' }}> (mín {fpMin.toFixed(2)})</span>}
+                                                        </span>
+                                                        <span style={{ fontSize: '12px', fontWeight: 'bold', color: fpColor, fontFamily: 'monospace' }}>
+                                                            {fpAtual.toFixed(3)}
+                                                            {fpViolation && <span style={{ fontSize: '9px', marginLeft: '4px' }}>⚠️</span>}
+                                                        </span>
+                                                    </div>
+                                                </div>
+
                                             </div>
                                         </div>
-                                    </div>
-                                )}
+                                    );
+                                })()}
                                 
                                 {/* 4. DADOS BRUTOS */}
                                 <div style={{ display: 'flex', flexDirection: 'column' }}>

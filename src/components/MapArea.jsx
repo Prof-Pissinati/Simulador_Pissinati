@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { MapContainer, TileLayer, Tooltip, Polyline, Marker, useMapEvents, ZoomControl } from 'react-leaflet';
 import L from 'leaflet';
-import { GEO_POSITIONS as INITIAL_GEO } from '../data/systemDataGeo';
 import { fetchStreetRoute } from '../utils/geoRouting';
 import { useGridInteraction } from '../hooks/useGridInteraction';
 import GeoImportModal from './GeoImportModal';
@@ -41,7 +40,8 @@ export default function MapArea({
     selectedElement, hoveredLineId, setHoveredLineId, hoveredNodeId, setHoveredNodeId,
     // 👇 Novas props necessárias para o SvgTooltips 👇
     loads, systemLoads, sses, allNodes, svgPositions, geoPositions, setGeoPositions, routedPaths, setRoutedPaths,
-    manualWaypoints, setManualWaypoints, straightSegments, setStraightSegments
+    manualWaypoints, setManualWaypoints, straightSegments, setStraightSegments,
+    systemGD, toggleGD
 }) {
 
     const [showGeoModal, setShowGeoModal] = useState(false);
@@ -299,7 +299,7 @@ export default function MapArea({
         setRoutedPaths(prev => { const p = {...prev}; delete p[bId]; return p; });
     };
 
-    const createCustomIcon = (nodeId, color, type, v_pu) => {
+    const createCustomIcon = (nodeId, color, type, v_pu, hasGD, gdActive, hasShunt, shuntSteps) => {
         let shape = '';
         const strokeColor = darkMode ? '#121212' : '#ffffff';
         const isBadVoltage = v_pu < 0.93 || v_pu > 1.05;
@@ -310,7 +310,33 @@ export default function MapArea({
         else if (type === 'shunt') shape = `<polygon points="10,2 18,10 10,18 2,10" fill="${color}" stroke="${strokeColor}" stroke-width="2.5" ${glowStyle}/>`;
         else shape = `<rect x="3" y="6" width="14" height="8" rx="1.5" fill="${color}" stroke="${strokeColor}" stroke-width="1.5" ${glowStyle}/>`;
 
-        return L.divIcon({ className: 'custom-node', html: `<svg width="20" height="20" viewBox="0 0 20 20" style="overflow: visible;">${shape}</svg>`, iconSize: [20, 20], iconAnchor: [10, 10] });
+        // Badge GD — mesmo padrão visual do GraphArea: círculo teal + raio SVG
+        const gdBadge = hasGD ? `
+            <circle cx="18" cy="2" r="5"
+                fill="${gdActive ? 'rgba(212, 212, 0, 0.2)' : 'rgba(80,80,80,0.2)'}"
+                stroke="${gdActive ? '#ffee00' : '#555'}"
+                stroke-width="1.2"/>
+            <path d="M17.8,-1.5 L16.2,1.8 L17.2,1.8 L16,5.5 L17.8,2.2 L16.8,2.2 Z"
+                fill="${gdActive ? '#ffee00' : '#666'}"/>
+        ` : '';
+
+        // Badge Shunt — círculo azul + número de passos
+        const shuntBadge = hasShunt ? `
+            <circle cx="${hasGD ? 25 : 18}" cy="2" r="5"
+                fill="rgba(0,188,212,0.2)"
+                stroke="#00bcd4"
+                stroke-width="1.2"/>
+            <text x="${hasGD ? 25 : 18}" y="5.5"
+                text-anchor="middle"
+                font-size="5.5"
+                font-weight="bold"
+                fill="#00bcd4"
+                font-family="sans-serif">
+                ${shuntSteps}
+            </text>
+        ` : '';
+
+        return L.divIcon({ className: 'custom-node', html: `<svg width="20" height="20" viewBox="0 0 20 20" style="overflow: visible;">${shape}${gdBadge}${shuntBadge}</svg>`, iconSize: [20, 20], iconAnchor: [10, 10] });
     };
 
     const waypointIcon = L.divIcon({ className: 'custom-waypoint', html: `<div style="background-color: #ff9800; width: 10px; height: 10px; border-radius: 50%; border: 2px solid #fff; box-shadow: 0 0 4px rgba(0,0,0,0.5);"></div>`, iconSize: [10, 10], iconAnchor: [5, 5] });
@@ -506,6 +532,10 @@ export default function MapArea({
                     const isPassedShunt = systemShunts && (systemShunts[nodeId] || systemShunts[String(numId)]);
                     const hasShunt = isPassedShunt || numId === 16 || numId === 24; 
                     
+                    const gdEntry = systemGD && (systemGD[nodeId] || systemGD[String(numId)]);
+                    const hasGD   = !!gdEntry;
+                    const gdActive = hasGD && gdEntry.active;
+
                     const isHovered = String(hoveredNodeId) === String(numId);
                     const isSelected = selectedElement?.type === 'node' && String(selectedElement?.id) === String(numId);
                     
@@ -515,8 +545,8 @@ export default function MapArea({
 
                     return (
                         <Marker 
-                            key={`node-${nodeId}-${isHovered}`} 
-                            position={[pos.lat, pos.lng]} draggable={isEditMode} icon={createCustomIcon(nodeId, color, type, v_pu)}
+                            key={`node-${nodeId}-${isHovered}-${gdActive}-${systemShunts?.[nodeId]?.steps}`}
+                            position={[pos.lat, pos.lng]} draggable={isEditMode} icon={createCustomIcon(nodeId, color, type, v_pu, hasGD, gdActive, hasShunt, systemShunts?.[nodeId]?.steps ?? systemShunts?.[String(numId)]?.steps ?? '')}
                             eventHandlers={{ 
                                 mouseover: () => { if (setHoveredNodeId) setHoveredNodeId(numId); if (setHoveredLineId) setHoveredLineId(null);},
                                 mouseout: () => { if (setHoveredNodeId) setHoveredNodeId(null); },
@@ -524,7 +554,6 @@ export default function MapArea({
                                 dragend: (e) => setGeoPositions(prev => ({ ...prev, [nodeId]: { lat: e.target.getLatLng().lat, lng: e.target.getLatLng().lng } })),
                                 
                                 click: async (e) => { 
-                                    // 👇 FECHA O SEMÁFORO AQUI TAMBÉM!
                                     ignoreMapClickRef.current = true;
                                     setTimeout(() => { ignoreMapClickRef.current = false; }, 100);
 
@@ -534,6 +563,11 @@ export default function MapArea({
                                             const connectedBranches = branches.filter(b => b.from === numId || b.to === numId);
                                             for (const b of connectedBranches) await forceRecalculateBranch(b);
                                         }
+                                        return;
+                                    }
+                                    // Alt+Click: toggle GD (se existir)
+                                    if (e.originalEvent.altKey && hasGD && toggleGD) {
+                                        toggleGD(numId);
                                         return;
                                     }
                                     handleNodeClick(numId, e); 

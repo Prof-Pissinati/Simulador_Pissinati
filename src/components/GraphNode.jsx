@@ -125,27 +125,6 @@ const GraphNode = memo(function GraphNode({
                 </g>
             )}
 
-            {/* 👇 NOVO: Marcador de Geração Distribuída 👇 */}
-            {hasGD && (
-                <g transform={`translate(${baseSourceR * 0.6}, ${-baseSourceR * 0.6})`}>
-                    <circle 
-                        r={baseSourceR * 0.4} 
-                        fill={gdActive ? '#FFD700' : '#888'} 
-                        stroke={darkMode ? '#121212' : '#fff'}
-                        strokeWidth="1"
-                    />
-                    <text
-                        textAnchor="middle"
-                        dominantBaseline="central"
-                        fontSize={baseSourceR * 0.45}
-                        fill="#000"
-                        style={{ pointerEvents: 'none', userSelect: 'none', fontWeight: 'bold' }}
-                    >
-                        ⚡
-                    </text>
-                </g>
-            )}
-
             {isDetailed && (
                 <text
                     x="0" y="0"
