@@ -10,8 +10,8 @@ import { exportSVG, generateTextReport } from './utils/exportUtils';
 import './index.css';
 import { useFileImport } from './hooks/useFileImport';
 
-//import { calculateForceLayout } from './utils/autoLayout';
 import { runAsyncLayout } from './utils/runLayoutWorker';
+import { expandTopology, contractTopology, relaxExpandedNodes, findIntersections, compactPositions } from './utils/autoLayout';
 
 import { useShortcuts } from './hooks/useShortcuts';
 import { useColorIntelligence, getBaseColor } from './hooks/useColorIntelligence';
@@ -78,6 +78,7 @@ function App() {
     const [toast, setToast] = useState(null);
     const [calcMethod, setCalcMethod] = useState('NR'); 
     const [isEditMode, setIsEditMode] = useState(false);
+    const [showCrossings, setShowCrossings] = useState(true);
 
     const [layoutHistory, setLayoutHistory] = useState([]); 
     const [layoutMode, setLayoutMode] = useState('project'); 
@@ -95,6 +96,15 @@ function App() {
         if (macroGraph) return macroGraph.positions; // 👈 Posição amassada ganha prioridade
         return layoutMode === 'project' ? projectPositions : (organicPositions || projectPositions);
     }, [layoutMode, projectPositions, organicPositions, macroGraph]);
+
+    
+    // ==========================================
+    // 🎯 RADAR DE CRUZAMENTOS (CALCULADOR)
+    // ==========================================
+    const intersections = useMemo(() => {
+        if (!activePositions || !branches) return [];
+        return findIntersections(activePositions, branches);
+    }, [activePositions, branches]);
 
     const activeWaypoints = useMemo(() => layoutMode === 'project' ? projectWaypoints : (organicWaypoints || projectWaypoints), [layoutMode, projectWaypoints, organicWaypoints]);
     
@@ -997,13 +1007,22 @@ const handleShuntChange = useCallback((nodeId, increment) => {
             if (data.feeders) setSystemFeeders(data.feeders);
             if (data.sses) setSses(data.sses);
             if (data.shunts) setSystemShunts(data.shunts);
-            if (data.gd) setSystemGD(data.gd); // 👈 Recupera a GD do JSON
+            if (data.gd) setSystemGD(data.gd);
 
             if (data.branches) setBranches(data.branches);
             if (data.faults) setFaultNodes(new Set(data.faults));
             
             const layoutData = data.layout || data;
-            
+
+            // 👇 1. PROTEÇÃO DO MODO MACRO (ESQUELETO) 👇
+            if (macroGraph) {
+                if (layoutData.positions) {
+                    setMacroGraph(prev => ({ ...prev, positions: layoutData.positions }));
+                }
+                return; // 👈 Impede que as posições originais sejam sobrescritas pelas "amassadas"
+            }
+
+            // 👇 2. ATUALIZAÇÃO NORMAL 👇
             if (layoutData.positions) {
                 if (layoutMode === 'organic') setOrganicPositions(layoutData.positions);
                 else setProjectPositions(layoutData.positions);
@@ -1017,7 +1036,7 @@ const handleShuntChange = useCallback((nodeId, increment) => {
         window.addEventListener('applyGraphLayout', handleApplyFullState);
         return () => window.removeEventListener('applyGraphLayout', handleApplyFullState);
         
-    }, [layoutMode]);
+    }, [layoutMode, macroGraph]); // 👈 IMPORTANTE: Adicione o macroGraph aqui no array!
 
     useEffect(() => {
         const handleApplyOrganic = (e) => { 
@@ -1251,13 +1270,78 @@ const handleShuntChange = useCallback((nodeId, increment) => {
             </div>
 
             {macroGraph && (
-                    <div style={{ position: 'absolute', top: '20px', left: '50%', transform: 'translateX(-50%)', zIndex: 2000, background: '#ff5722', color: '#fff', padding: '10px 20px', borderRadius: '20px', fontWeight: 'bold', display: 'flex', gap: '15px', alignItems: 'center', boxShadow: '0 4px 15px rgba(0,0,0,0.3)' }}>
-                        <span>⚠️ Modo de Depuração: Grafo Compactado (Coarsening)</span>
-                        <button onClick={() => setMacroGraph(null)} style={{ background: '#fff', color: '#ff5722', border: 'none', borderRadius: '15px', padding: '5px 15px', fontWeight: 'bold', cursor: 'pointer', transition: 'transform 0.2s' }} onMouseOver={e => e.target.style.transform='scale(1.05)'} onMouseOut={e => e.target.style.transform='scale(1)'}>
-                            Sair do Modo
-                        </button>
-                    </div>
-                )}
+                <div style={{ position: 'absolute', top: '20px', left: '50%', transform: 'translateX(-50%)', zIndex: 2000, background: '#ff5722', color: '#fff', padding: '10px 20px', borderRadius: '20px', fontWeight: 'bold', display: 'flex', gap: '15px', alignItems: 'center', boxShadow: '0 4px 15px rgba(0,0,0,0.3)' }}>
+                    <span>⚠️ Modo de Depuração: Grafo Compactado (Coarsening)</span>
+                    
+                    {/* 👇 BOTÃO DE APLICAR (A MÁGICA) 👇 */}
+                    <button 
+                        onClick={() => {
+                            const basePos = layoutMode === 'organic' ? (organicPositions || projectPositions) : projectPositions;
+                            
+                            let coarseInfo = macroGraph.macroData?.coarseData;
+                            
+                            // Blindagem 1: Recálculo Determinístico
+                            if (!coarseInfo || (!coarseInfo.prunedMap && !coarseInfo.chainMap)) {
+                                console.log("⚙️ Reconstruindo mapa de poda do esqueleto...");
+                                const contraction = contractTopology(allNodes, branches, sources);
+                                coarseInfo = contraction.coarseData;
+                            }
+                            
+                            // Desdobra o esqueleto de volta para os 54 nós
+                            const newFullPositions = expandTopology(
+                                macroGraph.positions,
+                                coarseInfo, 
+                                basePos
+                            );
+
+                            
+                            // 👇 BLINDAGEM 2: Prevenção de Abismo
+                            const safeFullPositions = { ...basePos, ...newFullPositions };
+                            
+                            // 👇 O TOQUE DE MESTRE DA ENGENHARIA 👇
+                            const skeletonIds = Object.keys(macroGraph.positions);
+                            
+                            // ❌ Removemos a captura das sanfonas daqui! 
+                            // Agora SOMENTE as âncoras do Esqueleto ganham "chumbo nos pés"
+                            const fixedIds = [...skeletonIds];
+                            
+                            // Roda a física RESTRITA (agora passando o coarseInfo)
+                            const finalRelaxedPositions = relaxExpandedNodes(
+                                safeFullPositions, 
+                                fixedIds, // Apenas esqueleto travado
+                                allNodes, 
+                                branches,
+                                coarseInfo // 👈 IMPORTANTE: Passe a memória da poda aqui!
+                            );
+                            
+                            // Salva no estado oficial as posições RELAXADAS
+                            if (layoutMode === 'organic') {
+                                setOrganicPositions(finalRelaxedPositions);
+                            } else {
+                                setProjectPositions(finalRelaxedPositions);
+                            }
+                            
+                            // Encerra o modo de depuração
+                            setMacroGraph(null);
+                        }} 
+                        style={{ background: '#4caf50', color: '#fff', border: 'none', borderRadius: '15px', padding: '5px 15px', fontWeight: 'bold', cursor: 'pointer', transition: 'transform 0.2s' }} 
+                        onMouseOver={e => e.target.style.transform='scale(1.05)'} 
+                        onMouseOut={e => e.target.style.transform='scale(1)'}
+                    >
+                        ✔ Expandir e Salvar
+                    </button>
+
+                    {/* 👇 BOTÃO DE DESCARTAR 👇 */}
+                    <button 
+                        onClick={() => setMacroGraph(null)} 
+                        style={{ background: '#fff', color: '#ff5722', border: 'none', borderRadius: '15px', padding: '5px 15px', fontWeight: 'bold', cursor: 'pointer', transition: 'transform 0.2s' }} 
+                        onMouseOver={e => e.target.style.transform='scale(1.05)'} 
+                        onMouseOut={e => e.target.style.transform='scale(1)'}
+                    >
+                        ❌ Descartar
+                    </button>
+                </div>
+            )}
 
             <div className="graph-wrapper">
                 {/* ... Botões flutuantes mantidos ... */}
@@ -1285,6 +1369,56 @@ const handleShuntChange = useCallback((nodeId, increment) => {
                 {printFrameMode !== 'none' && (
                     <div className="hide-on-print" style={{ position: 'absolute', top: '15px', left: '50%', transform: 'translateX(-50%)', zIndex: 9000, background: '#ff9800', color: '#000', padding: '6px 20px', borderRadius: '20px', fontWeight: 'bold', fontSize: '13px', boxShadow: '0 4px 15px rgba(0,0,0,0.3)' }}> Visualização de Impressão: {printFrameMode === 'landscape' ? 'Paisagem' : 'Retrato'} (Ctrl+P para Imprimir) </div>
                 )}
+
+                {/* 👇 COLE O NOVO PAINEL AQUI 👇 */}
+                {/* PAINEL DE POLIMENTO DE LAYOUT (SÓ APARECE NO MODO EDIÇÃO) */}
+                {isEditMode && (
+                    <div className="hide-on-print" style={{ position: 'absolute', bottom: '20px', left: '50%', transform: 'translateX(-50%)', zIndex: 1000, display: 'flex', gap: '15px', alignItems: 'center', background: darkMode ? 'rgba(30, 30, 30, 0.8)' : 'rgba(255,255,255,0.8)', padding: '10px 20px', borderRadius: '30px', backdropFilter: 'blur(10px)', border: `1px solid ${darkMode ? '#444' : '#ddd'}`, boxShadow: '0 4px 15px rgba(0,0,0,0.2)' }}>
+                        
+                        {/* Indicador de Cruzamentos (Agora é um botão interativo) */}
+                        <button 
+                            onClick={() => setShowCrossings(!showCrossings)}
+                            title="Mostrar/Ocultar marcadores de cruzamento"
+                            style={{ 
+                                background: intersections.length > 0 ? (showCrossings ? '#f44336' : '#d32f2f') : '#4caf50', 
+                                color: '#fff', 
+                                padding: '6px 12px', 
+                                borderRadius: '20px', 
+                                fontSize: '12px', 
+                                fontWeight: 'bold', 
+                                display: 'flex', 
+                                alignItems: 'center', 
+                                gap: '5px',
+                                border: 'none',
+                                cursor: intersections.length > 0 ? 'pointer' : 'default',
+                                transition: 'all 0.2s',
+                                opacity: showCrossings || intersections.length === 0 ? 1 : 0.6
+                            }}
+                            onMouseOver={e => intersections.length > 0 && (e.target.style.transform='scale(1.05)')}
+                            onMouseOut={e => intersections.length > 0 && (e.target.style.transform='scale(1)')}
+                        >
+                            {intersections.length > 0 
+                                ? `⚠️ ${intersections.length} Cruzamentos ${showCrossings ? '(Ocultar)' : '(Mostrar)'}` 
+                                : '✅ Sem Cruzamentos'}
+                        </button>
+
+                        {/* Motor Compactador */}
+                        <button 
+                            onClick={() => {
+                                const newPos = compactPositions(activePositions, 0.90); // 0.90 = Encolhe 10%
+                                if (layoutMode === 'organic') setOrganicPositions(newPos);
+                                else setProjectPositions(newPos);
+                            }}
+                            title="Aproxima as barras em 10% para o centro"
+                            style={{ background: '#00bcd4', color: '#000', border: 'none', borderRadius: '20px', padding: '6px 15px', fontSize: '13px', fontWeight: 'bold', cursor: 'pointer', transition: 'transform 0.2s' }}
+                            onMouseOver={e => e.target.style.transform='scale(1.05)'}
+                            onMouseOut={e => e.target.style.transform='scale(1)'}
+                        >
+                            🗜️ Compactar (10%)
+                        </button>
+                    </div>
+                )}
+                {/* 👆 FIM DO PAINEL 👆 */}
 
                 {/* 👇 A MÁGICA ACONTECE AQUI: ALTERNÂNCIA DE TELAS 👇 */}
                 {viewMode === 'schematic' ? (
@@ -1323,6 +1457,8 @@ const handleShuntChange = useCallback((nodeId, increment) => {
                         handleShuntChange={handleShuntChange}
                         systemGD={systemGD}    // 👈 Adicione esta linha
                         toggleGD={toggleGD}    // 👈 Adicione esta linha (se for usar dentro do GraphArea)
+                        intersections={intersections}
+                        showCrossings={showCrossings}
                     >
                         {showLegend && (
                             <div className="legend" style={{ position: 'absolute', bottom: '20px', right: '20px', zIndex: 1000, pointerEvents: 'all', background: darkMode ? '#121212' : '#ffffff', border: '1px solid #444', borderRadius: '8px', boxShadow: '0 6px 20px rgba(0,0,0,0.2)' }} onMouseDown={e=>e.stopPropagation()} onMouseUp={e=>e.stopPropagation()} onClick={e=>e.stopPropagation()} onWheel={e=>e.stopPropagation()} onDoubleClick={e=>e.stopPropagation()} >

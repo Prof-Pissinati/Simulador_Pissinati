@@ -831,22 +831,25 @@ export function contractTopology(nodesArray, branchesArray, sourcesArray) {
     };
 }
 
-export function expandTopology(coarsePos, coarseData, originalPos) {
-    const { prunedMap, chainMap } = coarseData;
-    const finalPos = { ...coarsePos };
 
+export function expandTopology(coarsePos, coarseData, originalPos) {
+    const finalPos = { ...coarsePos };
+    if (!coarseData) return finalPos; 
+    
+    const { prunedMap, chainMap } = coarseData;
+
+    // 1. Expansão Linear Simples (O Trilho)
     if (chainMap) {
         Object.keys(chainMap).forEach(macroId => {
             const { chain, anchors } = chainMap[macroId];
-            
             if (anchors.length === 2) {
                 const p1 = coarsePos[anchors[0]] || originalPos[anchors[0]];
                 const p2 = coarsePos[anchors[1]] || originalPos[anchors[1]];
-                
                 if (p1 && p2) {
                     const segments = chain.length + 1;
                     chain.forEach((nodeId, idx) => {
                         const t = (idx + 1) / segments;
+                        // Matemática Pura: Alinha perfeitamente sem erros!
                         finalPos[nodeId] = { x: p1.x + (p2.x - p1.x) * t, y: p1.y + (p2.y - p1.y) * t };
                     });
                 }
@@ -857,11 +860,11 @@ export function expandTopology(coarsePos, coarseData, originalPos) {
         });
     }
 
+    // 2. Expansão das Folhas (Poda)
     if (prunedMap) {
         Object.keys(prunedMap).forEach(anchor => {
             const anchorNewPos = finalPos[anchor] || coarsePos[anchor];
             const anchorOldPos = originalPos[anchor];
-            
             if (anchorNewPos && anchorOldPos) {
                 const deltaX = anchorNewPos.x - anchorOldPos.x;
                 const deltaY = anchorNewPos.y - anchorOldPos.y;
@@ -874,4 +877,177 @@ export function expandTopology(coarsePos, coarseData, originalPos) {
     }
 
     return finalPos;
+}
+
+// =========================================================
+// RELAXAMENTO FÍSICO COM EIXOS RESTRITOS (A Sua Ideia!)
+// =========================================================
+export function relaxExpandedNodes(expandedPositions, skeletonNodeIds, allNodesArray, branchesArray, coarseData) {
+    const skeletonSet = new Set(skeletonNodeIds.map(String));
+
+    // 1. Prepara a inteligência das Sanfonas (O Trilho Base e a Normal)
+    const chainNodesInfo = {};
+    if (coarseData && coarseData.chainMap) {
+        Object.values(coarseData.chainMap).forEach(macro => {
+            const { chain, anchors } = macro;
+            if (anchors.length === 2) {
+                const p1 = expandedPositions[anchors[0]];
+                const p2 = expandedPositions[anchors[1]];
+                if (p1 && p2) {
+                    const dx = p2.x - p1.x;
+                    const dy = p2.y - p1.y;
+                    const len = Math.sqrt(dx * dx + dy * dy) || 1;
+                    const nx = -dy / len; // Eixo Transversal X (Normal)
+                    const ny = dx / len;  // Eixo Transversal Y (Normal)
+                    const segments = chain.length + 1;
+
+                    chain.forEach((nodeId, idx) => {
+                        const t = (idx + 1) / segments;
+                        // Guarda a regra imutável para cada barra da sanfona
+                        chainNodesInfo[String(nodeId)] = { p1, p2, t, nx, ny };
+                    });
+                }
+            }
+        });
+    }
+
+    // 2. Prepara os nós para o motor físico
+    const d3Nodes = allNodesArray.map(id => {
+        const strId = String(id);
+        const pos = expandedPositions[id] || expandedPositions[strId] || { x: 0, y: 0 };
+        const isFixed = skeletonSet.has(strId);
+
+        return {
+            id: strId,
+            x: pos.x, y: pos.y,
+            fx: isFixed ? pos.x : null,
+            fy: isFixed ? pos.y : null,
+            chainInfo: chainNodesInfo[strId] // Anexa as regras ao nó!
+        };
+    });
+
+    const d3Links = branchesArray
+        .filter(b => b.state === 1 || b.initialState === 1)
+        .map(b => ({ source: String(b.from), target: String(b.to) }));
+
+    // 3. Configura o motor físico (Repulsão forte!)
+    const simulation = d3.forceSimulation(d3Nodes)
+        .force("link", d3.forceLink(d3Links).id(d => d.id).distance(30).strength(0.8))
+        .force("charge", d3.forceManyBody().strength(-250)) // Afasta nós sobrepostos
+        .force("collide", d3.forceCollide().radius(25));
+
+    // 👇 4. A MÁGICA: FORÇA CUSTOMIZADA TRANSVERSAL 👇
+    // A cada milissegundo, essa força intercepta o cálculo da física:
+    simulation.force("transversal", () => {
+        for (let i = 0; i < d3Nodes.length; i++) {
+            const node = d3Nodes[i];
+            if (node.chainInfo) {
+                const { p1, p2, t, nx, ny } = node.chainInfo;
+
+                // A posição longitudinal imutável no trilho
+                const baseX = p1.x + (p2.x - p1.x) * t;
+                const baseY = p1.y + (p2.y - p1.y) * t;
+
+                // O quanto a física tentou empurrar o nó para longe
+                const vx = node.x - baseX;
+                const vy = node.y - baseY;
+
+                // Captura APENAS a força que atuou para os lados (Produto Escalar na Normal)
+                const distTransversal = vx * nx + vy * ny;
+
+                // Limita a "barriga" a no máximo 100 pixels para não voar para fora da tela
+                const clampedDist = Math.max(-100, Math.min(100, distTransversal));
+
+                // Sobrescreve a posição final: Anula zigue-zagues!
+                node.x = baseX + clampedDist * nx;
+                node.y = baseY + clampedDist * ny;
+                
+                // Reduz inércia para o nó não tremer na tela
+                node.vx *= 0.1;
+                node.vy *= 0.1;
+            }
+        }
+    });
+
+    simulation.stop();
+
+    // 5. Roda a física instantaneamente
+    for (let i = 0; i < 150; ++i) {
+        simulation.tick();
+    }
+
+    // 6. Devolve posições perfeitas
+    const relaxedPositions = {};
+    d3Nodes.forEach(n => {
+        const originalId = isNaN(n.id) ? n.id : Number(n.id);
+        relaxedPositions[originalId] = { x: n.x, y: n.y };
+    });
+
+    return relaxedPositions;
+}
+
+// =========================================================
+// FERRAMENTAS DE POLIMENTO (CRUZAMENTOS E COMPACTAÇÃO)
+// =========================================================
+
+// 1. Detecta o ponto exato (x, y) onde duas linhas se cruzam
+export function findIntersections(positions, branches) {
+    const intersections = [];
+    const activeBranches = branches;
+
+    for (let i = 0; i < activeBranches.length; i++) {
+        for (let j = i + 1; j < activeBranches.length; j++) {
+            const b1 = activeBranches[i];
+            const b2 = activeBranches[j];
+
+            // Se compartilham o mesmo nó, não é um cruzamento (é uma bifurcação)
+            if (b1.from === b2.from || b1.from === b2.to || b1.to === b2.from || b1.to === b2.to) continue;
+
+            const A = positions[b1.from]; const B = positions[b1.to];
+            const C = positions[b2.from]; const D = positions[b2.to];
+
+            if (!A || !B || !C || !D) continue;
+
+            // Fórmula de Interseção de Linhas de Bézier/Planares
+            const den = (A.x - B.x) * (C.y - D.y) - (A.y - B.y) * (C.x - D.x);
+            if (den === 0) continue; // Linhas paralelas
+
+            const t = ((A.x - C.x) * (C.y - D.y) - (A.y - C.y) * (C.x - D.x)) / den;
+            const u = -((A.x - B.x) * (A.y - C.y) - (A.y - B.y) * (A.x - C.x)) / den;
+
+            // Se t e u estão entre 0 e 1 (exclusivo), houve cruzamento real no meio do trecho!
+            if (t > 0 && t < 1 && u > 0 && u < 1) {
+                intersections.push({
+                    x: A.x + t * (B.x - A.x),
+                    y: A.y + t * (B.y - A.y),
+                    b1: `${b1.from}-${b1.to}`,
+                    b2: `${b2.from}-${b2.to}`
+                });
+            }
+        }
+    }
+    return intersections;
+}
+
+// 2. Aproxima os nós do centro (Mantém o formato exato, apenas reduz o tamanho geral)
+export function compactPositions(positions, factor = 0.90) { // 0.90 = reduz 10% do tamanho
+    let cx = 0, cy = 0, count = 0;
+    
+    // Calcula o Centro de Massa (Centroide)
+    Object.values(positions).forEach(p => {
+        cx += p.x; cy += p.y; count++;
+    });
+    if (count === 0) return positions;
+    cx /= count; cy /= count;
+
+    // Escala cada nó em direção ao centro
+    const newPos = {};
+    Object.keys(positions).forEach(id => {
+        newPos[id] = {
+            x: cx + (positions[id].x - cx) * factor,
+            y: cy + (positions[id].y - cy) * factor
+        };
+    });
+    
+    return newPos;
 }

@@ -120,6 +120,7 @@ const GraphEdge = memo(function GraphEdge({
                 stroke={color}
                 strokeWidth={strokeWidth}
                 fill="none"
+                vectorEffect="non-scaling-stroke"
                 strokeDasharray={branch.state === 1 ? 'none' : '8,6'}
                 pointerEvents="none"
                 strokeLinejoin="round"

@@ -42,6 +42,8 @@ export default function GraphArea({
     systemLoads, sses, feedersList = [], systemShunts, nodeFeeds, clusterThreshold = 0.35, faultNodes = new Set(), 
     systemGD,    // 👈 Adicione aqui
     toggleGD,    // 👈 Adicione aqui
+    intersections = [],
+    showCrossings
 }) {
     const svgRef = useRef(null);
     const measureRef = useRef(null); 
@@ -1085,6 +1087,17 @@ export default function GraphArea({
                                     />
                                 );
                             })}
+
+                            {/* 👇 COLE O RADAR EXATAMENTE AQUI 👇 */}
+                            {/* RENDERIZADOR DE CRUZAMENTOS (RADAR) */}
+                            {isEditMode && showCrossings && intersections && intersections.length > 0 && intersections.map((pt, idx) => (
+                                <g key={`cross-${idx}`} transform={`translate(${pt.x}, ${pt.y})`} style={{ pointerEvents: 'none' }}>
+                                    <circle r="12" fill="rgba(244, 67, 54, 0.2)" />
+                                    <path d="M-6,-6 L6,6 M6,-6 L-6,6" stroke="#f44336" strokeWidth="3" strokeLinecap="round" />
+                                    <title>Cruzamento: {pt.b1} com {pt.b2}</title>
+                                </g>
+                            ))}
+                            {/* 👆 FIM DO RADAR 👆 */}
 
 
                             {displayData.visibleNodes.map(nodeId => {
