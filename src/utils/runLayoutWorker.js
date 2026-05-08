@@ -1,8 +1,11 @@
+// 1. Importe o worker no topo do arquivo com a flag mágica do Vite
+import AutoLayoutWorker from "./layoutWorker.js?worker&inline";
+
 // src/utils/runLayoutWorker.js
 export function runAsyncLayout(type, nodesArray, branchesArray, sourcesArray, config = {}) {
     return new Promise((resolve, reject) => {
         // 1. Acorda um novo Web Worker
-        const worker = new Worker(new URL('./layoutWorker.js', import.meta.url), { type: 'module' });
+        const worker = new AutoLayoutWorker();
         const jobId = Date.now().toString();
 
         // 2. Retira funções do Config (pois funções quebram a clonagem do postMessage)
