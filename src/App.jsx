@@ -1416,6 +1416,21 @@ const handleShuntChange = useCallback((nodeId, increment) => {
                         >
                             🗜️ Compactar (10%)
                         </button>
+
+                        {/* Motor Expansor (NOVO) */}
+                        <button 
+                            onClick={() => {
+                                const newPos = compactPositions(activePositions, 1.10); // 1.10 = Expande 10%
+                                if (layoutMode === 'organic') setOrganicPositions(newPos);
+                                else setProjectPositions(newPos);
+                            }}
+                            title="Afasta as barras em 10% a partir do centro"
+                            style={{ background: '#00bcd4', color: '#000', border: 'none', borderRadius: '20px', padding: '6px 15px', fontSize: '13px', fontWeight: 'bold', cursor: 'pointer', transition: 'transform 0.2s' }}
+                            onMouseOver={e => e.target.style.transform='scale(1.05)'}
+                            onMouseOut={e => e.target.style.transform='scale(1)'}
+                        >
+                            🌌 Expandir (10%)
+                        </button>
                     </div>
                 )}
                 {/* 👆 FIM DO PAINEL 👆 */}

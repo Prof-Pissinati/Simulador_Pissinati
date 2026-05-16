@@ -1,34 +1,5 @@
 import * as d3 from 'd3-force';
-
-// =============================================================================
-// FERRAMENTAS GENÉRICAS DE GEOMETRIA (Otimização de Performance)
-// =============================================================================
-
-export function getBoundingBox(pos, targetNodes, padding = 0) {
-    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-    targetNodes.forEach(id => {
-        const p = pos[id];
-        if (p) {
-            if (p.x < minX) minX = p.x; if (p.x > maxX) maxX = p.x;
-            if (p.y < minY) minY = p.y; if (p.y > maxY) maxY = p.y;
-        }
-    });
-    return {
-        minX: minX === Infinity ? 0 : minX - padding,
-        maxX: maxX === -Infinity ? 0 : maxX + padding,
-        minY: minY === Infinity ? 0 : minY - padding,
-        maxY: maxY === -Infinity ? 0 : maxY + padding
-    };
-}
-
-export function getCentroid(pos, targetNodes) {
-    let cx = 0, cy = 0, count = 0;
-    targetNodes.forEach(id => {
-        const p = pos[id];
-        if (p) { cx += p.x; cy += p.y; count++; }
-    });
-    return count > 0 ? { x: cx / count, y: cy / count } : { x: 0, y: 0 };
-}
+export { calculateHierarchicalLayout } from './hierarchicalLayout';
 
 const D3_DEFAULTS = { distance: 10, charge: -40, openWeight: 0.65, collide: 40 };
 
@@ -73,80 +44,153 @@ function applyProportionalScaling(nodesArray, branchesArray, actualPositions, ta
     return scaledPos;
 }
 
-// =============================================================================
-// MOTOR FORCE (ORGÂNICO) - COM CONGELAMENTO DE SELEÇÃO
-// =============================================================================
 export function calculateForceLayout(nodesArray, branchesArray, sourcesArray, config = {}) {
-    // 👇 Garantia absoluta de definição das variáveis 👇
-    const distVal = config.distance !== undefined ? config.distance : 10;
-    const targetCharge = config.charge !== undefined ? config.charge : -40; 
-    const col = config.collide !== undefined ? config.collide : 40;
-    const openWeight = config.openWeight !== undefined ? config.openWeight : 0.65; 
-    const currentPos = config.currentPos || {};
+    // Blindagem de Tipos
+    nodesArray = nodesArray.map(String);
+    branchesArray = branchesArray.map(b => ({ ...b, id: String(b.id), from: String(b.from), to: String(b.to) }));
+    sourcesArray = sourcesArray.map(String);
+    
+    // Fator de Escala
+    const escalaDivisor = 20; 
+    const sizeFactor = Math.max(1, Math.sqrt(nodesArray.length / escalaDivisor));
 
-    const selectedSet = config.selectedNodes?.length > 0 ? new Set(config.selectedNodes.map(String)) : null;
+    const distVal = (config.distance !== undefined ? config.distance : 40) * sizeFactor;
+    const targetCharge = (config.charge !== undefined ? config.charge : -300) * sizeFactor; 
+    const col = (config.collide !== undefined ? config.collide : 30) * sizeFactor;
+    const openWeight = config.openWeight !== undefined ? config.openWeight : 0.65; 
+    const currentPos = config.currentPos || null;
 
     const nodeDegree = {};
-    (nodesArray || []).forEach(id => nodeDegree[String(id)] = 0);
-    (branchesArray || []).forEach(b => {
-        nodeDegree[String(b.from)] = (nodeDegree[String(b.from)] || 0) + 1;
-        nodeDegree[String(b.to)] = (nodeDegree[String(b.to)] || 0) + 1;
+    nodesArray.forEach(id => nodeDegree[id] = 0);
+    branchesArray.forEach(b => {
+        nodeDegree[b.from] = (nodeDegree[b.from] || 0) + 1;
+        nodeDegree[b.to] = (nodeDegree[b.to] || 0) + 1;
     });
 
-    const d3Nodes = (nodesArray || []).map(id => {
-        const strId = String(id);
-        const nodeObj = { id: strId, isSource: (sourcesArray || []).map(String).includes(strId), degree: nodeDegree[strId] || 0 };
-        if (currentPos[strId]) { 
-            nodeObj.x = currentPos[strId].x; 
-            nodeObj.y = currentPos[strId].y; 
-            // Congela as barras não selecionadas
-            if (selectedSet && !selectedSet.has(strId)) {
-                nodeObj.fx = nodeObj.x;
-                nodeObj.fy = nodeObj.y;
-            }
-        }
+    const d3Nodes = nodesArray.map(id => {
+        // 👇 NOVO: crossingCount anota o "estresse" do nó
+        const nodeObj = { id: id.toString(), isSource: sourcesArray.includes(id), degree: nodeDegree[id] || 0, crossingCount: 0 };
+        if (currentPos && currentPos[id]) { nodeObj.x = currentPos[id].x; nodeObj.y = currentPos[id].y; }
         return nodeObj;
     });
     
-    const d3Links = (branchesArray || []).map(b => ({ source: String(b.from), target: String(b.to), isOpen: b.state === 0 }));
+    const d3Links = branchesArray.map(b => ({ 
+        source: b.from.toString(), 
+        target: b.to.toString(), 
+        id: b.id,
+        isOpen: String(b.state) === '0' || String(b.initialState) === '0',
+        weight: b.__weight || 1,
+        isCrossing: false // 👇 NOVO: Flag de alerta da linha
+    }));
 
+    // Forças Base
     const chargeForce = d3.forceManyBody()
-        .strength(d => targetCharge * (1 + (d.degree * 5)))
-        .distanceMax(distVal * 6);
+        .strength(d => d.isSource ? targetCharge * 30 : targetCharge * (1 + (d.degree * 1.5)))
+        .distanceMax(distVal * 15); 
 
-    const linkForce = d3.forceLink(d3Links).id(d => d.id).distance(d => {
-        const degSource = nodeDegree[d.source.id || d.source] || 0;
-        const degTarget = nodeDegree[d.target.id || d.target] || 0;
-        return (d.isOpen ? distVal * 1.5 : distVal) + ((degSource + degTarget) * 10);
-    }).strength(d => d.isOpen ? openWeight : ((nodeDegree[d.source.id] <= 2 || nodeDegree[d.target.id] <= 2) ? 1.5 : 1));
+    const linkForce = d3.forceLink(d3Links)
+        .id(d => d.id)
+        .distance(d => {
+            const degSource = nodeDegree[d.source.id || d.source] || 0;
+            const degTarget = nodeDegree[d.target.id || d.target] || 0;
+            const baseDist = (d.isOpen ? distVal * 1.5 : distVal) + ((degSource + degTarget) * 5); 
+            return baseDist * d.weight; 
+        })
+        .strength(d => d.isOpen ? openWeight : 1.5); 
+
+    const collideForce = d3.forceCollide().radius(col);
 
     const simulation = d3.forceSimulation(d3Nodes)
         .force("link", linkForce).force("charge", chargeForce)
         .force("center", d3.forceCenter(0, 0))
-        .force("collide", d3.forceCollide().radius(col)).stop();
+        .force("collide", collideForce).stop();
 
-    const maxChargeMulti = 5; 
-    const totalTicks = 500; 
-    const phaseTicks = totalTicks / 3;
+    // ===============================================================
+    // FASE 1: Assentamento Inicial (300 ciclos)
+    // O sistema monta a geometria bruta.
+    // ===============================================================
+    for (let i = 0; i < 300; ++i) {
+        simulation.tick(); 
+    }
 
-    for (let i = 0; i < totalTicks; ++i) {
-        let currentAlpha = 1; let phaseMultiplier;
-        if (i < phaseTicks) { phaseMultiplier = 1 + (maxChargeMulti - 1) * (i / phaseTicks); } 
-        else if (i < phaseTicks * 2) { phaseMultiplier = maxChargeMulti; } 
-        else {
-            const progress = (i - phaseTicks * 2) / phaseTicks;
-            phaseMultiplier = maxChargeMulti - (maxChargeMulti - 1) * progress;
-            currentAlpha = 1 - progress; 
+    // ===============================================================
+    // FASE 2: O Radar de Cruzamentos (Geometria Analítica)
+    // ===============================================================
+    let crossingsCount = 0;
+    
+    // Zera contadores (segurança)
+    d3Links.forEach(l => l.isCrossing = false);
+    d3Nodes.forEach(n => n.crossingCount = 0);
+
+    for (let i = 0; i < d3Links.length; i++) {
+        const l1 = d3Links[i];
+        for (let j = i + 1; j < d3Links.length; j++) {
+            const l2 = d3Links[j];
+            
+            // Se as duas linhas dividem a mesma barra, formando um "V", não é cruzamento.
+            if (l1.source === l2.source || l1.source === l2.target || l1.target === l2.source || l1.target === l2.target) continue;
+
+            // segmentsIntersect verifica a colisão no plano cartesiano usando a posição final (x,y)
+            if (segmentsIntersect(l1.source, l1.target, l2.source, l2.target)) {
+                l1.isCrossing = true;
+                l2.isCrossing = true;
+                l1.source.crossingCount++;
+                l1.target.crossingCount++;
+                l2.source.crossingCount++;
+                l2.target.crossingCount++;
+                crossingsCount++;
+            }
         }
-        chargeForce.strength(d => targetCharge * (1 + (d.degree * 5)) * phaseMultiplier);
-        simulation.alpha(Math.max(0.01, currentAlpha)).tick(); 
+    }
+
+    console.log(`[Motor Force] Radar ativado: ${crossingsCount} cruzamentos detectados no esqueleto.`);
+
+    // ===============================================================
+    // FASE 3 e 4: Mutação e Desembaraço (Somente se houver cruzamentos)
+    // ===============================================================
+    if (crossingsCount > 0) {
+        // Altera as regras da física!
+        
+        // 1. Injeta "bombas de repulsão" nos nós engavetados
+        chargeForce.strength(d => {
+            let base = d.isSource ? targetCharge * 30 : targetCharge * (1 + (d.degree * 1.5));
+            if (d.crossingCount > 0) {
+                // Multiplica a força de repulsão dependendo do nível de confusão do nó
+                base *= (1 + (d.crossingCount * 3)); 
+            }
+            return base;
+        });
+
+        // 2. Transforma as linhas cruzadas em hastes gigantes para forçar espaço
+        linkForce.distance(d => {
+            const degSource = nodeDegree[d.source.id || d.source] || 0;
+            const degTarget = nodeDegree[d.target.id || d.target] || 0;
+            const baseDist = (d.isOpen ? distVal * 1.5 : distVal) + ((degSource + degTarget) * 5); 
+            let finalDist = baseDist * d.weight;
+            
+            if (d.isCrossing) {
+                finalDist *= 3.5; // Cabo cruzado exige quase 4x mais espaço!
+            }
+            return finalDist;
+        });
+
+        // Reaquece o motor (Aquece a "temperatura" da simulação)
+        simulation.alpha(0.8);
+
+        // Roda mais 300 ciclos com as novas leis atuando como alavancas
+        for (let i = 0; i < 300; ++i) {
+            simulation.tick();
+        }
+        
+        console.log("[Motor Force] Operação de desembaraço concluída.");
+    } else {
+        console.log("[Motor Force] Grafo limpo na primeira passada!");
     }
 
     const positions = {};
-    d3Nodes.forEach(n => positions[String(n.id)] = { x: n.x, y: n.y });
+    d3Nodes.forEach(n => positions[Number(n.id)] = { x: n.x, y: n.y });
     return positions;
 }
-
 // =========================================================
 // FASE 4: SWAP GLOBAL INTELIGENTE
 // =========================================================
@@ -249,288 +293,579 @@ function countNodeOverlaps(positions, branches, nodeIds) {
     return count;
 }
 
-export async function applySmartCompaction(pos, nodesArrayRaw, branchesArrayRaw, sourcesArrayRaw, gridSize, maxIter, onProgress, config = {}) {
-    const nodesArray = (nodesArrayRaw || []).map(String);
-    const branchesArray = (branchesArrayRaw || []).map(b => ({ ...b, from: String(b.from), to: String(b.to) }));
-    const sourcesArray = (sourcesArrayRaw || []).map(String);
+export async function applySmartCompaction(pos, nodesArray, branchesArray, sourcesArray, gridSize, maxIter, onProgress, feederMap = {}, initialCrossings = Infinity) {
+    let allowedCrossings = initialCrossings;
 
-    const selectedSet = config.selectedNodes?.length > 0 ? new Set(config.selectedNodes.map(String)) : null;
-    const movableNodes = selectedSet ? nodesArray.filter(id => selectedSet.has(id)) : nodesArray;
+    // Restrição dura inicial: atropelamentos presentes no estado de entrada
+    // Nenhum movimento pode aumentar esse número
+    let hardOverlapLimit = countNodeOverlaps(pos, branchesArray, nodesArray);
 
-    // 👇 LOG 1: VERIFICAÇÃO DE SELEÇÃO 👇
-    console.log(`%c[TELEMETRIA] Iniciando Compactador. Total de Barras: ${nodesArray.length} | Barras na Seleção (movableNodes): ${movableNodes.length}`, "color: #00bcd4; font-weight: bold;");
-
-    const getGlobalCrossings = (currentPos) => findIntersections(currentPos, branchesArray).length;
-    const initialCrossings = getGlobalCrossings(pos);
-    console.log(`%c[AUDITORIA] Cruzamentos Iniciais: ${initialCrossings}`, "color: #ffeb3b; font-weight: bold;");
-
-    const myEdgesMap = {}; 
-    const otherEdgesMap = {};
-    nodesArray.forEach(id => {
-        myEdgesMap[id] = branchesArray.filter(b => b.from === id || b.to === id);
-        otherEdgesMap[id] = branchesArray.filter(b => b.from !== id && b.to !== id);
-    });
-
-    const getLocalCost = (id, testX, testY, currentPos) => {
-        let cost = 0; const testPos = { x: testX, y: testY };
-        const myEdges = myEdgesMap[id]; const otherEdges = otherEdgesMap[id];
-
-        for (const b of myEdges) {
-            const isFrom = b.from === id;
-            const p1 = isFrom ? testPos : currentPos[b.from];
-            const p2 = isFrom ? currentPos[b.to] : testPos;
-
-            const distance = Math.sqrt((p1.x - p2.x)**2 + (p1.y - p2.y)**2);
-            // Todas as linhas têm o mesmo peso agora
-            cost += distance;
-
-            const dx = Math.abs(p1.x - p2.x); const dy = Math.abs(p1.y - p2.y);
-            if (dx > 0.1 && dy > 0.1) cost += Math.abs(dx - dy) < 0.1 ? 2000 : 20000;
-
-            for (const oId of nodesArray) {
-                if (oId !== b.from && oId !== b.to && getDistToSegment(currentPos[oId], p1, p2) < 5) {
-                    cost += sourcesArray.includes(oId) ? 500000 : 200000;
-                }
-            }
-            for (const ob of otherEdges) {
-                const p3 = currentPos[ob.from], p4 = currentPos[ob.to];
-                if (p3 && p4 && segmentsIntersect(p1, p2, p3, p4)) {
-                    cost += 100000; 
-                }
-            }
-        }
-        return cost;
-    };
-
+    // Função de custo estritamente focada em distâncias e estética ortogonal
     const getSystemCost = (currentPos) => {
         let cost = 0;
         branchesArray.forEach(b => {
             const p1 = currentPos[b.from], p2 = currentPos[b.to];
             if (!p1 || !p2) return;
-            const distance = Math.sqrt((p1.x - p2.x)**2 + (p1.y - p2.y)**2);
-            cost += distance;
+            const distance = Math.sqrt(Math.pow(p1.x - p2.x, 2) + Math.pow(p1.y - p2.y, 2));
+            cost += b.state === 1 ? distance * 4 : distance * 0.1;
+            
+            const dx = Math.abs(p1.x - p2.x), dy = Math.abs(p1.y - p2.y);
+            if (dx > 0.1 && dy > 0.1) cost += Math.abs(dx - dy) < 0.1 ? 2000 : 20000;
         });
         return cost;
     };
 
+    const isOccupied = (tx, ty, currentPos) => nodesArray.some(n => currentPos[n].x === tx && currentPos[n].y === ty);
+
+    let currentSystemCost = getSystemCost(pos);
     let passes = 0;
     let improved = true;
-    let currentTotalCrossings = initialCrossings;
 
     while (improved && passes < maxIter) {
         improved = false;
         passes++;
-        await new Promise(r => setTimeout(r, 0));
-        if (onProgress) onProgress(passes, "Compactando...", `Cruzamentos: ${currentTotalCrossings}`);
 
-        // Calcula a BBox
+        await new Promise(resolve => setTimeout(resolve, 0)); 
+        if (onProgress) onProgress(passes, "Compactando Sistema...", `Tolerância Máxima: ${allowedCrossings} Cruzamentos`);
+
         let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-        movableNodes.forEach(id => {
-            const p = pos[id];
-            if (p.x < minX) minX = p.x; if (p.x > maxX) maxX = p.x;
-            if (p.y < minY) minY = p.y; if (p.y > maxY) maxY = p.y;
+        nodesArray.forEach(id => {
+            if (pos[id].x < minX) minX = pos[id].x; if (pos[id].x > maxX) maxX = pos[id].x;
+            if (pos[id].y < minY) minY = pos[id].y; if (pos[id].y > maxY) maxY = pos[id].y;
         });
 
-        // 👇 LOG 2: VERIFICAÇÃO DA CAIXA (BBOX) 👇
-        if (passes === 1) {
-            console.log(`%c[TELEMETRIA BBOX] Largura: ${maxX - minX}px | Altura: ${maxY - minY}px (De X:${minX} até X:${maxX} / De Y:${minY} até Y:${maxY})`, "color: #ff9800; font-weight: bold;");
-        }
-
-        const isOccupied = (tx, ty, currentPos) => nodesArray.some(n => currentPos[n].x === tx && currentPos[n].y === ty);
-
-        for (const id of movableNodes) {
+        // 1. MOVIMENTOS LOCAIS (Ajustes de Grid)
+        for (const id of nodesArray) {
             const orig = { ...pos[id] };
-            const currentMyCost = getLocalCost(id, orig.x, orig.y, pos);
-            let bestLocalCost = currentMyCost;
-            let bestPos = null;
-
-            for (let dx = -2; dx <= 2; dx++) {
-                for (let dy = -2; dy <= 2; dy++) {
+            for (let dx = -1; dx <= 1; dx++) {
+                for (let dy = -1; dy <= 1; dy++) {
                     if (dx === 0 && dy === 0) continue;
+                    
                     const tx = orig.x + dx * gridSize, ty = orig.y + dy * gridSize;
-                    if (tx < (minX - gridSize*2) || tx > (maxX + gridSize*2) || ty < (minY - gridSize*2) || ty > (maxY + gridSize*2)) continue;
-
+                    if (tx < minX || tx > maxX || ty < minY || ty > maxY) continue;
+                    
                     if (!isOccupied(tx, ty, pos)) {
                         const testPos = { ...pos, [id]: { x: tx, y: ty } };
-                        const testCrossings = getGlobalCrossings(testPos);
-                        if (testCrossings > currentTotalCrossings) continue;
+                        
+                        // Restrição DURA: vetado se introduz ou aumenta atropelamentos
+                        const newOverlaps = countNodeOverlaps(testPos, branchesArray, nodesArray);
+                        if (newOverlaps > hardOverlapLimit) continue;
 
-                        const testCost = getLocalCost(id, tx, ty, pos);
-                        if (testCrossings < currentTotalCrossings || testCost < bestLocalCost - 5) {
-                            bestLocalCost = testCost;
-                            bestPos = { x: tx, y: ty };
-                            currentTotalCrossings = testCrossings;
+                        // Gatekeeper de cruzamentos X (restrição suave)
+                        const c = findIntersections(testPos, branchesArray).length;
+                        
+                        if (c <= allowedCrossings) {
+                            const cost = getSystemCost(testPos);
+                            if (cost < currentSystemCost - 5) {
+                                pos[id] = { x: tx, y: ty };
+                                currentSystemCost = cost;
+                                allowedCrossings = c;
+                                hardOverlapLimit = newOverlaps; // aperta o cinto também nos atropelamentos
+                                improved = true;
+                            }
                         }
                     }
                 }
             }
-            if (bestPos) { pos[id] = bestPos; improved = true; }
         }
 
-        let currentSystemCost = getSystemCost(pos);
+        // 2. A GUILHOTINA BLINDADA (Fatiamento de Tela)
+        const trySlice = (testPos) => {
+            // Verifica se a guilhotina não esmagou dois nós na mesma coordenada
+            const uniqueSpots = new Set(Object.values(testPos).map(p => `${p.x},${p.y}`));
+            if (uniqueSpots.size !== nodesArray.length) return false;
 
-        const trySlice = (slice, axis, step, isGreater = false) => {
-            const candidatePos = {};
-            nodesArray.forEach(id => {
-                candidatePos[id] = { ...pos[id] };
-                if (!selectedSet || selectedSet.has(id)) {
-                    if (isGreater ? candidatePos[id][axis] <= slice : candidatePos[id][axis] >= slice) {
-                        candidatePos[id][axis] += step;
-                    }
+            // Restrição DURA: vetado se introduz ou aumenta atropelamentos
+            const newOverlaps = countNodeOverlaps(testPos, branchesArray, nodesArray);
+            if (newOverlaps > hardOverlapLimit) return false;
+
+            // Gatekeeper de cruzamentos X
+            const c = findIntersections(testPos, branchesArray).length;
+            if (c <= allowedCrossings) {
+                const cost = getSystemCost(testPos);
+                if (cost < currentSystemCost - 1) {
+                    currentSystemCost = cost;
+                    allowedCrossings = c;
+                    hardOverlapLimit = newOverlaps;
+                    Object.assign(pos, testPos);
+                    return true;
                 }
-            });
-
-            const spots = new Set();
-            for (const id of nodesArray) {
-                const key = `${Math.round(candidatePos[id].x)},${Math.round(candidatePos[id].y)}`;
-                if (spots.has(key)) return; 
-                spots.add(key);
             }
-
-            const testCrossings = getGlobalCrossings(candidatePos);
-            if (testCrossings > currentTotalCrossings) return;
-
-            const cost = getSystemCost(candidatePos);
-            if (testCrossings < currentTotalCrossings || cost < currentSystemCost - 1) {
-                currentSystemCost = cost;
-                currentTotalCrossings = testCrossings;
-                Object.assign(pos, candidatePos);
-                improved = true;
-            }
+            return false;
         };
 
-        // Varredura da BBox (Atua apenas dentro da caixa selecionada!)
-        for(let s=maxX; s>minX; s-=gridSize) trySlice(s, 'x', -gridSize);
-        for(let s=minX; s<maxX; s+=gridSize) trySlice(s, 'x', gridSize, true);
-        for(let s=maxY; s>minY; s-=gridSize) trySlice(s, 'y', -gridSize);
-        for(let s=minY; s<maxY; s+=gridSize) trySlice(s, 'y', gridSize, true);
+        for (let slice = maxX; slice > minX; slice -= gridSize) {
+            const candidatePos = {}; nodesArray.forEach(id => { candidatePos[id] = { ...pos[id] }; if (candidatePos[id].x >= slice) candidatePos[id].x -= gridSize; });
+            if(trySlice(candidatePos)) improved = true;
+        }
+        for (let slice = minX; slice < maxX; slice += gridSize) {
+            const candidatePos = {}; nodesArray.forEach(id => { candidatePos[id] = { ...pos[id] }; if (candidatePos[id].x <= slice) candidatePos[id].x += gridSize; });
+            if(trySlice(candidatePos)) improved = true;
+        }
+        for (let slice = maxY; slice > minY; slice -= gridSize) {
+            const candidatePos = {}; nodesArray.forEach(id => { candidatePos[id] = { ...pos[id] }; if (candidatePos[id].y >= slice) candidatePos[id].y -= gridSize; });
+            if(trySlice(candidatePos)) improved = true;
+        }
+        for (let slice = minY; slice < maxY; slice += gridSize) {
+            const candidatePos = {}; nodesArray.forEach(id => { candidatePos[id] = { ...pos[id] }; if (candidatePos[id].y <= slice) candidatePos[id].y += gridSize; });
+            if(trySlice(candidatePos)) improved = true;
+        }
     }
-    
-    console.log(`%c[AUDITORIA] Finalizado. Cruzamentos Finais: ${currentTotalCrossings}`, "color: #4caf50; font-weight: bold;");
     return pos;
 }
 
 // =============================================================================
-// MOTOR ORTOGONAL (Expansão Geométrica + Snap + Compactador)
+// NOVO MOTOR ORTOGONAL DISCRETO
+// EXPAND → ALIGN → COMPACT
 // =============================================================================
-export async function calculateOrthogonalLayout(nodesArrayRaw, branchesArrayRaw, sourcesArrayRaw, config = {}) {
-    // Blindagem de tipos
-    const nodesArray = (nodesArrayRaw || []).map(String);
-    const branchesArray = (branchesArrayRaw || []).map(b => ({ ...b, from: String(b.from), to: String(b.to) }));
-    const sourcesArray = (sourcesArrayRaw || []).map(String);
-    
+export async function calculateOrthogonalLayout(
+    nodesArray,
+    branchesArray,
+    sourcesArray,
+    config = {}
+) {
+    nodesArray = nodesArray.map(String);
+
+    branchesArray = branchesArray.map(b => ({
+        ...b,
+        id: String(b.id),
+        from: String(b.from),
+        to: String(b.to)
+    }));
+
     const gridSize = config.gridSize || 100;
-    const selectedSet = config.selectedNodes?.length > 0 ? new Set(config.selectedNodes.map(String)) : null;
-    const movableNodes = selectedSet ? nodesArray.filter(id => selectedSet.has(id)) : nodesArray;
+    const onProgress = config.onProgress || null;
 
-    // 1. Inicializa posições (lê da interface ou zera)
+    // =========================================================
+    // BASE INICIAL
+    // =========================================================
     let pos = {};
-    if (config.currentPos) {
-        Object.keys(config.currentPos).forEach(k => pos[String(k)] = { ...config.currentPos[k] });
+
+    if (config.currentPos && Object.keys(config.currentPos).length > 0) {
+        nodesArray.forEach(id => {
+            const p = config.currentPos[id];
+            pos[id] = {
+                x: Math.round((p?.x || 0) / gridSize) * gridSize,
+                y: Math.round((p?.y || 0) / gridSize) * gridSize
+            };
+        });
     } else {
-        nodesArray.forEach(id => pos[id] = { x: 0, y: 0 });
+        // Seed simples em grade
+        nodesArray.forEach((id, idx) => {
+            pos[id] = {
+                x: (idx % 10) * gridSize,
+                y: Math.floor(idx / 10) * gridSize
+            };
+        });
     }
 
-    if (movableNodes.length === 0) return pos;
+    // =========================================================
+    // FUNÇÕES AUXILIARES
+    // =========================================================
 
-    // ==========================================
-    // FASE 1: EXPANSÃO GEOMÉTRICA (Afastamento)
-    // ==========================================
-    if (config.onProgress) config.onProgress(1, "Ortogonal", "Afastando barras muito próximas...");
+    const distSq = (a, b) => {
+        const dx = a.x - b.x;
+        const dy = a.y - b.y;
+        return dx * dx + dy * dy;
+    };
 
-    // Acha o centro da massa das barras que vão se mover
-    let cx = 0, cy = 0;
-    movableNodes.forEach(id => { cx += pos[id].x; cy += pos[id].y; });
-    cx /= movableNodes.length; 
-    cy /= movableNodes.length;
+    const centerOfMass = () => {
+        let cx = 0, cy = 0;
 
-    let minDist = 0;
-    let limitador = 0;
+        nodesArray.forEach(id => {
+            cx += pos[id].x;
+            cy += pos[id].y;
+        });
 
-    // Expande 10% em relação ao centroide enquanto houver barras mais perto que o gridSize
-    while (minDist < gridSize && limitador < 100) {
-        minDist = Infinity;
-        for (let i = 0; i < movableNodes.length; i++) {
-            for (let j = i + 1; j < movableNodes.length; j++) {
-                const idA = movableNodes[i];
-                const idB = movableNodes[j];
-                const d = Math.sqrt((pos[idA].x - pos[idB].x)**2 + (pos[idA].y - pos[idB].y)**2);
-                
-                // Ignora distâncias menores que 1 (casos em que as barras nasceram no mesmo pixel 0,0)
-                if (d < minDist && d > 1) {
-                    minDist = d;
-                }
-            }
+        return {
+            x: cx / nodesArray.length,
+            y: cy / nodesArray.length
+        };
+    };
+
+    const occupiedMap = () => {
+        const map = new Set();
+
+        nodesArray.forEach(id => {
+            map.add(`${pos[id].x},${pos[id].y}`);
+        });
+
+        return map;
+    };
+
+    const isOccupied = (x, y, ignoreId = null) => {
+        for (const id of nodesArray) {
+            if (id === ignoreId) continue;
+
+            if (
+                pos[id].x === x &&
+                pos[id].y === y
+            ) return true;
         }
 
-        // Força uma pequena separação inicial se a distância calculada foi nula
-        if (minDist === Infinity || minDist === 0) minDist = 10; 
+        return false;
+    };
 
-        // Se ainda está espremido, aplica o "Zoom Out" de 10%
-        if (minDist < gridSize) {
-            movableNodes.forEach(id => {
-                pos[id].x = cx + (pos[id].x - cx) * 1.1;
-                pos[id].y = cy + (pos[id].y - cy) * 1.1;
-            });
-        }
-        limitador++;
+    const countCrossings = () => {
+        return findIntersections(pos, branchesArray).length;
+    };
+
+    // =========================================================
+    // FASE 1 — EXPANSÃO LOCAL
+    // =========================================================
+    if (onProgress) {
+        onProgress(1, "Ortogonal", "Expandindo barras...");
     }
 
-    // ==========================================
-    // FASE 2: ENQUADRAMENTO NO GRID (Snap)
-    // ==========================================
-    if (config.onProgress) config.onProgress(2, "Ortogonal", "Enquadrando no Grid absoluto...");
-    const occupied = new Set();
+    let expanded = true;
+    let safety = 0;
 
-    // Trava as paredes fixas (nós não selecionados) no grid mais próximo
-    nodesArray.forEach(id => {
-        if (selectedSet && !selectedSet.has(id)) {
-            const snapX = Math.round(pos[id].x / gridSize) * gridSize;
-            const snapY = Math.round(pos[id].y / gridSize) * gridSize;
-            occupied.add(`${snapX},${snapY}`);
-            pos[id] = { x: snapX, y: snapY };
-        }
-    });
+    while (expanded && safety < 20) {
+        expanded = false;
+        safety++;
 
-    // Ordena os nós móveis: do centro para a borda (evita que a periferia roube vagas centrais)
-    const sortedIds = [...movableNodes].sort((a, b) => {
-        return (Math.pow(pos[a].x - cx, 2) + Math.pow(pos[a].y - cy, 2)) -
-               (Math.pow(pos[b].x - cx, 2) + Math.pow(pos[b].y - cy, 2));
-    });
+        for (let i = 0; i < nodesArray.length; i++) {
+            for (let j = i + 1; j < nodesArray.length; j++) {
 
-    // Acha um slot vazio no grid com busca em espiral (anéis radiais)
-    sortedIds.forEach(id => {
-        let baseX = Math.round(pos[id].x / gridSize) * gridSize;
-        let baseY = Math.round(pos[id].y / gridSize) * gridSize;
-        let ring = 0; let found = false;
+                const idA = nodesArray[i];
+                const idB = nodesArray[j];
 
-        while (!found) {
-            for (let dx = -ring; dx <= ring && !found; dx++) {
-                for (let dy = -ring; dy <= ring && !found; dy++) {
-                    if (Math.abs(dx) === ring || Math.abs(dy) === ring) {
-                        let checkX = baseX + (dx * gridSize);
-                        let checkY = baseY + (dy * gridSize);
-                        let key = `${checkX},${checkY}`;
-                        
-                        if (!occupied.has(key)) {
-                            occupied.add(key); 
-                            pos[id] = { x: checkX, y: checkY }; 
-                            found = true;
-                        }
+                const pA = pos[idA];
+                const pB = pos[idB];
+
+                const dx = pB.x - pA.x;
+                const dy = pB.y - pA.y;
+
+                const dist = Math.sqrt(dx * dx + dy * dy);
+
+                if (dist < gridSize * 0.95) {
+
+                    expanded = true;
+
+                    const moveX =
+                        Math.abs(dx) >= Math.abs(dy)
+                            ? (dx >= 0 ? gridSize : -gridSize)
+                            : 0;
+
+                    const moveY =
+                        Math.abs(dy) > Math.abs(dx)
+                            ? (dy >= 0 ? gridSize : -gridSize)
+                            : 0;
+
+                    const nx = pB.x + moveX;
+                    const ny = pB.y + moveY;
+
+                    if (!isOccupied(nx, ny, idB)) {
+                        pos[idB] = { x: nx, y: ny };
                     }
                 }
             }
-            ring++;
-            if(ring > 200) break; // Trava de emergência para mapas titânicos
+        }
+    }
+
+// =========================================================
+// FASE 2 — ORTOGONALIZAÇÃO COM RESTRIÇÃO DE CRUZAMENTOS
+// =========================================================
+if (onProgress) {
+    onProgress(2, "Ortogonal", "Otimizando eixos...");
+}
+
+let currentCrossings = countCrossings();
+
+let currentOverlaps =
+    countNodeOverlaps(
+        pos,
+        branchesArray,
+        nodesArray
+    );
+
+const orthogonalityScore = () => {
+
+    let score = 0;
+
+    branchesArray.forEach(b => {
+
+        const p1 = pos[b.from];
+        const p2 = pos[b.to];
+
+        if (!p1 || !p2) return;
+
+        const dx = Math.abs(p1.x - p2.x);
+        const dy = Math.abs(p1.y - p2.y);
+
+        // perfeitamente ortogonal
+        if (dx === 0 || dy === 0) {
+
+            score += 1000;
+
+        }
+        // penaliza diagonal
+        else {
+
+            score -= Math.min(dx, dy) * 25;
         }
     });
 
-    // ==========================================
-    // FASE 3: COMPACTAÇÃO INTELIGENTE
-    // ==========================================
-    if (config.onProgress) config.onProgress(3, "Ortogonal", "Iniciando compactação...");
-    return await applySmartCompaction(pos, nodesArray, branchesArray, sourcesArray, gridSize, 8, config.onProgress, config);
+    return score;
+};
+
+let currentScore = orthogonalityScore();
+
+for (let pass = 0; pass < 30; pass++) {
+
+    let improved = false;
+
+    for (const id of nodesArray) {
+
+        const original = { ...pos[id] };
+
+        const moves = [
+            [ gridSize, 0 ],
+            [-gridSize, 0 ],
+            [0, gridSize],
+            [0,-gridSize]
+        ];
+
+        for (const [mx, my] of moves) {
+
+            const tx = original.x + mx;
+            const ty = original.y + my;
+
+            if (isOccupied(tx, ty, id)) {
+                continue;
+            }
+
+            // aplica movimento candidato
+            pos[id] = { x: tx, y: ty };
+
+            const crossings = countCrossings();
+
+            const overlaps =
+                countNodeOverlaps(
+                    pos,
+                    branchesArray,
+                    nodesArray
+                );
+
+            const score = orthogonalityScore();
+
+            // =====================================================
+            // HARD CONSTRAINTS
+            // =====================================================
+
+            // nunca piora cruzamentos
+            if (crossings > currentCrossings) {
+                pos[id] = original;
+                continue;
+            }
+
+            // nunca aceita barra em cima de linha
+            if (overlaps > currentOverlaps) {
+                pos[id] = original;
+                continue;
+            }
+
+            // =====================================================
+            // CRITÉRIO DE ACEITAÇÃO
+            // =====================================================
+
+            const moveImproved =
+
+                // crossing melhorou
+                (crossings < currentCrossings) ||
+
+                // crossing igual → melhora ortogonalidade
+                (
+                    crossings === currentCrossings &&
+                    overlaps === currentOverlaps &&
+                    score > currentScore
+                );
+
+            if (moveImproved) {
+
+                currentScore = score;
+                currentCrossings = crossings;
+                currentOverlaps = overlaps;
+
+                improved = true;
+
+                break;
+
+            } else {
+
+                pos[id] = original;
+            }
+        }
+    }
+
+    if (!improved) {
+        break;
+    }
 }
+
+    // =========================================================
+    // FASE 3 — RESOLUÇÃO DE CRUZAMENTOS
+    // =========================================================
+    if (onProgress) {
+        onProgress(3, "Ortogonal", "Resolvendo cruzamentos...");
+    }
+
+    for (let iter = 0; iter < 20; iter++) {
+
+        let improved = false;
+
+        for (const id of nodesArray) {
+
+            const original = { ...pos[id] };
+
+            const moves = [
+                [ gridSize, 0 ],
+                [-gridSize, 0 ],
+                [0,  gridSize],
+                [0, -gridSize]
+            ];
+
+            for (const [mx, my] of moves) {
+
+                const tx = original.x + mx;
+                const ty = original.y + my;
+
+                if (isOccupied(tx, ty, id)) continue;
+
+                pos[id] = { x: tx, y: ty };
+
+                const crossings = countCrossings();
+                const overlaps = countNodeOverlaps(
+                    pos,
+                    branchesArray,
+                    nodesArray
+                );
+
+
+                if (crossings < currentCrossings) {
+
+                    currentCrossings = crossings;
+                    improved = true;
+                    break;
+
+                } else {
+                    pos[id] = original;
+                }
+            }
+        }
+
+        if (!improved) break;
+    }
+
+    // =========================================================
+    // FASE 4 — COMPACTAÇÃO CENTRÍPETA
+    // =========================================================
+    if (onProgress) {
+        onProgress(4, "Ortogonal", "Compactando sistema...");
+    }
+
+    currentCrossings = countCrossings();
+
+    for (let pass = 0; pass < 50; pass++) {
+
+        let moved = false;
+
+        const center = centerOfMass();
+
+        for (const id of nodesArray) {
+
+            const p = pos[id];
+
+            const dx = center.x - p.x;
+            const dy = center.y - p.y;
+
+            const stepX =
+                Math.abs(dx) > Math.abs(dy)
+                    ? (dx > 0 ? gridSize : -gridSize)
+                    : 0;
+
+            const stepY =
+                Math.abs(dy) >= Math.abs(dx)
+                    ? (dy > 0 ? gridSize : -gridSize)
+                    : 0;
+
+            const tx = p.x + stepX;
+            const ty = p.y + stepY;
+
+            if (isOccupied(tx, ty, id)) continue;
+
+            const original = { ...p };
+
+            pos[id] = { x: tx, y: ty };
+
+            const crossings = countCrossings();
+            const overlaps = countNodeOverlaps(
+                pos,
+                branchesArray,
+                nodesArray
+            );
+
+
+            const score = orthogonalityScore();
+
+            if (
+                crossings <= currentCrossings &&
+                overlaps <= currentOverlaps &&
+                score >= currentScore
+            ) {
+
+                currentScore = score;
+                currentOverlaps = overlaps;
+                currentCrossings = crossings;
+                moved = true;
+
+            } else {
+                pos[id] = original;
+            }
+        }
+
+        if (!moved) break;
+    }
+
+    // =========================================================
+    // FASE 5 — QUANTIZAÇÃO FINAL ABSOLUTA
+    // =========================================================
+    if (onProgress) {
+        onProgress(5, "Ortogonal", "Finalizando grid...");
+    }
+
+    const occupied = new Set();
+
+    nodesArray.forEach(id => {
+
+        let x =
+            Math.round(pos[id].x / gridSize) * gridSize;
+
+        let y =
+            Math.round(pos[id].y / gridSize) * gridSize;
+
+        let ring = 0;
+
+        while (occupied.has(`${x},${y}`)) {
+
+            ring++;
+
+            x += gridSize * ring;
+            y += gridSize * ring;
+        }
+
+        occupied.add(`${x},${y}`);
+
+        pos[id] = { x, y };
+    });
+
+    if (onProgress) {
+        onProgress("Concluído", "Ortogonal", "Layout finalizado.");
+    }
+
+    return pos;
+}
+
 // =============================================================================
 // VND — Variable Neighborhood Descent para redes de distribuição
 // Opera no grafo COMPLETO usando a estrutura topológica como vizinhanças.
@@ -707,6 +1042,17 @@ function getLayoutCost(pos, branchesArray, centroidWeight = 0.20) { // 👈 Aume
     Object.values(pos).forEach(p => {
         cost += Math.sqrt((p.x - cx)**2 + (p.y - cy)**2) * centroidWeight;
     });
+
+    // Penaliza bounding box (zoomExtents) — recompensa layouts compactos
+    // Usa 10% do custo médio por unidade de área normalizada
+    const vals = Object.values(pos);
+    if (vals.length > 1) {
+        const xs = vals.map(p => p.x), ys = vals.map(p => p.y);
+        const bboxW = Math.max(...xs) - Math.min(...xs);
+        const bboxH = Math.max(...ys) - Math.min(...ys);
+        // Normaliza pelo número de nós para ser independente do tamanho do sistema
+        cost += (bboxW + bboxH) / vals.length * 0.10;
+    }
 
     return cost;
 }
@@ -1506,33 +1852,23 @@ export function findIntersections(positions, branches) {
     return uniqueIntersections;
 }
 
-// =============================================================================
-// EXPANSOR/COMPACTADOR MANUAL (SEMPRE ENQUADRADO NO GRID DA INTERFACE)
-// =============================================================================
-export function compactPositions(positions, factor = 0.90) { 
+// 2. Aproxima os nós do centro (Mantém o formato exato, apenas reduz o tamanho geral)
+export function compactPositions(positions, factor = 0.90) { // 0.90 = reduz 10% do tamanho
     let cx = 0, cy = 0, count = 0;
-    const FIXED_GRID = 10; // O grid visual da sua GraphArea
     
     // Calcula o Centro de Massa (Centroide)
     Object.values(positions).forEach(p => {
         cx += p.x; cy += p.y; count++;
     });
-    if (count > 0) {
-        cx /= count; cy /= count;
-    }
+    if (count === 0) return positions;
+    cx /= count; cy /= count;
 
+    // Escala cada nó em direção ao centro
     const newPos = {};
     Object.keys(positions).forEach(id => {
-        const p = positions[id];
-        
-        // 1. Aplica o fator de escala (Gera o número quebrado)
-        const rawX = cx + (p.x - cx) * factor;
-        const rawY = cy + (p.y - cy) * factor;
-
-        // 2. Trava a nova coordenada no múltiplo de 10px mais próximo!
         newPos[id] = {
-            x: Math.round(rawX / FIXED_GRID) * FIXED_GRID,
-            y: Math.round(rawY / FIXED_GRID) * FIXED_GRID
+            x: cx + (positions[id].x - cx) * factor,
+            y: cy + (positions[id].y - cy) * factor
         };
     });
     
@@ -1588,266 +1924,4 @@ function countNodeEdgeOverlaps(pos, branchesArray, nodesArray) {
     }
 
     return overlaps;
-}
-// =============================================================================
-// MOTOR DE BUSCA PERIFÉRICA (Peripheral Search Layout)
-// Substitui o motor hierárquico.
-//
-// Função objetivo:
-//   custo = w_angular * penalidade_angular
-//         + w_caixa   * penalidade_caixa
-//         + w_dist    * comprimento_total_arestas
-//
-// Ângulos sem penalidade: 0°, 45°, 90°, 135° (ortogonais e diagonais)
-// Cruzamentos: hard constraint — nunca aumenta; se reduz, atualiza o limite
-//
-// Busca:
-//   1. Começa pelas subestações, move em direção ao interior da caixa
-//   2. Propaga em cadeia pelos vizinhos (menor grau primeiro)
-//   3. Aceita movimentos neutros (mesmo custo) e volta à vizinhança anterior (VND)
-// =============================================================================
-
-// Pesos da função objetivo
-const PSL_W_ANGULAR = 3.0;  // penalidade de ângulo proibido (domina)
-const PSL_W_CAIXA   = 1.0;  // tamanho da bounding box
-const PSL_W_DIST    = 0.5;  // comprimento total das arestas (leve)
-
-/**
- * Penalidade angular de uma aresta.
- * 0 para horizontal, vertical, 45° e 135°.
- * 1 para qualquer outro ângulo.
- */
-function angularPenalty(p1, p2) {
-    if (!p1 || !p2) return 0;
-    const dx = Math.abs(p2.x - p1.x);
-    const dy = Math.abs(p2.y - p1.y);
-    if (dx < 0.5 || dy < 0.5) return 0;           // horizontal ou vertical
-    if (Math.abs(dx - dy) < 0.5) return 0;         // 45° ou 135°
-    return 1;
-}
-
-/**
- * Bounding box do layout.
- */
-function calcBBox(pos, targetNodes) {
-    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-    targetNodes.forEach(id => {
-        const p = pos[id];
-        if (!p) return;
-        if (p.x < minX) minX = p.x; if (p.x > maxX) maxX = p.x;
-        if (p.y < minY) minY = p.y; if (p.y > maxY) maxY = p.y;
-    });
-    return { minX, maxX, minY, maxY, w: maxX === -Infinity ? 0 : maxX - minX, h: maxY === -Infinity ? 0 : maxY - minY };
-}
-
-/**
- * Função de custo global do layout.
- */
-function pslCost(pos, branchesArray, targetNodes) {
-    let angular = 0, distTotal = 0;
-
-    branchesArray.forEach(b => {
-        const p1 = pos[String(b.from)], p2 = pos[String(b.to)];
-        if (!p1 || !p2) return;
-        angular += angularPenalty(p1, p2);
-        distTotal += Math.sqrt((p1.x - p2.x) ** 2 + (p1.y - p2.y) ** 2);
-    });
-
-    // Penalidade de caixa calculada APENAS para os nós móveis
-    const bb = calcBBox(pos, targetNodes);
-    const caixa = (bb.w + bb.h) / Math.max(targetNodes.length, 1);
-
-    return PSL_W_ANGULAR * angular
-         + PSL_W_CAIXA   * caixa
-         + PSL_W_DIST    * distTotal;
-}
-
-/**
- * Testa um movimento e retorna se deve ser aceito.
- * Nunca aumenta cruzamentos. Aceita melhora ou empate no custo.
- */
-function pslEvaluate(testPos, branchesArray, nodesArray, currentCrossings, currentCost) {
-    const newCross = findIntersections(testPos, branchesArray).length;
-    if (newCross > currentCrossings) return null; // hard constraint
-    const newCost = pslCost(testPos, branchesArray, nodesArray);
-    if (newCost <= currentCost + 0.001) { // aceita melhora ou neutro
-        return { crossings: newCross, cost: newCost };
-    }
-    return null;
-}
-
-/**
- * Verifica se uma posição está ocupada por outro nó.
- */
-function pslOccupied(tx, ty, pos, excludeId) {
-    return Object.entries(pos).some(
-        ([id, p]) => id !== String(excludeId) && Math.abs(p.x - tx) < 0.5 && Math.abs(p.y - ty) < 0.5
-    );
-}
-
-/**
- * Gera candidatos de movimento para um nó:
- * posições na grade ao redor do nó, priorizando movimentos
- * em direção ao interior da bounding box.
- */
-function pslCandidates(id, pos, bbox, gridSize, radius) {
-    const p = pos[id];
-    if (!p) return [];
-
-    // Centro da bounding box
-    const cx = (bbox.minX + bbox.maxX) / 2;
-    const cy = (bbox.minY + bbox.maxY) / 2;
-
-    const candidates = [];
-    for (let dx = -radius; dx <= radius; dx++) {
-        for (let dy = -radius; dy <= radius; dy++) {
-            if (dx === 0 && dy === 0) continue;
-            const tx = Math.round(p.x / gridSize) * gridSize + dx * gridSize;
-            const ty = Math.round(p.y / gridSize) * gridSize + dy * gridSize;
-            // Calcula se o movimento aproxima do centro (prioridade mais alta)
-            const distBefore = (p.x - cx) ** 2 + (p.y - cy) ** 2;
-            const distAfter  = (tx - cx) ** 2 + (ty - cy) ** 2;
-            const priority   = distBefore - distAfter; // positivo = aproxima
-            candidates.push({ tx, ty, priority });
-        }
-    }
-    // Ordena: movimentos que aproximam do centro primeiro
-    candidates.sort((a, b) => b.priority - a.priority);
-    return candidates;
-}
-
-/**
- * Ordena os nós para a busca periférica:
- * 1. Subestações/fontes (para mover em direção ao interior)
- * 2. Folhas (grau 1) na borda da bounding box
- * 3. Demais nós por grau crescente
- */
-function pslNodeOrder(targetNodes, branchesArray, sourcesArray, pos, bbox, gridSize) {
-    const sourceSet = new Set(sourcesArray.map(String));
-    const degree = {};
-    targetNodes.forEach(id => { degree[id] = 0; });
-    branchesArray.forEach(b => {
-        if (b.state === 1) {
-            if (degree[String(b.from)] !== undefined) degree[String(b.from)]++;
-            if (degree[String(b.to)] !== undefined) degree[String(b.to)]++;
-        }
-    });
-
-    const isPeripheral = (id) => {
-        const p = pos[id];
-        if (!p) return false;
-        return (
-            Math.abs(p.x - bbox.minX) < gridSize * 1.5 ||
-            Math.abs(p.x - bbox.maxX) < gridSize * 1.5 ||
-            Math.abs(p.y - bbox.minY) < gridSize * 1.5 ||
-            Math.abs(p.y - bbox.maxY) < gridSize * 1.5
-        );
-    };
-
-    const sources    = targetNodes.filter(id => sourceSet.has(id));
-    const peripheral = targetNodes.filter(id => !sourceSet.has(id) && isPeripheral(id));
-    const interior   = targetNodes.filter(id => !sourceSet.has(id) && !isPeripheral(id));
-
-    peripheral.sort((a, b) => (degree[a] || 0) - (degree[b] || 0));
-    interior.sort((a, b)   => (degree[a] || 0) - (degree[b] || 0));
-
-    return [...sources, ...peripheral, ...interior];
-}
-
-/**
- * Motor principal de Busca Periférica.
- */
-export async function calculateHierarchicalLayout(nodesArray, branchesArray, sourcesArray, config = {}) {
-    nodesArray    = nodesArray.map(String);
-    branchesArray = branchesArray.map(b => ({
-        ...b, id: String(b.id), from: String(b.from), to: String(b.to)
-    }));
-    sourcesArray = sourcesArray.map(String);
-
-    const gridSize   = config.gridSize || 100;
-    const maxIter    = config.maxIter  || 60;
-    const onProgress = config.onProgress || null;
-
-    // 👇 SELEÇÃO: O motor enxerga o mapa inteiro para colisões, mas só otimiza os selecionados
-    const selectedSet = config.selectedNodes?.length > 0 ? new Set(config.selectedNodes.map(String)) : null;
-    const movableNodes = selectedSet ? nodesArray.filter(id => selectedSet.has(id)) : nodesArray;
-
-    const originalPos = config.currentPos ? Object.fromEntries(Object.entries(config.currentPos).map(([k, v]) => [k, { ...v }])) : null;
-    if (!originalPos) return {};
-    let pos = { ...originalPos };
-
-    if (movableNodes.length === 0) return pos;
-
-    // 👇 LIMITADOR DE BUSCA (Clipping Box) com 2 grids de margem de manobra
-    const clippingBox = calcBBox(pos, movableNodes);
-    clippingBox.minX -= gridSize * 2; clippingBox.maxX += gridSize * 2;
-    clippingBox.minY -= gridSize * 2; clippingBox.maxY += gridSize * 2;
-
-    const originalCrossings = findIntersections(pos, branchesArray).length;
-    let currentCrossings    = originalCrossings;
-    let currentCost         = pslCost(pos, branchesArray, movableNodes);
-
-    if (onProgress) onProgress(0, 'PSL', `Custo inicial: ${currentCost.toFixed(1)}`);
-
-    let iter = 0;
-    let globalImproved = true;
-    const searchRadius = 2; 
-
-    while (globalImproved && iter < maxIter) {
-        globalImproved = false;
-        iter++;
-        await new Promise(resolve => setTimeout(resolve, 0));
-
-        const currentBBox = calcBBox(pos, movableNodes);
-        const nodeOrder = pslNodeOrder(movableNodes, branchesArray, sourcesArray, pos, currentBBox, gridSize);
-
-        if (onProgress) onProgress(iter, 'PSL', `Iter ${iter} | Custo ${currentCost.toFixed(1)}`);
-
-        const visited  = new Set();
-        const queue    = [...nodeOrder];
-        const adj = {};
-        movableNodes.forEach(id => { adj[id] = []; });
-        branchesArray.forEach(b => {
-            if (b.state === 1) {
-                if (adj[b.from]) adj[b.from].push(b.to);
-                if (adj[b.to]) adj[b.to].push(b.from);
-            }
-        });
-
-        let qi = 0;
-        while (qi < queue.length) {
-            const id = queue[qi++];
-            if (visited.has(id)) continue;
-            visited.add(id);
-
-            const candidates = pslCandidates(id, pos, currentBBox, gridSize, searchRadius);
-
-            for (const { tx, ty } of candidates) {
-                // 👇 CORTA A BUSCA NO INFINITO: Se a coordenada de teste sair da caixa, ignora!
-                if (tx < clippingBox.minX || tx > clippingBox.maxX || ty < clippingBox.minY || ty > clippingBox.maxY) {
-                    continue;
-                }
-                
-                // Trata todo o resto da rede que não foi selecionada como paredes sólidas
-                if (pslOccupied(tx, ty, pos, id)) continue;
-
-                const testPos = { ...pos, [id]: { x: tx, y: ty } };
-                const eval_   = pslEvaluate(testPos, branchesArray, movableNodes, currentCrossings, currentCost);
-
-                if (eval_ !== null) {
-                    pos[id]          = { x: tx, y: ty };
-                    const improved   = eval_.cost < currentCost - 0.001;
-                    currentCost      = eval_.cost;
-                    if (eval_.crossings < currentCrossings) currentCrossings = eval_.crossings;
-                    if (improved) globalImproved = true;
-
-                    (adj[id] || []).forEach(nbId => { if (!visited.has(nbId)) queue.push(nbId); });
-                    break; 
-                }
-            }
-        }
-    }
-
-    if (onProgress) config.onProgress("Concluído", "Busca Periférica Finalizada", "-");
-    return pos;
 }

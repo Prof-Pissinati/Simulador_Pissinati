@@ -31,26 +31,32 @@ export default function EditSidebar({
     const [visualDebug, setVisualDebug] = useState(false);
 
     const handleApplyGenerator = async () => {
-        let actualPositions = { ...currentPositions };
-        let actualSelection = selectedNodes ? [...selectedNodes] : [];
+        // 1. Pega os dados atuais das props como base
+        let actualPositions = currentPositions;
+        let actualSelection = selectedNodes || [];
         
+        // 2. Tenta capturar o estado instantâneo do Canvas (Garante que pegamos o que está na tela agora)
         window.dispatchEvent(new CustomEvent('getLatestLayout', { 
-            detail: (layout) => { 
+            detail: { callback: (layout) =>{ 
                 if (layout) {
-                    if (layout.positions) actualPositions = { ...layout.positions };
+                    if (layout.positions) actualPositions = layout.positions;
+                    // Só substitui a seleção se o canvas informar que algo REALMENTE mudou
                     if (layout.selectedNodes && layout.selectedNodes.length > 0) {
-                        actualSelection = [...layout.selectedNodes];
+                        actualSelection = layout.selectedNodes;
                     }
                 }
-            } 
+            } }
         }));
 
+        // 👇 A REGRA DE OURO: Se tiver 1 ou menos, limpa para rodar no sistema todo
         let finalSelection = (actualSelection.length > 1) ? actualSelection : null;
 
-        try {
-            if (setIsCalculatingLayout) setIsCalculatingLayout(true);
-            if (setLayoutProgress) setLayoutProgress({ passes: 0, msg1: "Iniciando...", msg2: "" });
+        console.log(`%c[SIDEBAR] 🔍 Verificação: Capturados ${actualSelection.length} nós. Modo: ${finalSelection ? 'PARCIAL' : 'REDE COMPLETA'}`, "color: #00bcd4");
 
+        try {
+            setIsCalculatingLayout(true);
+            
+            // 3. Validação de segurança: se os arrays estiverem vindo errados da prop
             const safeNodes = allNodes || [];
             const safeBranches = branches || [];
             const safeSources = sources || [];
@@ -62,33 +68,30 @@ export default function EditSidebar({
                 openWeight: openWeight / 100,
                 currentPos: actualPositions,
                 useForce: usePhysics,
-                selectedNodes: finalSelection, 
+                selectedNodes: finalSelection, // Envia null se for 1 ou menos
                 visualizeCoarsened: visualDebug,
                 onProgress: (passes, msg1, msg2) => { if (setLayoutProgress) setLayoutProgress({ passes, msg1, msg2 }); }
             });
 
-            const newPositions = response.type === 'success' ? response.result : response;
-
-            if (newPositions && Object.keys(newPositions).length > 0 && !response.error) {
-                window.dispatchEvent(new CustomEvent('saveLayoutToHistory'));
-                window.dispatchEvent(new CustomEvent('applyOrganicLayout', { 
-                    detail: { positions: newPositions, waypoints: response.waypoints || {} } 
+            if (response.type === 'success') {
+                window.dispatchEvent(new CustomEvent('layoutComplete', { 
+                    detail: { newPositions: response.result, waypoints: response.waypoints || {} } 
                 }));
+                onUndo(); 
             } else {
-                console.error("Worker devolveu erro:", response.error);
-                alert("Falha no Layout: " + (response.error || "Erro desconhecido"));
+                // Aqui resolvemos o erro "undefined" dando um nome ao erro
+                const errorMsg = response.error || "Erro desconhecido no Worker";
+                console.error("Erro no Worker:", errorMsg);
+                alert("Falha no Layout: " + errorMsg);
             }
         } catch (error) {
-            console.error("Erro Crítico ao instanciar o Worker:", error);
-            alert("Erro fatal de comunicação.");
+            console.error("Erro Crítico:", error);
         } finally {
-            // 1º: Avisa o App.jsx para desligar a tela de loading ANTES de apagar os dados
+            // Entrega um objeto seguro para não quebrar o App.jsx ao tentar ler msg1
+            if (setLayoutProgress) setLayoutProgress({ passes: 0, msg1: '', msg2: '' });
             if (setIsCalculatingLayout) setIsCalculatingLayout(false);
-            // 2º: Agora sim, destrói o objeto com segurança para remover a "parede de vidro"
-            if (setLayoutProgress) setLayoutProgress(null);
         }
     };
-
     const handleApplyVNS = async () => {
         if (vnsRunning) return;
 
@@ -130,7 +133,6 @@ export default function EditSidebar({
         } finally {
             setVnsRunning(false);
             if (setIsCalculatingLayout) setIsCalculatingLayout(false);
-            if (setLayoutProgress) setLayoutProgress(null); // Adicione esta linha!
         }
     };
 
@@ -159,7 +161,6 @@ export default function EditSidebar({
             console.error("Erro na compactação visual:", error);
         } finally { 
             if (setIsCalculatingLayout) setIsCalculatingLayout(false); 
-            if (setLayoutProgress) setLayoutProgress(null); // Adicione esta linha!
         }
     };
 

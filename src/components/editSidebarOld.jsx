@@ -9,8 +9,7 @@ export default function EditSidebar({
     canUndo = false,
     branches, allNodes, sources, currentPositions,
     setIsCalculatingLayout,
-    setLayoutProgress,
-    selectedNodes = []
+    setLayoutProgress
 }) {
 
     const [algoMode, setAlgoMode] = useState('force');
@@ -31,61 +30,38 @@ export default function EditSidebar({
     const [visualDebug, setVisualDebug] = useState(false);
 
     const handleApplyGenerator = async () => {
-        let actualPositions = { ...currentPositions };
-        let actualSelection = selectedNodes ? [...selectedNodes] : [];
-        
+        let actualLayout = { positions: currentPositions, waypoints: {} };
         window.dispatchEvent(new CustomEvent('getLatestLayout', { 
-            detail: (layout) => { 
-                if (layout) {
-                    if (layout.positions) actualPositions = { ...layout.positions };
-                    if (layout.selectedNodes && layout.selectedNodes.length > 0) {
-                        actualSelection = [...layout.selectedNodes];
-                    }
-                }
-            } 
+            detail: { callback: (layout) => { actualLayout = layout; } } 
         }));
 
-        let finalSelection = (actualSelection.length > 1) ? actualSelection : null;
+        window.dispatchEvent(new CustomEvent('saveToHistory', { detail: actualLayout }));
+
+        if (setIsCalculatingLayout) setIsCalculatingLayout(true);
+        if (setLayoutProgress) setLayoutProgress({ passes: 0, msg1: "Calculando Geometria...", msg2: `Algoritmo: ${algoMode}` });
+
+        await new Promise(resolve => setTimeout(resolve, 50));
 
         try {
-            if (setIsCalculatingLayout) setIsCalculatingLayout(true);
-            if (setLayoutProgress) setLayoutProgress({ passes: 0, msg1: "Iniciando...", msg2: "" });
-
-            const safeNodes = allNodes || [];
-            const safeBranches = branches || [];
-            const safeSources = sources || [];
-
-            const response = await runAsyncLayout(algoMode, safeNodes, safeBranches, safeSources, { 
-                gridSize: radialStep, 
-                distance: forceDist, 
-                charge: -forceCharge, 
-                openWeight: openWeight / 100,
-                currentPos: actualPositions,
-                useForce: usePhysics,
-                selectedNodes: finalSelection, 
-                visualizeCoarsened: visualDebug,
+            const response = await runAsyncLayout(algoMode, allNodes, branches, sources, { 
+                gridSize: radialStep, distance: forceDist, charge: -forceCharge, openWeight: openWeight / 100, currentPos: actualLayout.positions, usePhysics,
+                visualizeCoarsened: visualDebug, // 👈 A FLAG MÁGICA LIGADA AO CHECKBOX
                 onProgress: (passes, msg1, msg2) => { if (setLayoutProgress) setLayoutProgress({ passes, msg1, msg2 }); }
             });
 
-            const newPositions = response.type === 'success' ? response.result : response;
-
-            if (newPositions && Object.keys(newPositions).length > 0 && !response.error) {
-                window.dispatchEvent(new CustomEvent('saveLayoutToHistory'));
-                window.dispatchEvent(new CustomEvent('applyOrganicLayout', { 
-                    detail: { positions: newPositions, waypoints: response.waypoints || {} } 
-                }));
+           // 👇 CINTO DE SEGURANÇA ANTIBUG 👇
+            if (visualDebug && response.macroData) {
+                window.dispatchEvent(new CustomEvent('applyMacroGraph', { detail: response }));
             } else {
-                console.error("Worker devolveu erro:", response.error);
-                alert("Falha no Layout: " + (response.error || "Erro desconhecido"));
+                const finalPos = response.positions ? response.positions : response;
+                window.dispatchEvent(new CustomEvent('applyOrganicLayout', { detail: { positions: finalPos } }));
             }
+            
         } catch (error) {
-            console.error("Erro Crítico ao instanciar o Worker:", error);
-            alert("Erro fatal de comunicação.");
+            console.error("Erro no Worker de Layout:", error);
+            alert("Erro ao calcular o layout.");
         } finally {
-            // 1º: Avisa o App.jsx para desligar a tela de loading ANTES de apagar os dados
             if (setIsCalculatingLayout) setIsCalculatingLayout(false);
-            // 2º: Agora sim, destrói o objeto com segurança para remover a "parede de vidro"
-            if (setLayoutProgress) setLayoutProgress(null);
         }
     };
 
@@ -109,7 +85,6 @@ export default function EditSidebar({
                 gridSize: vnsGridSize,
                 maxIter: vnsMaxIter,
                 currentPos: actualLayout.positions,
-                selectedNodes: actualLayout.selectedNodes || null,
                 visualizeCoarsened: visualDebug, // 👈 FLAG MÁGICA
                 onProgress: (iter, cost, crossings) => {
                     setVnsProgress({ iter, cost: cost, crossings });
@@ -130,7 +105,6 @@ export default function EditSidebar({
         } finally {
             setVnsRunning(false);
             if (setIsCalculatingLayout) setIsCalculatingLayout(false);
-            if (setLayoutProgress) setLayoutProgress(null); // Adicione esta linha!
         }
     };
 
@@ -159,7 +133,6 @@ export default function EditSidebar({
             console.error("Erro na compactação visual:", error);
         } finally { 
             if (setIsCalculatingLayout) setIsCalculatingLayout(false); 
-            if (setLayoutProgress) setLayoutProgress(null); // Adicione esta linha!
         }
     };
 

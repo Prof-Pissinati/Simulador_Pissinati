@@ -243,11 +243,7 @@ export default function GraphArea({
                     fullWaypoints[k] = manualWpRef.current[k] || renderWpRef.current[k] || (activeWaypoints ? activeWaypoints[k] : []);
                 });
 
-                e.detail.callback({
-                    positions: fullPositions,
-                    waypoints: JSON.parse(JSON.stringify(fullWaypoints)),
-                    selectedNodes: selectedEditNodes.size > 0 ? [...selectedEditNodes].map(String) : null,
-                });
+                e.detail.callback({ positions: fullPositions, waypoints: JSON.parse(JSON.stringify(fullWaypoints)) });
             }
         };
 

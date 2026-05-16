@@ -1,61 +1,50 @@
-import { calculateForceLayout, calculateOrthogonalLayout, calculateVNSLayout, calculateHierarchicalLayout, classifyTopology, contractTopology, expandTopology } from './autoLayout';
+import { calculateForceLayout, calculateOrthogonalLayout, calculateVNSLayout, calculateHierarchicalLayout, classifyTopology, findIntersections } from './autoLayout';
 
 // =========================================================
 // TRAVA DO PONTO CENTRAL
-// Impede que o sistema se movimente para longe da tela
+// Impede que o sistema se movimente para longe da tela,
+// mas RESPEITA rigorosamente a malha absoluta de 10px!
 // =========================================================
 function lockLayoutCenter(initialPos, calculatedPos, nodesArray) {
     if (!initialPos || Object.keys(initialPos).length === 0) return calculatedPos;
 
-    // 1. Acha o Ponto Central atual (antes do algoritmo)
     let minX_old = Infinity, maxX_old = -Infinity, minY_old = Infinity, maxY_old = -Infinity;
     let minX_new = Infinity, maxX_new = -Infinity, minY_new = Infinity, maxY_new = -Infinity;
 
     nodesArray.forEach(id => {
-        // Limites Antigos
         const pOld = initialPos[id];
         if (pOld) {
-            if (pOld.x < minX_old) minX_old = pOld.x; if (pOld.x > maxX_old) maxX_old = pOld.x;
-            if (pOld.y < minY_old) minY_old = pOld.y; if (pOld.y > maxY_old) maxY_old = pOld.y;
+            minX_old = Math.min(minX_old, pOld.x); maxX_old = Math.max(maxX_old, pOld.x);
+            minY_old = Math.min(minY_old, pOld.y); maxY_old = Math.max(maxY_old, pOld.y);
         }
-        // Limites Novos
         const pNew = calculatedPos[id];
         if (pNew) {
-            if (pNew.x < minX_new) minX_new = pNew.x; if (pNew.x > maxX_new) maxX_new = pNew.x;
-            if (pNew.y < minY_new) minY_new = pNew.y; if (pNew.y > maxY_new) maxY_new = pNew.y;
+            minX_new = Math.min(minX_new, pNew.x); maxX_new = Math.max(maxX_new, pNew.x);
+            minY_new = Math.min(minY_new, pNew.y); maxY_new = Math.max(maxY_new, pNew.y);
         }
     });
 
-    // 2. Calcula os dois centros
-    const center_old_x = minX_old + (maxX_old - minX_old) / 2;
-    const center_old_y = minY_old + (maxY_old - minY_old) / 2;
-    
-    const center_new_x = minX_new + (maxX_new - minX_new) / 2;
-    const center_new_y = minY_new + (maxY_new - minY_new) / 2;
+    const deltaX = (minX_old + (maxX_old - minX_old)/2) - (minX_new + (maxX_new - minX_new)/2);
+    const deltaY = (minY_old + (maxY_old - minY_old)/2) - (minY_new + (maxY_new - minY_new)/2);
 
-    // 3. Descobre a diferença de deslocamento
-    const deltaX = center_old_x - center_new_x;
-    const deltaY = center_old_y - center_new_y;
+    const snappedDX = Math.round(deltaX / 10) * 10;
+    const snappedDY = Math.round(deltaY / 10) * 10;
 
-    if (isNaN(deltaX) || isNaN(deltaY)) return calculatedPos;
-
-    // 4. Empurra todas as barras geradas de volta para o eixo original
     const lockedPos = {};
     nodesArray.forEach(id => {
         if (calculatedPos[id]) {
             lockedPos[id] = {
-                x: calculatedPos[id].x + deltaX,
-                y: calculatedPos[id].y + deltaY
+                x: calculatedPos[id].x + snappedDX,
+                y: calculatedPos[id].y + snappedDY
             };
         }
     });
-
     return lockedPos;
 }
 
 // =========================================================
-// COMUNICAÇÃO COM O REACT
-// =========================================================
+// COMUNICAÇÃO COM O REACT E EXECUÇÃO
+// ==========================================
 self.onmessage = async (e) => {
     const { type, nodesArray, branchesArray, sourcesArray, config, jobId } = e.data;
 
@@ -66,26 +55,22 @@ self.onmessage = async (e) => {
     }
 
     try {
-        let result;
         let actualType = type;
 
-        // 👇 FASE 3: MAPA DE ALIMENTADORES (BFS) 👇
+        // 1. MAPA DE ALIMENTADORES (BFS)
         const feederMap = {};
         if (config && config.feeders) {
             const queue = [...config.feeders];
             config.feeders.forEach(f => feederMap[f] = String(f));
-            
-            // Cria lista de adjacência rápida apenas com chaves fechadas
             const adj = {};
             branchesArray.forEach(b => {
                 if (b.state === 1) {
                     if (!adj[b.from]) adj[b.from] = [];
-                    if (!adj[b.to]) adj[b.to] = [];
+                    if (!adj[b.to])   adj[b.to]   = [];
                     adj[b.from].push(b.to);
                     adj[b.to].push(b.from);
                 }
             });
-
             let head = 0;
             while (head < queue.length) {
                 const currId = queue[head++];
@@ -100,59 +85,43 @@ self.onmessage = async (e) => {
                 }
             }
         }
-        config.feederMap = feederMap; // Injeta no config para os motores usarem!
-        // 👆 FIM DA FASE 3 👆
+        config.feederMap = feederMap;
 
-        // 👇 FASE 1: O CÉREBRO ENTRA EM AÇÃO 👇
+        // Auto-classificação de topologia
         if (type === 'auto') {
             const analysis = classifyTopology(nodesArray, branchesArray, config);
-            
-            // 👇 CORREÇÃO: Lendo a variável com o nome exato que vem da análise 👇
-            actualType = analysis.recommendedEngine; 
-            
-            console.log('🧠 [AUTO-LAYOUT] Análise Topológica:', analysis);
-            
-            if (config && config.reportProgress) {
-                config.onProgress(0, `Topologia: ${analysis.type}`, `Motor: ${actualType}`);
-            }
+            actualType = analysis.recommendedEngine;
+            if (config.onProgress) config.onProgress(0, `Topologia: ${analysis.type}`, `Motor: ${actualType}`);
         }
 
         // ==========================================
-        // GRAPH COARSENING (Topologia Híbrida 2.0)
+        // PREPARAÇÃO DA SELEÇÃO PARCIAL
+        // O motor recebe o sistema COMPLETO (para enxergar as paredes), 
+        // mas é guiado pelas flags no 'config'.
         // ==========================================
+        const selectionFilter = config.selectedNodes && config.selectedNodes.length > 0
+            ? new Set(config.selectedNodes.map(String))
+            : null;
+
+        const fullPos = config.currentPos || {};
+
+        if (selectionFilter) {
+            // Se há seleção, isola as linhas de fronteira (que conectam a seleção ao resto da rede)
+            const boundaryBranches = branchesArray.filter(b =>
+                selectionFilter.has(String(b.from)) !== selectionFilter.has(String(b.to))
+            );
+            config.boundaryBranches = boundaryBranches;
+        }
+
+        // 👇 CORREÇÃO VITAL: O motor recebe TODOS os nós para não atropelar paredes invisíveis!
         let targetNodes = nodesArray;
         let targetBranches = branchesArray;
-        let coarseData = null;
-        let isCoarsened = false;
-
-        // 👇 Correção do Erro: Agora amassa se for automático OU se o usuário pediu a depuração visual
-        const forceCoarsen = config && config.visualizeCoarsened;
-        const autoCoarsen = nodesArray.length > 150 && actualType !== 'force';
-
-        if (autoCoarsen || forceCoarsen) {
-            try {
-                if (config && config.reportProgress) config.onProgress(1, "Otimização", "Compactando topologia...");
-                const coarsened = contractTopology(nodesArray, branchesArray, sourcesArray);
-                targetNodes = coarsened.coarseNodesArray;
-                targetBranches = coarsened.coarseBranchesArray;
-                coarseData = coarsened.coarseData;
-                isCoarsened = true;
-            } catch (err) { console.warn("⚠️ Falha na compactação.", err); }
-        }
-
-        // 👇 PEDÁGIO 1: ANTES DO MOTOR (Congelado nas posições originais)
-        if (config && config.visualizeCoarsened && config.debugPhase === 'before' && isCoarsened) {
-            const originalPos = config.currentPos || {};
-            const debugPositions = {};
-            targetNodes.forEach(id => { debugPositions[id] = originalPos[id] || {x: 0, y: 0}; });
-
-            self.postMessage({ type: 'success', jobId, result: debugPositions, macroData: { nodes: targetNodes, branches: targetBranches, contractionMap: coarseData } });
-            return; // 🛑 Para aqui!
-        }
 
         // ==========================================
         // EXECUÇÃO DOS MOTORES
         // ==========================================
+        let result;
+
         if (actualType === 'force') {
             result = calculateForceLayout(targetNodes, targetBranches, sourcesArray, config);
         } else if (actualType === 'vns') {
@@ -160,31 +129,41 @@ self.onmessage = async (e) => {
         } else if (actualType === 'orthogonal') {
             result = await calculateOrthogonalLayout(targetNodes, targetBranches, sourcesArray, config);
         } else if (actualType === 'hierarchical') {
-            result = calculateHierarchicalLayout(targetNodes, targetBranches, sourcesArray, config);
-        } else { throw new Error(`Motor não reconhecido: ${actualType}`); }
-
-        // 👇 PEDÁGIO 2: DEPOIS DO MOTOR (Esqueleto organizado)
-        if (config && config.visualizeCoarsened && config.debugPhase === 'after' && isCoarsened) {
-            self.postMessage({ type: 'success', jobId, result: result, macroData: { nodes: targetNodes, branches: targetBranches, contractionMap: coarseData } });
-            return; // 🛑 Para aqui, antes de expandir!
+            result = await calculateHierarchicalLayout(targetNodes, targetBranches, sourcesArray, config);
+        } else {
+            throw new Error(`Motor não reconhecido: ${actualType}`);
         }
 
         // ==========================================
-        // EXPANSÃO DUPLA (Restaurando geometria)
+        // PÓS-PROCESSAMENTO DA SELEÇÃO PARCIAL
+        // Garante que as barras não selecionadas não moveram nem 1 milímetro.
         // ==========================================
-        if (isCoarsened && coarseData) {
-            if (config && config.reportProgress) config.onProgress(30, "Finalizando", "Desdobrando topologia...");
-            result = expandTopology(result, coarseData, config.currentPos || {});
+        if (selectionFilter) {
+            const merged = { ...fullPos };
+            Object.keys(result).forEach(id => {
+                // Sobrescreve APENAS os nós que podiam se mover
+                if (selectionFilter.has(String(id))) {
+                    merged[id] = result[id];
+                }
+            });
+            result = merged;
         }
 
-        // 4. Trava o Ponto Central (Usando a lista de nós ORIGINAL)
-        if (config && config.currentPos) {
-            result = lockLayoutCenter(config.currentPos, result, nodesArray);
+        // ==========================================
+        // TRAVA DO PONTO CENTRAL
+        // Impede a rede inteira de deslizar para fora do grid
+        // ==========================================
+        if (config && fullPos && Object.keys(fullPos).length > 0) {
+            result = lockLayoutCenter(fullPos, result, nodesArray);
         }
-        
-        // 5. Devolve o mapa pronto
+
+        // Devolve o mapa pronto para a tela
         self.postMessage({ type: 'success', jobId, result });
+
     } catch (error) {
-        self.postMessage({ type: 'error', jobId, error: error.message });
+        // 👇 AGORA O WORKER MOSTRA A LINHA EXATA DO ERRO NO CONSOLE 👇
+        console.error("🚨 [WORKER] Falha interna no motor:", error);
+        const detailedError = error.stack || error.message || String(error);
+        self.postMessage({ type: 'error', jobId, error: detailedError });
     }
 };
