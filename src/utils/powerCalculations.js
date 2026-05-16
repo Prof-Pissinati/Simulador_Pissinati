@@ -9,7 +9,7 @@ export const CacheManager = {
         const branchState = branches.map(b => `${b.id}:${b.state}:${b.currentTap || 0}`).join('|');
         const faultState = Array.from(faultNodes).sort().join(',');
         const shuntState = sysData && sysData.shunts ? Object.entries(sysData.shunts).map(([id, s]) => `${id}:${s.steps}`).join(',') : '';
-        const gdState = sysData && sysData.gd ? Object.entries(sysData.gd).map(([id, g]) => `${id}:${g.active ? g.pg : 0}`).join(',') : '';
+        const gdState = sysData && sysData.gd ? Object.entries(sysData.gd).map(([id, g]) => `${id}:${g.active ? `${g.pg}_${g.qg}` : 0}`).join(',') : '';
         return `${method}-${branchState}-${faultState}-${shuntState}-${gdState}`;
     },
     get: function(branches, faultNodes, method, sysData) {
@@ -95,8 +95,8 @@ function partitionIntoIslands(branches, sources, faultNodes) {
 }
 
 // --- FUNÇÃO PRINCIPAL DE FLUXO DE POTÊNCIA ---
-export function runPowerFlow(branches, faultNodes, method = 'NR', sysData, eventNodes = new Set()){ 
-    // Só limpa o cache global se não for uma simulação do otimizador
+// 👇 Assinatura atualizada: remove eventNodes e insere previousNodeData 👇
+export function runPowerFlow(branches, faultNodes, method = 'NR', sysData, previousNodeData = null){ 
     if (method !== 'SIMULATION') {
         CacheManager.cache.clear();
     }
@@ -108,9 +108,7 @@ export function runPowerFlow(branches, faultNodes, method = 'NR', sysData, event
         return { nodes: {}, lines: {} };
     }
 
-    // 👇 1. O PARTICIONADOR DIVIDE O MAPA EM PEDAÇOS 👇
     const islands = partitionIntoIslands(branches, sources, faultNodes);
-    // Removemos os logs excessivos para não poluir o console durante o Otimizador
     if (method !== 'SIMULATION') {
         console.log(`🧩 Fatoração em Blocos: O sistema foi dividido em ${islands.length} ilha(s) eletricamente independente(s).`);
     }
@@ -125,9 +123,6 @@ export function runPowerFlow(branches, faultNodes, method = 'NR', sysData, event
     islands.forEach((island, index) => {
         const islandSysData = { ...sysData, sources: island.sources };
         
-        // ==============================================================
-        // 🧠 INTELIGÊNCIA ARTIFICIAL: CACHE POR ILHA
-        // ==============================================================
         const sortedBranches = [...island.branches].sort((a, b) => a.id - b.id);
         const islandBranchHash = sortedBranches.map(b => `${b.id}:${b.state}:${b.currentTap||0}`).join(',');
         
@@ -137,12 +132,11 @@ export function runPowerFlow(branches, faultNodes, method = 'NR', sysData, event
             if (faultNodes.has(n)) h += 'F';
             if (islandSysData.shunts[n]) h += `S${islandSysData.shunts[n].steps}`;
             if (islandSysData.gd && islandSysData.gd[n]) {
-                h += `G${islandSysData.gd[n].active ? islandSysData.gd[n].pg : 0}`;
+                h += `G${islandSysData.gd[n].active ? `${islandSysData.gd[n].pg}_${islandSysData.gd[n].qg}` : 0}`;
             }
             return h;
         }).join(',');
         
-        // 👇 A MÁGICA AQUI: A chave da Ilha agora embute a tag 'SIMULATION' se for o Otimizador
         const islandKey = `${method}-${Vbase}-${Sbase}|${islandBranchHash}|${islandNodeHash}`;
 
         if (CacheManager.islandCache.has(islandKey)) {
@@ -152,29 +146,16 @@ export function runPowerFlow(branches, faultNodes, method = 'NR', sysData, event
             Object.assign(finalLines, cachedIsland.lines);
             return; 
         }
-        // ==============================================================
 
-        // NOVO: Verifica se esta ilha possui algum BC ativo
-        const hasActiveShunt = Array.from(island.nodes).some(id => 
-            islandSysData.shunts[id] && islandSysData.shunts[id].steps > 0
-        );
-
-        // NOVO: Se tiver BC, blinda a ilha inteira. Se não, usa só o escudo de manobras normal.
-        const currentShield = new Set(eventNodes);
-        if (hasActiveShunt) {
-            island.nodes.forEach(id => currentShield.add(id));
-            console.log(`   ✨ Ilha ${index + 1} possui BC ativo. Redutor desativado para garantir fidelidade V².`);
-        }
-
-        // Passa o currentShield dinâmico para o redutor
+        // 🗑️ Limpamos todo aquele bloco gigante que blindava o BC e passava o currentShield!
         const { reducedBranches, reducedSysData, pruneHistory } = reduceSystemTopology(
             island.branches, 
             faultNodes, 
             islandSysData, 
-            currentShield // 👈 Usa o escudo atualizado aqui
+            previousNodeData // 👈 Injetamos a memória visual do Warm Start
         );
         
-        console.log(`   🔹 Ilha ${index + 1}: NR calculará ${reducedBranches.length} ramos (Original da ilha: ${island.branches.length})`);
+        console.log(`   🔹 Ilha ${index + 1}: Núcleo calculará ${reducedBranches.length} ramos (Original da ilha: ${island.branches.length})`);
 
         const islandNodesSet = new Set(island.sources);
         const adj = {};
@@ -204,11 +185,19 @@ export function runPowerFlow(branches, faultNodes, method = 'NR', sysData, event
         const n = nodes.length;
 
         if (n === 0 || reducedBranches.length === 0) {
-            const emptyResult = buildResult([], [], [], 1, reducedBranches, new Map(), new Set(), reducedSysData);
-            const expanded = expandSystemResults(emptyResult, pruneHistory, islandSysData, island.branches);
+            // 🚀 BYPASS RADIAL PURO 🚀
+            // Criamos um "núcleo" falso contendo apenas as subestações desta ilha, 
+            // garantindo que o Expansor tenha o 1.0 pu de âncora para iniciar a descida.
+            const coreNodes = {};
+            island.sources.forEach(s => {
+                coreNodes[s] = { v: 1.0, angle: 0, p: 0, q: 0 };
+            });
+            const simulatedCoreResult = { nodes: coreNodes, lines: {} };
+
+            // O Expansor reconstrói as radiais a partir das fontes
+            const expanded = expandSystemResults(simulatedCoreResult, pruneHistory, islandSysData, island.branches);
 
             CacheManager.islandCache.set(islandKey, expanded);
-
             Object.assign(finalNodes, expanded.nodes);
             Object.assign(finalLines, expanded.lines);
             return; 
@@ -272,20 +261,22 @@ export function runPowerFlow(branches, faultNodes, method = 'NR', sysData, event
                 V[i] = 1.0; 
                 Theta[i] = 0.0;
             } else {
+                // 🌡️ WARM START NO MOTOR: Injentamos a tensão e ângulo na matriz
+                if (previousNodeData && previousNodeData[id]) {
+                    V[i] = previousNodeData[id].v;
+                    Theta[i] = previousNodeData[id].angle * (Math.PI / 180.0); // Transforma grau em radiano pro Newton
+                }
+
                 const load = reducedSysData.loads[id]; 
                 
-                // 1. Pega a carga (se existir), ou zero
                 let pNet = load ? load.p : 0;
                 let qNet = load ? load.q : 0;
 
-                // 2. Abate a Geração Distribuída (se existir e estiver ativa na barra)
                 if (reducedSysData.gd && reducedSysData.gd[id] && reducedSysData.gd[id].active) {
                     pNet -= reducedSysData.gd[id].pg;
                     qNet -= reducedSysData.gd[id].qg;
                 }
 
-                // 3. Atualiza os vetores de potência especificada no NR
-                // Se pNet ficar negativo (GD > Carga), o sinal de menos inverte e vira injeção positiva!
                 P_spec[i] = -(pNet / Sbase);
                 Q_spec[i] = -(qNet / Sbase);
             }
@@ -694,8 +685,8 @@ export function calculateLoads(nodeFeeds, faultNodes, sysData) {
 
     return subs;
 }
-// 👇 1. REDUTOR TOPOLÓGICO (Agora com Compensação de Perdas I²R) 👇
-export function reduceSystemTopology(branches, faultNodes, sysData, eventNodes = new Set()) {
+// 👇 1. REDUTOR TOPOLÓGICO (Limpo e com Warm Start) 👇
+export function reduceSystemTopology(branches, faultNodes, sysData, previousNodeData = null) {
     const { sources = [], loads = {}, shunts = {}, Vbase = 13.8, Sbase = 1000 } = sysData;
     const Zbase = (Vbase * Vbase) / (Sbase / 1000);
     
@@ -711,15 +702,9 @@ export function reduceSystemTopology(branches, faultNodes, sysData, eventNodes =
         degree[b.from]++; degree[b.to]++;
     });
 
-    const protectedNodes = new Set([...sources, ...Array.from(faultNodes), ...Array.from(eventNodes)]);
+    // 🛡️ ESCUDO MINIMALISTA: Apenas as Fontes (Subestações) são protegidas da poda
+    const protectedNodes = new Set([...sources]);
     
-    // Protege as barras com BC ativo para que o Newton-Raphson calcule o V² exato
-    Object.keys(sysData.shunts || {}).forEach(id => {
-        if (sysData.shunts[id] && sysData.shunts[id].steps > 0) {
-            protectedNodes.add(parseInt(id));
-        }
-    });
-
     const leavesQueue = [];
     Object.keys(degree).forEach(nodeStr => {
         const nodeId = parseInt(nodeStr);
@@ -740,36 +725,49 @@ export function reduceSystemTopology(branches, faultNodes, sysData, eventNodes =
 
         let pLeaf = reducedLoads[leafId]?.p || 0;
         let qLeaf = reducedLoads[leafId]?.q || 0;
-        if (shunts[leafId]) qLeaf -= (shunts[leafId].steps * shunts[leafId].stepSize);
 
-        // 👇 A GD INJETA POTÊNCIA NA FOLHA ANTES DELA SER ESMAGADA PARA O PAI 👇
+        // 🌡️ WARM START: Resgata a tensão do frame anterior (ou assume 1.0)
+        let v_leaf = (previousNodeData && previousNodeData[leafId]) ? previousNodeData[leafId].v : 1.0;
+        
+        // 🚨 TRAVA DE SEGURANÇA: Se a barra estava "morta" na rodada anterior 
+        // (ex: religamento ou falta limpa), V será quase zero. 
+        // Forçamos 1.0 para evitar divisão por zero no cálculo das perdas.
+        if (v_leaf < 0.2) v_leaf = 1.0; 
+
+        const v_leaf_sq = v_leaf * v_leaf;
+
+        // ⚡ INJEÇÃO EXATA DO SHUNT USANDO V²
+        let q_shunt_injected = 0;
+        if (shunts[leafId] && shunts[leafId].steps > 0) {
+            const b_shunt = (shunts[leafId].steps * shunts[leafId].stepSize) / Sbase; // em pu
+            q_shunt_injected = b_shunt * v_leaf_sq * Sbase; // Volta para kVAr para abater da carga
+        }
+        qLeaf -= q_shunt_injected;
+
         if (sysData.gd && sysData.gd[leafId] && sysData.gd[leafId].active && !faultNodes.has(leafId)) {
             pLeaf -= sysData.gd[leafId].pg;
             qLeaf -= sysData.gd[leafId].qg;
         }
 
-        // 👇 A MÁGICA DA COMPENSAÇÃO DE PERDAS (I²R e I²X) 👇
         const Ppu = pLeaf / Sbase;
         const Qpu = qLeaf / Sbase;
         const Rpu = branch.r / Zbase;
         const Xpu = branch.x / Zbase;
         
-        // Assumimos V ≈ 1.0 pu para estimar a perda de potência na linha apagada
-        // Ploss = R * I^2 -> R * (S/V)^2. Se V=1, fica apenas R * S^2
-        const Ploss_pu = Rpu * (Ppu * Ppu + Qpu * Qpu);
-        const Qloss_pu = Xpu * (Ppu * Ppu + Qpu * Qpu);
+        // 📉 PERDAS FÍSICAS REAIS DIVIDIDAS POR V²
+        const Ploss_pu = Rpu * ((Ppu * Ppu + Qpu * Qpu) / v_leaf_sq);
+        const Qloss_pu = Xpu * ((Ppu * Ppu + Qpu * Qpu) / v_leaf_sq);
         
         const pTotal = pLeaf + (Ploss_pu * Sbase);
         const qTotal = qLeaf + (Qloss_pu * Sbase);
 
         if (!reducedLoads[parentId]) reducedLoads[parentId] = { p: 0, q: 0 };
-        // Transferimos a carga da ponta + a perda gerada na linha!
         reducedLoads[parentId].p += pTotal;
         reducedLoads[parentId].q += qTotal;
 
         pruneHistory.push({
             leafId, parentId, branch,
-            pFlow: pTotal, qFlow: qTotal // A fita agora grava a carga total com perdas!
+            pFlow: pTotal, qFlow: qTotal
         });
 
         branchMap.delete(branchId);

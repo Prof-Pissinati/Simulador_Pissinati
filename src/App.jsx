@@ -50,9 +50,9 @@ function App() {
     
     
     const [faultNodes, setFaultNodes] = useState(new Set());
-    
-    // Implementação para o sistema de redução de calculo NR
-    const [lastEventNodes, setLastEventNodes] = useState(new Set());
+
+    // Memória visual para o Warm Start
+    const prevPowerFlowResultsRef = useRef(null);
     
     const [activeSources, setActiveSources] = useState([]);
     const [systemShunts, setSystemShunts] = useState({});
@@ -243,7 +243,7 @@ function App() {
                     nodesToWake.add(b.to);
                 }
             });
-            if (nodesToWake.size > 0) setLastEventNodes(nodesToWake);
+            //if (nodesToWake.size > 0) setLastEventNodes(nodesToWake);
 
             index++;
         }, 50);
@@ -388,12 +388,12 @@ function App() {
         sources: activeSources, 
         feeders: systemFeeders,
         loads: systemLoads, 
-        gd: systemGD, // 👈 Agora o motor matemático recebe a GD
-        Vbase: vBase, // 👈 Dinâmico
-        Sbase: sBase, // 👈 Dinâmico
+        gd: systemGD, 
+        Vbase: vBase, 
+        Sbase: sBase, 
         shunts: systemShunts || {}, 
-        sses: sses    // 👈 Dinâmico
-    }), [activeSources, systemLoads, systemShunts, systemFeeders, vBase, sBase, sses]);
+        sses: sses    
+    }), [activeSources, systemLoads, systemShunts, systemFeeders, vBase, sBase, sses, systemGD]);
 
     const topology = useMemo(() => analyzeTopology(branches, faultNodes, sysData), [branches, faultNodes, sysData]);
     const { nodeFeeds, loopNodes } = topology; // Extraímos o que o App e o Painel precisam
@@ -416,20 +416,31 @@ function App() {
         return { p: totalP, q: totalQ, current: estimatedCurrent || 0, count: count };
     }, [loadNodes, nodeFeeds, faultNodes, systemLoads, vBase]);
 
-    // Bloco atualizado para implementar redução do cálculo de fluxo de carga usando os "lastEventNodes"
+    // Bloco atualizado com a memória do Warm Start
     const powerFlowResults = useMemo(() => {
+        console.log("🔥 Gatilho do useMemo disparou! GD:", sysData.gd); // ADICIONE ISSO
 
         // Se não há ramos, não há o que calcular
         if (!branches || branches.length === 0) return { nodes: {}, lines: {} };
 
-
         const cached = CacheManager.get(branches, faultNodes, calcMethod, sysData);
-        if (cached) return cached;
-        // Passamos o lastEventNodes aqui no final:
-        const result = runPowerFlow(branches, faultNodes, calcMethod, sysData, lastEventNodes); 
+        if (cached) {
+            // Mantém a memória atualizada mesmo quando puxa do cache de topologia
+            prevPowerFlowResultsRef.current = cached; 
+            return cached;
+        }
+
+        // 🌡️ Resgata a tensão calculada no frame anterior
+        const previousNodes = prevPowerFlowResultsRef.current?.nodes || null;
+
+        // O motor agora recebe previousNodes no lugar daquele lastEventNodes que deletamos
+        const result = runPowerFlow(branches, faultNodes, calcMethod, sysData, previousNodes); 
+        
         CacheManager.set(branches, faultNodes, calcMethod, sysData, result);
+        prevPowerFlowResultsRef.current = result; // Salva para uso no próximo frame
+        
         return result;
-    }, [branches, faultNodes, calcMethod, sysData, lastEventNodes]);
+    }, [branches, faultNodes, calcMethod, sysData]); // Removemos lastEventNodes das dependências
 
     const lineCurrents = powerFlowResults.lines;
     const nodeData = powerFlowResults.nodes;
@@ -729,12 +740,6 @@ const handleExportSequence = useCallback(() => {
             return;
         }
 
-        // 👇 MODO AO VIVO: ATUALIZADO PARA INFORMAR O ESCUDO 👇
-        const branchToToggle = branches.find(b => b.id === branchId);
-        if (branchToToggle) {
-            setLastEventNodes(new Set([branchToToggle.from, branchToToggle.to]));
-        }
-
         setBranches(prev => prev.map(b => b.id === branchId ? { ...b, state: b.state === 1 ? 0 : 1 } : b));
         showToast('Chave alterada', 'success');
     };
@@ -742,13 +747,9 @@ const handleExportSequence = useCallback(() => {
     const toggleGD = useCallback((nodeId) => {
         setSystemGD(prev => {
             if (!prev[nodeId]) return prev;
-            return {
-                ...prev,
-                [nodeId]: { ...prev[nodeId], active: !prev[nodeId].active }
-            };
+            return { ...prev, [nodeId]: { ...prev[nodeId], active: !prev[nodeId].active } };
         });
-        // Força o redutor a recalcular a ilha afetada
-        setLastEventNodes(new Set([nodeId]));
+        // Lixo removido daqui!
     }, []);
 
     // Função para ajustar o valor da Geração Distribuída dinamicamente
@@ -758,23 +759,13 @@ const handleExportSequence = useCallback(() => {
             if (!gd) return prev;
             
             let newValue = gd[field] + increment;
-            
-            // Trava Mínima: A geração não pode ser negativa (para não virar carga)
             if (newValue < 0) newValue = 0;
-            
-            // Trava Máxima: Limitamos pelo Smax cadastrado no gerador
             if (newValue > gd.sMax) newValue = gd.sMax;
+            if (newValue === gd[field]) return prev;
             
-            if (newValue === gd[field]) return prev; // Nada mudou
-            
-            return {
-                ...prev,
-                [nodeId]: { ...gd, [field]: newValue }
-            };
+            return { ...prev, [nodeId]: { ...gd, [field]: newValue } };
         });
-        
-        // Acorda o Newton-Raphson avisando que a injeção de potência dessa barra mudou!
-        setLastEventNodes(new Set([nodeId]));
+        // Lixo removido daqui!
     }, []);
 
     const handleTapChange = useCallback((branchId, increment) => {
