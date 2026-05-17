@@ -123,11 +123,12 @@ export function runPowerFlow(branches, faultNodes, method = 'NR', sysData, previ
     islands.forEach((island, index) => {
         const islandSysData = { ...sysData, sources: island.sources };
         
+        // 1. Geração de chaves e checagem de Cache
         const sortedBranches = [...island.branches].sort((a, b) => a.id - b.id);
         const islandBranchHash = sortedBranches.map(b => `${b.id}:${b.state}:${b.currentTap||0}`).join(',');
         
         const sortedNodes = Array.from(island.nodes).sort();
-        const islandNodeHash = sortedNodes.map(n => {
+        let islandNodeHash = sortedNodes.map(n => {
             let h = `${n}`;
             if (faultNodes.has(n)) h += 'F';
             if (islandSysData.shunts[n]) h += `S${islandSysData.shunts[n].steps}`;
@@ -147,160 +148,128 @@ export function runPowerFlow(branches, faultNodes, method = 'NR', sysData, previ
             return; 
         }
 
-        // 🗑️ Limpamos todo aquele bloco gigante que blindava o BC e passava o currentShield!
-        const { reducedBranches, reducedSysData, pruneHistory } = reduceSystemTopology(
-            island.branches, 
-            faultNodes, 
-            islandSysData, 
-            previousNodeData // 👈 Injetamos a memória visual do Warm Start
-        );
+        // ============================================================================
+        // 🌟 INÍCIO DO SUPER-HÍBRIDO: O LOOP PREDITOR-CORRETOR (O "Loop Maior")
+        // ============================================================================
+        let islandMaxError = 1.0;
+        let iter = 0;
+        const MAX_ITER = 15;      
+        const TOLERANCIA = 1e-4;  
         
-        console.log(`   🔹 Ilha ${index + 1}: Núcleo calculará ${reducedBranches.length} ramos (Original da ilha: ${island.branches.length})`);
+        let currentIterNodeData = previousNodeData || {}; 
+        let finalExpandedNodes = {};
+        let finalExpandedLines = {};
 
-        const islandNodesSet = new Set(island.sources);
-        const adj = {};
-        
-        reducedBranches.forEach(b => {
-            if (!adj[b.from]) adj[b.from] = [];
-            if (!adj[b.to]) adj[b.to] = [];
-            adj[b.from].push(b.to);
-            adj[b.to].push(b.from);
-        });
+        console.log(`\n🚀 Iniciando Cálculo Híbrido da Ilha ${index + 1}...`);
 
-        const queue = [...island.sources];
-        let head = 0;
-        while(head < queue.length){
-            const u = queue[head++];
-            if(adj[u]){
-                adj[u].forEach(v => {
-                    if(!islandNodesSet.has(v)){
-                        islandNodesSet.add(v);
-                        queue.push(v);
-                    }
-                });
-            }
-        }
+        // ============================================================================
+        // 🛠️ CHAVE DE DEPURAÇÃO: BYPASS DO REDUTOR TOPOLÓGICO
+        // true  = Motor Híbrido (Redutor + NR no Núcleo)
+        // false = NR Clássico Global (Matriz resolve 100% da rede)
+        // ============================================================================
+        const ENABLE_REDUCER = true; 
 
-        const nodes = Array.from(islandNodesSet).sort((a,b) => a-b);
-        const n = nodes.length;
+        while (islandMaxError > TOLERANCIA && iter < MAX_ITER) {
+            console.log(`   🔄 [Ilha ${index + 1}] Rodando Iteração Global ${iter + 1}...`);
 
-        if (n === 0 || reducedBranches.length === 0) {
-            // 🚀 BYPASS RADIAL PURO 🚀
-            // Criamos um "núcleo" falso contendo apenas as subestações desta ilha, 
-            // garantindo que o Expansor tenha o 1.0 pu de âncora para iniciar a descida.
-            const coreNodes = {};
-            island.sources.forEach(s => {
-                coreNodes[s] = { v: 1.0, angle: 0, p: 0, q: 0 };
-            });
-            const simulatedCoreResult = { nodes: coreNodes, lines: {} };
+            let reducedBranches, reducedSysData, pruneHistory;
 
-            // O Expansor reconstrói as radiais a partir das fontes
-            const expanded = expandSystemResults(simulatedCoreResult, pruneHistory, islandSysData, island.branches);
-
-            CacheManager.islandCache.set(islandKey, expanded);
-            Object.assign(finalNodes, expanded.nodes);
-            Object.assign(finalLines, expanded.lines);
-            return; 
-        }
-
-        const nodeMap = new Map(nodes.map((id, idx) => [id, idx]));
-        const Zbase = (Math.pow(Vbase, 2) * 1000) / Sbase;
-
-        const G = Array(n).fill(0).map(() => Array(n).fill(0));
-        const B = Array(n).fill(0).map(() => Array(n).fill(0));
-
-        reducedBranches.forEach(branch => {
-            if (!nodeMap.has(branch.from) || !nodeMap.has(branch.to)) return;
-            
-            const u = nodeMap.get(branch.from);
-            const v = nodeMap.get(branch.to);
-            
-            const r_pu = branch.r / Zbase;
-            const x_pu = branch.x / Zbase;
-            const mag2 = r_pu**2 + x_pu**2;
-            
-            if (mag2 < 1e-20) return; 
-
-            const g = r_pu / mag2;
-            const b_line = -x_pu / mag2; 
-            
-            let a = 1.0;
-            if (branch.isRegulator && branch.maxTaps > 0) {
-                const regMaxPu = branch.regMax > 1 ? branch.regMax / 100 : (branch.regMax || 0.1); 
-                a = 1.0 + (branch.currentTap * (regMaxPu / branch.maxTaps));
-            }
-            const a2 = a * a;
-            
-            G[u][v] -= g / a; 
-            B[u][v] -= b_line / a;
-            G[v][u] -= g / a; 
-            B[v][u] -= b_line / a;
-            
-            G[u][u] += g / a2; 
-            B[u][u] += b_line / a2;
-            G[v][v] += g; 
-            B[v][v] += b_line;
-        });
-
-        nodes.forEach((id, i) => {
-            if (reducedSysData.shunts[id] && reducedSysData.shunts[id].steps > 0) {
-                const b_shunt_pu = (reducedSysData.shunts[id].steps * reducedSysData.shunts[id].stepSize) / Sbase;
-                B[i][i] += b_shunt_pu;
-            }
-        });
-
-        let V = Array(n).fill(1.0);
-        let Theta = Array(n).fill(0.0);
-        const P_spec = Array(n).fill(0);
-        const Q_spec = Array(n).fill(0);
-        const busType = Array(n).fill(0); 
-
-        nodes.forEach((id, i) => {
-            if (island.sources.includes(id)) {
-                busType[i] = 1; 
-                V[i] = 1.0; 
-                Theta[i] = 0.0;
+            // FASE 1: REDUÇÃO TOPOLÓGICA (O Pac-Man ou Bypass)
+            if (ENABLE_REDUCER) {
+                const reduced = reduceSystemTopology(
+                    island.branches, faultNodes, islandSysData, currentIterNodeData
+                );
+                reducedBranches = reduced.reducedBranches;
+                reducedSysData = reduced.reducedSysData;
+                pruneHistory = reduced.pruneHistory;
             } else {
-                // 🌡️ WARM START NO MOTOR: Injentamos a tensão e ângulo na matriz
-                if (previousNodeData && previousNodeData[id]) {
-                    V[i] = previousNodeData[id].v;
-                    Theta[i] = previousNodeData[id].angle * (Math.PI / 180.0); // Transforma grau em radiano pro Newton
-                }
-
-                const load = reducedSysData.loads[id]; 
-                
-                let pNet = load ? load.p : 0;
-                let qNet = load ? load.q : 0;
-
-                if (reducedSysData.gd && reducedSysData.gd[id] && reducedSysData.gd[id].active) {
-                    pNet -= reducedSysData.gd[id].pg;
-                    qNet -= reducedSysData.gd[id].qg;
-                }
-
-                P_spec[i] = -(pNet / Sbase);
-                Q_spec[i] = -(qNet / Sbase);
+                // BYPASS ATIVADO: A ilha passa intacta para a matriz
+                reducedBranches = island.branches;
+                reducedSysData = islandSysData;
+                pruneHistory = [];
             }
-        });
 
-        if (method === 'GS') {
-            solveGaussSeidel(n, busType, P_spec, Q_spec, G, B, V, Theta);
-        } else {
-            solveNewtonRaphson(n, busType, P_spec, Q_spec, G, B, V, Theta);
+            // Preparação: Quais nós sobraram para o Núcleo (A Malha)
+            const islandNodesSet = new Set(island.sources);
+            const adj = {};
+            reducedBranches.forEach(b => {
+                if (b.state !== 1) return; // 👈 A TRAVA VITAL RESTAURADA AQUI
+                
+                if (!adj[b.from]) adj[b.from] = [];
+                if (!adj[b.to]) adj[b.to] = [];
+                adj[b.from].push(b.to);
+                adj[b.to].push(b.from);
+            });
+
+            const queue = [...island.sources];
+            let head = 0;
+            while(head < queue.length){
+                const u = queue[head++];
+                if(adj[u]){
+                    adj[u].forEach(v => {
+                        if(!islandNodesSet.has(v)){
+                            islandNodesSet.add(v);
+                            queue.push(v);
+                        }
+                    });
+                }
+            }
+
+            const nodes = Array.from(islandNodesSet).sort((a,b) => a-b);
+            const n = nodes.length; 
+            
+            let expandedResult;
+
+            // FASE 2: RESOLUÇÃO DO NÚCLEO (Bypass ou Roteador de Motores)
+            if (n === 0 || reducedBranches.length === 0) {
+                // 🚀 BYPASS RADIAL PURO
+                const coreNodes = {};
+                island.sources.forEach(s => { coreNodes[s] = { v: 1.0, angle: 0, p: 0, q: 0 }; });
+                const simulatedCoreResult = { nodes: coreNodes, lines: {} };
+                
+                expandedResult = expandSystemResults(simulatedCoreResult, pruneHistory, islandSysData, island.branches);
+            
+            } else {
+                // 🧮 ROTEADOR DE MOTORES (Onde a mágica clean acontece!)
+                let coreResult;
+                const nodeMap = new Map(nodes.map((id, idx) => [id, idx]));
+                
+                if (method === 'CESPEDES') {
+                    console.warn("Motor de Céspedes ainda não implementado! Fazendo fallback para Newton-Raphson.");
+                    coreResult = setupAndSolveNR(nodes, reducedBranches, islandSysData, currentIterNodeData, Sbase, Vbase, nodeMap, island.sources, method);
+                } else {
+                    // NR ou GS Clássico
+                    coreResult = setupAndSolveNR(nodes, reducedBranches, islandSysData, currentIterNodeData, Sbase, Vbase, nodeMap, island.sources, method);
+                }
+
+                // FASE 3: EXPANSÃO TOPOLÓGICA (A descida)
+                expandedResult = expandSystemResults(coreResult, pruneHistory, islandSysData, island.branches);
+            }
+
+            // FASE 4: O JUIZ (Avaliador do Erro Global)
+            islandMaxError = 0;
+            for (let nodeId in expandedResult.nodes) {
+                const oldV = currentIterNodeData[nodeId] ? currentIterNodeData[nodeId].v : 1.0;
+                const newV = expandedResult.nodes[nodeId].v;
+                const diff = Math.abs(newV - oldV);
+                if (diff > islandMaxError) islandMaxError = diff;
+            }
+
+            console.log(`   ✅ Erro Máximo Global da Iteração ${iter + 1}: ${islandMaxError.toFixed(6)} pu`);
+
+            currentIterNodeData = expandedResult.nodes;
+            finalExpandedNodes = expandedResult.nodes;
+            finalExpandedLines = expandedResult.lines;
+            iter++;
         }
 
+        console.log(`🏆 [Ilha ${index + 1}] Convergência alcançada em ${iter} iterações. (Erro final: ${islandMaxError.toFixed(6)} pu)`);
 
-        const pfResult = buildResult(nodes, V, Theta, Zbase, reducedBranches, nodeMap, islandNodesSet, reducedSysData);
+        const finalResult = { nodes: finalExpandedNodes, lines: finalExpandedLines };
+        CacheManager.islandCache.set(islandKey, finalResult);
         
-        // Expande o resultado exclusivo desta ilha
-        const expanded = expandSystemResults(pfResult, pruneHistory, islandSysData, island.branches);
-        
-        // 👇 SALVA O NOVO RESULTADO NO CACHE DA ILHA 👇
-        if (CacheManager.islandCache.size > 500) CacheManager.islandCache.clear(); // Proteção de Memória RAM
-        CacheManager.islandCache.set(islandKey, expanded);
-
-        // "Cola" o pedaço finalizado no Mapa Geral
-        Object.assign(finalNodes, expanded.nodes);
-        Object.assign(finalLines, expanded.lines);
+        Object.assign(finalNodes, finalExpandedNodes);
+        Object.assign(finalLines, finalExpandedLines);
     });
 
     // 👇 3. TRAVA GLOBAL (Mantém a tela viva para o que não foi calculado) 👇
@@ -373,6 +342,7 @@ function solveGaussSeidel(n, busType, P_spec, Q_spec, G, B, V, Theta) {
     }
 }
 
+// --- MOTOR MATRICIAL: NEWTON-RAPHSON (VERSÃO COM DIAGNÓSTICO PROFUNDO) ---
 function solveNewtonRaphson(n, busType, P_spec, Q_spec, G, B, V, Theta) {
     const maxIter = 20;
     const tolerance = 1e-4;
@@ -380,19 +350,45 @@ function solveNewtonRaphson(n, busType, P_spec, Q_spec, G, B, V, Theta) {
     const pqIndices = [];
     for(let i=0; i<n; i++) if(busType[i] === 0) pqIndices.push(i);
     
-    if(pqIndices.length === 0) return;
+    // 👇 INÍCIO DO DIAGNÓSTICO DE ENTRADA 👇
+    //console.log(`\n======================================================`);
+    //console.log(`🛑 DIAGNÓSTICO NR: DADOS RECEBIDOS (Tamanho ${n}x${n})`);
+    //console.log(`======================================================`);
+    //console.log(`📍 Índices PQ (Malha):`, pqIndices);
+    //console.log(`🔌 Vetor busType (1=Swing, 0=PQ):`, busType);
+    //console.log(`⚡ Vetor P_spec:`, P_spec);
+    //console.log(`⚡ Vetor Q_spec:`, Q_spec);
+    
+    // O console.table desenha a matriz perfeitamente no Chrome/Edge
+    //console.log(`🧮 MATRIZ G (Condutância):`);
+    //console.table(G);
+    //console.log(`🧮 MATRIZ B (Susceptância):`);
+    //console.table(B);
+    //console.log(`======================================================\n`);
+    // 👆 FIM DO DIAGNÓSTICO DE ENTRADA 👆
+
+    console.log(`\n[NR MOTOR] 🔍 Iniciando NR. Tamanho da Matriz Nodal: ${n}x${n} | Barras PQ (Malha): ${pqIndices.length}`);
+    
+    if(pqIndices.length === 0) {
+        console.log(`[NR MOTOR] ⚠️ Nenhuma barra PQ identificada. Abortando motor.`);
+        return;
+    }
+    
     const dim = pqIndices.length;
 
     for (let iter = 0; iter < maxIter; iter++) {
         const dP = [];
         const dQ = [];
         let maxError = 0;
+        let maxErrorBus = -1;
         
         const P_calc_arr = [];
         const Q_calc_arr = [];
 
-        for (let i of pqIndices) {
+        for (let r = 0; r < dim; r++) {
+            const i = pqIndices[r];
             let Pc = 0, Qc = 0;
+            
             for (let j = 0; j < n; j++) {
                 const angle = Theta[i] - Theta[j];
                 const cos = Math.cos(angle);
@@ -408,13 +404,28 @@ function solveNewtonRaphson(n, busType, P_spec, Q_spec, G, B, V, Theta) {
 
             const diffP = P_spec[i] - Pc;
             const diffQ = Q_spec[i] - Qc;
+            
+            // 🚨 Sonda 1: Detecção imediata de corrupção nos deltas
+            if (isNaN(diffP) || isNaN(diffQ)) {
+                console.error(`[NR MOTOR] 💥 FALHA CRÍTICA na iteração ${iter}: NaN detectado no Delta da barra índice ${i}. V=${V[i]}, Pc=${Pc}, Qc=${Qc}`);
+            }
+
             dP.push(diffP); 
             dQ.push(diffQ);
             
-            maxError = Math.max(maxError, Math.abs(diffP), Math.abs(diffQ));
+            const currentBusError = Math.max(Math.abs(diffP), Math.abs(diffQ));
+            if (currentBusError > maxError) {
+                maxError = currentBusError;
+                maxErrorBus = i;
+            }
         }
 
-        if (maxError < tolerance) break;
+        console.log(`   [NR MOTOR] Iteração ${iter}: Max Mismatch = ${maxError.toFixed(6)} pu (Pior Barra: índice ${maxErrorBus})`);
+
+        if (maxError < tolerance) {
+            console.log(`   [NR MOTOR] ✅ Convergiu com sucesso na iteração ${iter}!`);
+            break;
+        }
 
         const J = Array(2 * dim).fill(0).map(() => Array(2 * dim).fill(0));
 
@@ -448,13 +459,119 @@ function solveNewtonRaphson(n, busType, P_spec, Q_spec, G, B, V, Theta) {
             }
         }
 
+        // 🚨 Sonda 2: Resolução do sistema linear (inversão da Jacobiana)
         const dx = solveLinearSystem(J, [...dP, ...dQ]);
+        
+        let hasNaN = false;
+        let hasExplosion = false;
 
         for (let r = 0; r < dim; r++) {
+            if (isNaN(dx[r]) || isNaN(dx[r + dim])) hasNaN = true;
+            if (Math.abs(dx[r]) > 5 || Math.abs(dx[r + dim]) > 5) hasExplosion = true; // Delta V ou Theta absurdo
+            
             Theta[pqIndices[r]] += dx[r];
             V[pqIndices[r]] += dx[r + dim];
         }
+
+        if (hasNaN) {
+            console.error(`[NR MOTOR] 💥 Jacobiana Singular! solveLinearSystem retornou NaN na iteração ${iter}. A matriz não é inversível.`);
+            break;
+        }
+        if (hasExplosion) {
+            console.warn(`[NR MOTOR] ⚠️ Divergência severa! O sistema linear calculou saltos absurdos (dx > 5) na iteração ${iter}.`);
+        }
     }
+}
+
+// --- WRAPPER DOS MOTORES NODAIS (Monta a YBus para NR e GS) ---
+function setupAndSolveNR(nodes, reducedBranches, reducedSysData, currentIterNodeData, Sbase, Vbase, nodeMap, sources, method) {
+    const n = nodes.length;
+    const Zbase = (Math.pow(Vbase, 2) * 1000) / Sbase;
+
+    const G = Array(n).fill(0).map(() => Array(n).fill(0));
+    const B = Array(n).fill(0).map(() => Array(n).fill(0));
+
+    // Monta a matriz YBus
+    reducedBranches.forEach(branch => {
+        if (branch.state !== 1) return; // 👈 A TRAVA VITAL RESTAURADA AQUI TAMBÉM
+        if (!nodeMap.has(branch.from) || !nodeMap.has(branch.to)) return;
+        
+        const u = nodeMap.get(branch.from);
+        const v = nodeMap.get(branch.to);
+        const r_pu = branch.r / Zbase;
+        const x_pu = branch.x / Zbase;
+        const mag2 = r_pu**2 + x_pu**2;
+        
+        if (mag2 < 1e-20) return; 
+
+        const g = r_pu / mag2;
+        const b_line = -x_pu / mag2; 
+        
+        let a = 1.0;
+        if (branch.isRegulator && branch.maxTaps > 0) {
+            const regMaxPu = branch.regMax > 1 ? branch.regMax / 100 : (branch.regMax || 0.1); 
+            a = 1.0 + (branch.currentTap * (regMaxPu / branch.maxTaps));
+        }
+        const a2 = a * a;
+        
+        G[u][v] -= g / a; B[u][v] -= b_line / a;
+        G[v][u] -= g / a; B[v][u] -= b_line / a;
+        G[u][u] += g / a2; B[u][u] += b_line / a2;
+        G[v][v] += g; B[v][v] += b_line;
+    });
+
+    // Adiciona Shunts na diagonal
+    nodes.forEach((id, i) => {
+        if (reducedSysData.shunts[id] && reducedSysData.shunts[id].steps > 0) {
+            const b_shunt_pu = (reducedSysData.shunts[id].steps * reducedSysData.shunts[id].stepSize) / Sbase;
+            B[i][i] += b_shunt_pu;
+        }
+        
+        // 🚨 SONDA 3: Verifica se alguma barra ficou isolada na matriz
+        if (G[i][i] === 0 && B[i][i] === 0) {
+            console.error(`🚨 DIAGNÓSTICO: A barra ${id} ficou ISOLADA na YBus (G=0, B=0). Isso causará NaN!`);
+        }
+    });
+
+    // Inicialização (Warm Start)
+    let V = Array(n).fill(1.0);
+    let Theta = Array(n).fill(0.0);
+    const P_spec = Array(n).fill(0);
+    const Q_spec = Array(n).fill(0);
+    const busType = Array(n).fill(0); 
+
+    nodes.forEach((id, i) => {
+        // Verifica se a barra é fonte (Swing)
+        if (sources.includes(id) || (sources.has && sources.has(id))) {
+            busType[i] = 1; 
+            V[i] = 1.0; 
+            Theta[i] = 0.0;
+        } else {
+            // 👇 WARM START REMOVIDO! A tensão e ângulo começam em 1.0 e 0.0 (Flat Start puro) 👇
+            
+            const load = reducedSysData.loads[id]; 
+            let pNet = load ? load.p : 0;
+            let qNet = load ? load.q : 0;
+
+            if (reducedSysData.gd && reducedSysData.gd[id] && reducedSysData.gd[id].active) {
+                pNet -= reducedSysData.gd[id].pg;
+                qNet -= reducedSysData.gd[id].qg;
+            }
+
+            P_spec[i] = -(pNet / Sbase);
+            Q_spec[i] = -(qNet / Sbase);
+        }
+    });
+
+    // Chama o motor matemático purista!
+    if (method === 'GS') {
+        solveGaussSeidel(n, busType, P_spec, Q_spec, G, B, V, Theta);
+    } else {
+        solveNewtonRaphson(n, busType, P_spec, Q_spec, G, B, V, Theta);
+    }
+
+    // Retorna o pacote pronto: O núcleo inteiro (nodes) está energizado!
+    return buildResult(nodes, V, Theta, Zbase, reducedBranches, nodeMap, new Set(nodes), reducedSysData);
 }
 
 function buildResult(nodes, V, Theta, Zbase, branches, nodeMap, energizedNodes, sysData) {
@@ -821,15 +938,18 @@ export function expandSystemResults(pfResult, pruneHistory, sysData, originalBra
         const Ppu = record.pFlow / Sbase;
         const Qpu = record.qFlow / Sbase;
 
-        // 1. Queda Longitudinal (Magnitude V)
-        const vLeaf = parentV - ((Rpu * Ppu + Xpu * Qpu) / parentV);
+        // Queda de tensão fasorial exata (assumindo ângulo do pai como referência local 0)
+        const v_real = parentV - ((Rpu * Ppu + Xpu * Qpu) / parentV);
+        const v_imag = -((Xpu * Ppu - Rpu * Qpu) / parentV);
+
+        // 1. Magnitude Exata (Pitágoras da parte real e imaginária)
+        const vLeaf = Math.sqrt(v_real * v_real + v_imag * v_imag);
         
-        // 👇 2. Queda Transversal (Ângulo Theta) 👇
-        // Fórmula: delta_theta = (X*P - R*Q) / V^2 (em radianos)
-        const deltaThetaRad = (Xpu * Ppu - Rpu * Qpu) / (parentV * parentV);
+        // 2. Defasagem Angular Exata (Arco Tangente)
+        const deltaThetaRad = Math.atan2(v_imag, v_real);
         
-        // Converte o shift para graus e subtrai do ângulo do pai
-        const leafAngle = parentAngle - (deltaThetaRad * (180 / Math.PI));
+        // Soma o deslocamento angular (em graus) ao ângulo absoluto do pai
+        const leafAngle = parentAngle + (deltaThetaRad * (180 / Math.PI));
 
         // 👇 ADICIONE ESTA CÂMERA DE SEGURANÇA AQUI 👇
         console.log(`📉 [Via Expressa Radial] Barra ${record.leafId}: Tensão calculada = ${vLeaf.toFixed(4)} pu | Ângulo = ${leafAngle.toFixed(4)}°`);
