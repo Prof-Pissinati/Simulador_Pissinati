@@ -236,10 +236,10 @@ export function runPowerFlow(branches, faultNodes, method = 'NR', sysData, previ
                 
                 if (method === 'CESPEDES') {
                     console.warn("Motor de Céspedes ainda não implementado! Fazendo fallback para Newton-Raphson.");
-                    coreResult = setupAndSolveNR(nodes, reducedBranches, islandSysData, currentIterNodeData, Sbase, Vbase, nodeMap, island.sources, method);
+                    coreResult = setupAndSolveNR(nodes, reducedBranches, reducedSysData, currentIterNodeData, Sbase, Vbase, nodeMap, island.sources, method);
                 } else {
                     // NR ou GS Clássico
-                    coreResult = setupAndSolveNR(nodes, reducedBranches, islandSysData, currentIterNodeData, Sbase, Vbase, nodeMap, island.sources, method);
+                    coreResult = setupAndSolveNR(nodes, reducedBranches, reducedSysData, currentIterNodeData, Sbase, Vbase, nodeMap, island.sources, method);
                 }
 
                 // FASE 3: EXPANSÃO TOPOLÓGICA (A descida)
@@ -351,20 +351,20 @@ function solveNewtonRaphson(n, busType, P_spec, Q_spec, G, B, V, Theta) {
     for(let i=0; i<n; i++) if(busType[i] === 0) pqIndices.push(i);
     
     // 👇 INÍCIO DO DIAGNÓSTICO DE ENTRADA 👇
-    //console.log(`\n======================================================`);
-    //console.log(`🛑 DIAGNÓSTICO NR: DADOS RECEBIDOS (Tamanho ${n}x${n})`);
-    //console.log(`======================================================`);
-    //console.log(`📍 Índices PQ (Malha):`, pqIndices);
-    //console.log(`🔌 Vetor busType (1=Swing, 0=PQ):`, busType);
-    //console.log(`⚡ Vetor P_spec:`, P_spec);
-    //console.log(`⚡ Vetor Q_spec:`, Q_spec);
+    console.log(`\n======================================================`);
+    console.log(`🛑 DIAGNÓSTICO NR: DADOS RECEBIDOS (Tamanho ${n}x${n})`);
+    console.log(`======================================================`);
+    console.log(`📍 Índices PQ (Malha):`, pqIndices);
+    console.log(`🔌 Vetor busType (1=Swing, 0=PQ):`, busType);
+    console.log(`⚡ Vetor P_spec:`, P_spec);
+    console.log(`⚡ Vetor Q_spec:`, Q_spec);
     
     // O console.table desenha a matriz perfeitamente no Chrome/Edge
-    //console.log(`🧮 MATRIZ G (Condutância):`);
-    //console.table(G);
-    //console.log(`🧮 MATRIZ B (Susceptância):`);
-    //console.table(B);
-    //console.log(`======================================================\n`);
+    console.log(`🧮 MATRIZ G (Condutância):`);
+    console.table(G);
+    console.log(`🧮 MATRIZ B (Susceptância):`);
+    console.table(B);
+    console.log(`======================================================\n`);
     // 👆 FIM DO DIAGNÓSTICO DE ENTRADA 👆
 
     console.log(`\n[NR MOTOR] 🔍 Iniciando NR. Tamanho da Matriz Nodal: ${n}x${n} | Barras PQ (Malha): ${pqIndices.length}`);
