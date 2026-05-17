@@ -533,7 +533,7 @@ function setupAndSolveNR(nodes, reducedBranches, reducedSysData, currentIterNode
         }
     });
 
-    // Inicialização (Warm Start)
+    // Inicialização (Warm Start Seguro)
     let V = Array(n).fill(1.0);
     let Theta = Array(n).fill(0.0);
     const P_spec = Array(n).fill(0);
@@ -547,7 +547,21 @@ function setupAndSolveNR(nodes, reducedBranches, reducedSysData, currentIterNode
             V[i] = 1.0; 
             Theta[i] = 0.0;
         } else {
-            // 👇 WARM START REMOVIDO! A tensão e ângulo começam em 1.0 e 0.0 (Flat Start puro) 👇
+            // 🌟 IMPLEMENTAÇÃO DO WARM START COM ESCUDO DE PROTEÇÃO
+            if (currentIterNodeData && currentIterNodeData[id]) {
+                const prevV = currentIterNodeData[id].v;
+                const prevAngleDeg = currentIterNodeData[id].angle || 0;
+
+                // 🛡️ Proteção 1: Evita tensões nulas/críticas que quebram a Jacobiana (divisão por V)
+                V[i] = prevV > 0.5 ? prevV : 1.0;
+                
+                // 🛡️ Proteção 2: Converte de GRAUS (UI/Output) para RADIANOS (Exigido pelo Motor NR)
+                Theta[i] = prevAngleDeg * (Math.PI / 180);
+            } else {
+                // Fallback para Flat Start caso a barra seja nova ou não mapeada
+                V[i] = 1.0;
+                Theta[i] = 0.0;
+            }
             
             const load = reducedSysData.loads[id]; 
             let pNet = load ? load.p : 0;
