@@ -758,14 +758,45 @@ const handleExportSequence = useCallback(() => {
             const gd = prev[nodeId];
             if (!gd) return prev;
             
-            let newValue = gd[field] + increment;
-            if (newValue < 0) newValue = 0;
-            if (newValue > gd.sMax) newValue = gd.sMax;
-            if (newValue === gd[field]) return prev;
+            let newPg = gd.pg;
+            let newQg = gd.qg;
+            const sMax = gd.sMax || 0;
+
+            if (field === 'pg') {
+                newPg += increment;
+                
+                // Trava Mínima e Máxima para a Potência Ativa (P)
+                if (newPg < 0) newPg = 0;
+                if (newPg > sMax) newPg = sMax;
+                
+                // 🛡️ Restrição Elíptica para Q: Qmax = sqrt(Smax² - P²)
+                // Re-clampa o Q automaticamente se o novo P roubar espaço aparente
+                const qLimit = Math.sqrt(Math.max(0, sMax ** 2 - newPg ** 2));
+                if (newQg > qLimit) newQg = qLimit;
+                if (newQg < -qLimit) newQg = -qLimit;
+                
+            } else if (field === 'qg') {
+                newQg += increment;
+                
+                // 🛡️ Restrição Elíptica baseada no P atual da máquina
+                const qLimit = Math.sqrt(Math.max(0, sMax ** 2 - newPg ** 2));
+                
+                // Trava Mínima e Máxima para a Potência Reativa (Q) permitindo valores negativos
+                if (newQg > qLimit) newQg = qLimit;
+                if (newQg < -qLimit) newQg = -qLimit;
+            }
             
-            return { ...prev, [nodeId]: { ...gd, [field]: newValue } };
+            // Se nenhum valor foi efetivamente alterado (já estava no limite), ignora
+            if (newPg === gd.pg && newQg === gd.qg) return prev; 
+            
+            return {
+                ...prev,
+                [nodeId]: { ...gd, pg: newPg, qg: newQg }
+            };
         });
-        // Lixo removido daqui!
+        
+        // 🚨 IMPORTANTE: O "setLastEventNodes" foi banido do código!
+        // O motor Híbrido vai detectar a mudança do 'systemGD' automaticamente no useMemo.
     }, []);
 
     const handleTapChange = useCallback((branchId, increment) => {
