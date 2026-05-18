@@ -61,10 +61,29 @@ export default function SvgTooltips({
         
         const pMW = data.pFlow / 1000;
         const qMVAr = data.qFlow / 1000;
-        const isReverse = pMW < 0;
+        
+        // 1. A Matemática diz que inverteu o fluxo Pai -> Filho? (GD superou a carga)
+        const mathReversed = pMW < 0;
+        
+        // 2. A Geometria (cadastro) foi desenhada invertida? (From = Leaf)
+        // OBS: Como o Redutor/Expansor pode não expor o parentId facilmente aqui na UI,
+        // mas nós temos as tensões reais (nodeData), a física nos dá a verdade absoluta!
+        // A energia SEMPRE flui do nó com MAIOR tensão para o nó com MENOR tensão.
+        
+        let isReverse = mathReversed; // Fallback caso não tenhamos nodeData
+
+        if (nodeData && nodeData[branch.from] && nodeData[branch.to]) {
+            const vFrom = nodeData[branch.from].v;
+            const vTo = nodeData[branch.to].v;
+            // Se V_from < V_to, a energia FÍSICA está fluindo To -> From
+            isReverse = vFrom < vTo;
+        }
+
         const flowFrom = isReverse ? branch.to : branch.from;
         const flowTo = isReverse ? branch.from : branch.to;
         const displayP = Math.abs(pMW);
+        
+        // Mantém a coerência vetorial do Q com o fluxo principal de P
         const displayQ = isReverse ? -qMVAr : qMVAr;
 
         const safePercent = isNaN(data.percentage) ? 0 : Math.max(0, data.percentage);
