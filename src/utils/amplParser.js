@@ -8,6 +8,10 @@ export function parseAMPLDat(text) {
     
     let sources = []; let feeders = [];
     let baseKV = 13.8; let sBase = 1000; let sefNode = null; let qbc = 0; let bfSet = [];
+    
+    let vMinLimit = 0.95; 
+    let vMaxLimit = 1.05;
+
     const shunts = {}; const dgs = {}; const oltcs = {}; const sses = {}; const nodeTypes = {};
 
     // --- PRIMEIRA PASSADA ---
@@ -18,6 +22,10 @@ export function parseAMPLDat(text) {
 
         if (line.startsWith('param Vbase')) { const m = line.match(/[\d.]+/); if (m) baseKV = parseFloat(m[0]); }
         if (line.startsWith('param Sbase')) { const m = line.match(/[\d.]+/); if (m) sBase = parseFloat(m[0]); }
+        
+        if (line.startsWith('param Vmin')) { const m = line.match(/[\d.]+/); if (m) vMinLimit = parseFloat(m[0]); }
+        if (line.startsWith('param Vmax')) { const m = line.match(/[\d.]+/); if (m) vMaxLimit = parseFloat(m[0]); }
+        
         if (line.startsWith('param SEF :=')) { const m = line.match(/\d+/); if (m) sefNode = parseInt(m[0]); }
         if (line.startsWith('param Qbc')) { const m = line.match(/[\d.]+/); if (m) qbc = parseFloat(m[0]); }
         if (line.startsWith('set BF :=')) { bfSet = line.replace('set BF :=', '').replace(';', '').trim().split(/\s+/).map(Number).filter(n => !isNaN(n)); }
@@ -151,6 +159,7 @@ export function parseAMPLDat(text) {
         baseKV, sBase, sefNode, sources, feeders, nodeTypes, loads, shunts, 
         systemGD: dgs, 
         oltcs, bfSet, sses,
+        constraints: { vMin: vMinLimit, vMax: vMaxLimit },
         branches: branches.map((b, idx) => ({ ...b, id: idx })),
         faults: [], layout: { positions, waypoints: {} }
     };

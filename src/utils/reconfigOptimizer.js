@@ -102,7 +102,7 @@ export async function runOptimizer(initialSequence, initialState, targetBranches
             if (!valid) {
                 if (ldf.reason === "Loop detectado") {
                     const pfResult = runPowerFlow(testSnapshot.branches, testSnapshot.faults, 'SIMULATION', sysData, new Set([move.from, move.to]));
-                    if (!checkViolations(pfResult, testSnapshot.branches)) {
+                    if (!checkViolations(pfResult, testSnapshot.branches, sysData)) {
                         console.log(`⚠️ LOOP SEGURO (NR Aprovou): ${move.from}-${move.to}`);
                         valid = true;
                         isLoop = true;
@@ -116,7 +116,7 @@ export async function runOptimizer(initialSequence, initialState, targetBranches
                 // 👇 A CORREÇÃO DO BUG OCULTO 👇
                 // LDF aprovou manobra radial. Mas LDF é impreciso! Vamos rodar o NR para carimbar.
                 const pfResult = runPowerFlow(testSnapshot.branches, testSnapshot.faults, 'SIMULATION', sysData, new Set([move.from, move.to]));
-                if (checkViolations(pfResult, testSnapshot.branches)) {
+                if (checkViolations(pfResult, testSnapshot.branches, sysData)) {
                     console.log(`❌ FALSO POSITIVO LDF! NR Rejeitou ${move.from}-${move.to} por violação oculta.`);
                     valid = false;
                 } else {
@@ -174,7 +174,7 @@ export async function runOptimizer(initialSequence, initialState, targetBranches
                 // Se for fisicamente seguro (ignora que a ENS aumentou)
                 if (ldf.valid || ldf.reason === "Loop detectado") {
                     const pfResult = runPowerFlow(testSnapshot.branches, testSnapshot.faults, 'SIMULATION', sysData, new Set([move.from, move.to]));
-                    if (!checkViolations(pfResult, testSnapshot.branches)) {
+                    if (!checkViolations(pfResult, testSnapshot.branches, sysData)) {
                         forcedOpen = move;
                         break; // Pega a primeira abertura segura
                     }
@@ -309,12 +309,12 @@ function updateProgressText(step, isLoop, remain, onProgress) {
     onProgress(`Passo aceito: ${action} ${step.fromNode}-${step.toNode}${loopAlert}. Faltam ${remain - 1}...`);
 }
 
-function checkViolations(pfResult, branches) {
+function checkViolations(pfResult, branches, sysData) {
     // Se o NR divergiu, é violação instantânea
     if (!pfResult || pfResult.converged === false) return true; 
 
-    const V_MIN = 0.95; 
-    const V_MAX = 1.05;
+    const V_MIN = sysData?.vMin ?? 0.95; // 👈 Leitura dinâmica
+    const V_MAX = sysData?.vMax ?? 1.05; // 👈 Leitura dinâmica
     
     let vViolation = false;
     if (pfResult.nodes) {
@@ -481,7 +481,7 @@ function fragmentDeadIsland(failedClosures, currentSnapshot, sysData, targetBran
             // 2º Escudo: Newton-Raphson (Pesado)
             const pfResult = runPowerFlow(pair.testSnapshot.branches, pair.testSnapshot.faults, 'SIMULATION', sysData, new Set([pair.openMove.from, pair.openMove.to, pair.closeMove.from, pair.closeMove.to]));
             
-            if (!checkViolations(pfResult, pair.testSnapshot.branches)) {
+            if (!checkViolations(pfResult, pair.testSnapshot.branches, sysData)) {
                 // 🎉 BINGO! O primeiro que passa é o melhor, pois a fila já está ordenada!
                 console.log(`🏆 SOS BEST-ACCEPT APROVOU: Abrir ${pair.openMove.from}-${pair.openMove.to} para fechar a ${pair.closeMove.from}-${pair.closeMove.to} (Mantém ${pair.energizedLoad.toFixed(1)}kW vivos)`);
                 
@@ -562,6 +562,7 @@ export function linDistFlowScreening(activeBranches, faultNodes, sources, sysDat
     }
 
     let minV = 1.0;
+    let maxV = 1.0;
     for (let i = 0; i < order.length; i++) {
         const node = order[i]; const p = parents[node];
         if (p !== undefined) {
@@ -570,6 +571,7 @@ export function linDistFlowScreening(activeBranches, faultNodes, sources, sysDat
             
             V_nodes[node] = V_nodes[p] - (Rpu * P_flow[node] + Xpu * Q_flow[node]);
             if (V_nodes[node] < minV) minV = V_nodes[node];
+            if (V_nodes[node] > maxV) maxV = V_nodes[node];
             
             const S_flow_pu = Math.sqrt(Math.pow(P_flow[node], 2) + Math.pow(Q_flow[node], 2));
             const I_est = S_flow_pu * (Sbase / (Math.sqrt(3) * Vbase));
@@ -577,9 +579,18 @@ export function linDistFlowScreening(activeBranches, faultNodes, sources, sysDat
         }
     }
 
-    if (minV < 0.95) return { valid: false, reason: "Subtensão" };
-    return { valid: true };
+    const vMinLimit = sysData?.vMin ?? 0.95; 
+    const vMaxLimit = sysData?.vMax ?? 1.05; 
+
+    if (minV < vMinLimit) {
+        return { valid: false, reason: "Subtensão" };
+    } else if (maxV > vMaxLimit) {
+        return { valid: false, reason: "Sobretensão" };
+    } else {
+        return { valid: true };
+    }
 }
+
 function getPoweredNodes(branches, sources, faultNodes = new Set()) {
     const powered = new Set();
     const queue = [...sources.filter(s => !faultNodes.has(s))];

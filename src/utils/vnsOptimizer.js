@@ -5,9 +5,10 @@ import { runPowerFlow } from './powerCalculations';
 const yieldToMain = () => new Promise(resolve => setTimeout(resolve, 0));
 
 // O cão de guarda físico definitivo
-function checkViolations(pfResult, branches) {
+function checkViolations(pfResult, branches, sysData) { // 👈 sysData adicionado
     if (!pfResult || pfResult.converged === false) return true; 
-    const V_MIN = 0.95; const V_MAX = 1.05;
+    const V_MIN = sysData?.vMin ?? 0.95; // 👈 Leitura dinâmica
+    const V_MAX = sysData?.vMax ?? 1.05; // 👈 Leitura dinâmica
     let vViolation = false;
     if (pfResult.nodes) vViolation = Object.values(pfResult.nodes).some(n => n.v < V_MIN || n.v > V_MAX);
     let iViolation = false;
@@ -71,7 +72,7 @@ function verifySequenceNR(sequence, initialState, sysData) {
         currentSnapshot = applyStepToSnapshot(step, currentSnapshot);
 
         const pfResult = runPowerFlow(currentSnapshot.branches, currentSnapshot.faults, 'NR', sysData);
-        if (checkViolations(pfResult, currentSnapshot.branches)) {
+        if (checkViolations(pfResult, currentSnapshot.branches, sysData)) { // 👈 sysData adicionado
             return false; // NR detectou violação oculta!
         }
     }

@@ -40,10 +40,8 @@ export default function GraphArea({
     activePositions = {}, activeWaypoints = {}, lineCurrents = {}, nodeData = {}, isEditMode, setIsEditMode, darkMode,
     printFrameMode, isFaultSidebarOpen, onSaveLayoutToHistory, children, onExportRequest, loads,
     systemLoads, sses, feedersList = [], systemShunts, nodeFeeds, clusterThreshold = 0.35, faultNodes = new Set(), 
-    systemGD,    // 👈 Adicione aqui
-    toggleGD,    // 👈 Adicione aqui
-    intersections = [],
-    showCrossings
+    systemGD, toggleGD, intersections = [], showCrossings,
+    vMinLimit = 0.95, vMaxLimit = 1.05
 }) {
     const svgRef = useRef(null);
     const measureRef = useRef(null); 
@@ -1128,7 +1126,7 @@ export default function GraphArea({
                             const nodeLoad = systemLoads && systemLoads[nodeId] ? (systemLoads[nodeId].p / 1000).toFixed(1) : null;
 
                             const v_pu = nodeData[nodeId]?.v;
-                            const hasViolation = v_pu && (v_pu < 0.93 || v_pu > 1.05);
+                            const hasViolation = v_pu && (v_pu < vMinLimit || v_pu > vMaxLimit);
 
                             const shuntData = systemShunts && systemShunts[nodeId];
                             const hasShunt = !!shuntData;

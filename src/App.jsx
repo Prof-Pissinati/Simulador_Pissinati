@@ -38,6 +38,8 @@ function App() {
     const [vBase, setVBase] = useState(13.8);
     const [sBase, setSBase] = useState(1000);
     const [sses, setSses] = useState({});
+    const [vMinLimit, setVMinLimit] = useState(0.95);
+    const [vMaxLimit, setVMaxLimit] = useState(1.05);
 
     const [showReportModal, setShowReportModal] = useState(false);
     const [darkMode, setDarkMode] = useState(true); 
@@ -268,6 +270,9 @@ function App() {
         setVBase(data.Vbase || data.baseKV || 13.8);
         setSBase(data.Sbase || data.sBase || 1000);
         setSses(data.sses || {});
+        // Tenta ler de data.constraints, senão usa os valores padrão
+        setVMinLimit(data.constraints?.vMin ?? 0.95);
+        setVMaxLimit(data.constraints?.vMax ?? 1.05);
 
         const layoutData = data.layout || data;
         setProjectPositions(layoutData.positionsProject || layoutData.positions || {});
@@ -284,6 +289,12 @@ function App() {
         runBlackStart(targetBranches, data.sources || [], data.feeders || []);
 
         console.log(`⚙️ Sistema [${sourceName}] carregado com sucesso na Engine Unificada.`);
+        // 👇 ADICIONE ESTES LOGS DE RASTREIO AQUI 👇
+        console.log("====================================");
+        console.log(`📥 [IMPORTAÇÃO] Carregando dados da fonte: ${sourceName}`);
+        console.log("📦 Objeto completo recebido:", data);
+        console.log("🎯 Constraints encontradas:", data?.constraints);
+        console.log("====================================");
 
         setTimeout(() => window.dispatchEvent(new CustomEvent('triggerZoomExtents')), 50);
         setTimeout(() => window.dispatchEvent(new CustomEvent('triggerZoomExtents')), 650);
@@ -392,8 +403,10 @@ function App() {
         Vbase: vBase, 
         Sbase: sBase, 
         shunts: systemShunts || {}, 
-        sses: sses    
-    }), [activeSources, systemLoads, systemShunts, systemFeeders, vBase, sBase, sses, systemGD]);
+        sses: sses,
+        vMin: vMinLimit,
+        vMax: vMaxLimit
+    }), [activeSources, systemLoads, systemShunts, systemFeeders, vBase, sBase, sses, systemGD, vMinLimit, vMaxLimit]);
 
     const topology = useMemo(() => analyzeTopology(branches, faultNodes, sysData), [branches, faultNodes, sysData]);
     const { nodeFeeds, loopNodes } = topology; // Extraímos o que o App e o Painel precisam
@@ -1005,6 +1018,7 @@ const handleShuntChange = useCallback((nodeId, increment) => {
     const handleExportFullState = useCallback((positions, waypoints) => {
         const exportData = {
             version: "1.0", systemName: "Sistema Salvo", baseKV: vBase, sBase: sBase, 
+            constraints: { vMin: vMinLimit, vMax: vMaxLimit },
             sources: activeSources, 
             feeders: systemFeeders,
             sses: sses,
@@ -1496,6 +1510,8 @@ const handleShuntChange = useCallback((nodeId, increment) => {
                         toggleGD={toggleGD}    // 👈 Adicione esta linha (se for usar dentro do GraphArea)
                         intersections={intersections}
                         showCrossings={showCrossings}
+                        vMinLimit={vMinLimit}
+                        vMaxLimit={vMaxLimit}
                     >
                         {showLegend && (
                             <div className="legend" style={{ position: 'absolute', bottom: '20px', right: '20px', zIndex: 1000, pointerEvents: 'all', background: darkMode ? '#121212' : '#ffffff', border: '1px solid #444', borderRadius: '8px', boxShadow: '0 6px 20px rgba(0,0,0,0.2)' }} onMouseDown={e=>e.stopPropagation()} onMouseUp={e=>e.stopPropagation()} onClick={e=>e.stopPropagation()} onWheel={e=>e.stopPropagation()} onDoubleClick={e=>e.stopPropagation()} >

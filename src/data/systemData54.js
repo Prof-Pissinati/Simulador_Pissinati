@@ -3,6 +3,8 @@
 export const SYSTEM_DATA_SHUNT = {
     Sbase: 1000,
     Vbase: 13.8,
+    Vmax: 1.00, 
+    Vmin: 0.95,
     sources: [1000],
     feeders: [101, 102, 104],
     sses: {
