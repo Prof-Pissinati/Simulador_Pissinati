@@ -103,10 +103,21 @@ function App() {
     // ==========================================
     // 🎯 RADAR DE CRUZAMENTOS (CALCULADOR)
     // ==========================================
+    
+    // 1. Cria uma "assinatura" geométrica. Ela só muda se uma linha for criada ou deletada, 
+    // ignorando totalmente se a chave abriu ou fechou (b.state).
+    const branchesTopologyHash = branches.map(b => `${b.from}-${b.to}`).join('|');
+
     const intersections = useMemo(() => {
-        if (!activePositions || !branches) return [];
+        // 2. Barreira de Performance Extrema: 
+        // Só roda a matemática pesada se estivermos no Modo Edição E o Radar estiver ligado!
+        if (!isEditMode || !showCrossings || !activePositions || !branches) return [];
+        
         return findIntersections(activePositions, branches);
-    }, [activePositions, branches]);
+        
+    // Ignoramos o aviso do React sobre o array de branches para forçar a nossa regra geométrica
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [activePositions, branchesTopologyHash, isEditMode, showCrossings]);
 
     const activeWaypoints = useMemo(() => layoutMode === 'project' ? projectWaypoints : (organicWaypoints || projectWaypoints), [layoutMode, projectWaypoints, organicWaypoints]);
     
