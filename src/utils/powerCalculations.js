@@ -978,7 +978,8 @@ export function expandSystemResults(pfResult, pruneHistory, sysData, originalBra
             current: I_est,
             percentage: (I_est / limit) * 100,
             pFlow: record.pFlow,
-            qFlow: record.qFlow
+            qFlow: record.qFlow,
+            limitCurrent: limit
         };
     }
 
