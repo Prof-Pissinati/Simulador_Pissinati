@@ -952,17 +952,21 @@ export function expandSystemResults(pfResult, pruneHistory, sysData, originalBra
         const Ppu = record.pFlow / Sbase;
         const Qpu = record.qFlow / Sbase;
 
-        // Queda de tensão fasorial exata (assumindo ângulo do pai como referência local 0)
-        const v_real = parentV - ((Rpu * Ppu + Xpu * Qpu) / parentV);
-        const v_imag = -((Xpu * Ppu - Rpu * Qpu) / parentV);
+        // Queda de tensão — método Céspedes quadrático completo (equivalente ao MATLAB)
+        const v_pai_sq = parentV * parentV;
+        const Isqr = (Ppu * Ppu + Qpu * Qpu) / v_pai_sq;
+        const v_filho_sq = v_pai_sq
+            - 2 * (Rpu * Ppu + Xpu * Qpu)
+            - (Rpu * Rpu + Xpu * Xpu) * Isqr;
 
-        // 1. Magnitude Exata (Pitágoras da parte real e imaginária)
-        const vLeaf = Math.sqrt(v_real * v_real + v_imag * v_imag);
-        
-        // 2. Defasagem Angular Exata (Arco Tangente)
-        const deltaThetaRad = Math.atan2(v_imag, v_real);
-        
-        // Soma o deslocamento angular (em graus) ao ângulo absoluto do pai
+        // 1. Magnitude exata
+        const vLeaf = Math.sqrt(Math.max(v_filho_sq, 0));
+
+        // 2. Ângulo — mantém a aproximação fasorial de 1ª ordem para o delta
+        //    (o termo quadrático afeta só a magnitude; o ângulo relativo é pequeno em redes de distribuição)
+        const v_real_approx = parentV - ((Rpu * Ppu + Xpu * Qpu) / parentV);
+        const v_imag_approx = -((Xpu * Ppu - Rpu * Qpu) / parentV);
+        const deltaThetaRad = Math.atan2(v_imag_approx, v_real_approx);
         const leafAngle = parentAngle + (deltaThetaRad * (180 / Math.PI));
 
         // 👇 ADICIONE ESTA CÂMERA DE SEGURANÇA AQUI 👇
