@@ -120,8 +120,10 @@ export default function Sidebar({
                             if (!isFeeder) {
                                 branches.forEach(b => {
                                     if (b.state === 1 && lineCurrents[b.id]) {
-                                        if (b.from === subId) { totalP += lineCurrents[b.id].pFlow; totalQ += lineCurrents[b.id].qFlow; } 
-                                        else if (b.to === subId) { totalP -= lineCurrents[b.id].pFlow; totalQ -= lineCurrents[b.id].qFlow; }
+                                        if (b.from === subId || b.to === subId) {
+                                            totalP += Math.abs(lineCurrents[b.id].pFlow);
+                                            totalQ += Math.abs(lineCurrents[b.id].qFlow);
+                                        }
                                     }
                                 });
                                 totalP = Math.abs(totalP); totalQ = Math.abs(totalQ);
@@ -218,8 +220,10 @@ export default function Sidebar({
                             if (isMainSource) {
                                 branches.forEach(b => {
                                     if (b.state === 1 && lineCurrents[b.id]) {
-                                        if (b.from === selectedElement.id) { totalP += lineCurrents[b.id].pFlow; totalQ += lineCurrents[b.id].qFlow; } 
-                                        else if (b.to === selectedElement.id) { totalP -= lineCurrents[b.id].pFlow; totalQ -= lineCurrents[b.id].qFlow; }
+                                        if (b.from === selectedElement.id || b.to === selectedElement.id) {
+                                            totalP += Math.abs(lineCurrents[b.id].pFlow);
+                                            totalQ += Math.abs(lineCurrents[b.id].qFlow);
+                                        }
                                     }
                                 });
                                 totalP = Math.abs(totalP); totalQ = Math.abs(totalQ);
