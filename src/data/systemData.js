@@ -1,7 +1,7 @@
 // Arquivo: src/data/systemData.js
 
 export const SYSTEM_DATA = {
-    Sbase: 1000, 
+    Sbase: 1000000, 
     Vbase: 13.8, 
     Vmax: 1.00, 
     Vmin: 0.95,
