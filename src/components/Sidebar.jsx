@@ -126,7 +126,6 @@ export default function Sidebar({
                                         }
                                     }
                                 });
-                                totalP = Math.abs(totalP); totalQ = Math.abs(totalQ);
                             } else {
                                 let sumP = 0, sumQ = 0;
                                 branches.forEach(b => {
@@ -226,7 +225,6 @@ export default function Sidebar({
                                         }
                                     }
                                 });
-                                totalP = Math.abs(totalP); totalQ = Math.abs(totalQ);
                             } else if (isFeeder) {
                                 let sumP = 0, sumQ = 0;
                                 branches.forEach(b => {
