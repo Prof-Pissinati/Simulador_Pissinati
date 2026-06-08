@@ -9,6 +9,20 @@
  * @param {string} systemName - Nome do sistema
  * @returns {Object} Estrutura systemData completa
  */
+
+const convertCapacitorsToShunts = (capacitors) => {
+    if (!capacitors || capacitors.length === 0) return {};
+    const shunts = {};
+    capacitors.forEach(cap => {
+        shunts[cap.node] = {
+            maxSteps: cap.steps || 1,
+            steps: cap.currentSteps || 1,
+            stepSize: cap.qNominal || 0
+        };
+    });
+    return shunts;
+};
+
 export function convertToSystemData(parsedData, systemName = "Sistema Importado") {
     // Valida dados antes de converter
     if (!parsedData.params || !parsedData.nodes || !parsedData.lines) {
@@ -48,6 +62,9 @@ export function convertToSystemData(parsedData, systemName = "Sistema Importado"
         // --- REGULADORES (Futuramente) ---
         regulators: parsedData.regulators || [],
         
+        // --- SHUNTS (Capacitores) ---
+        shunts: convertCapacitorsToShunts(parsedData.capacitors),
+
         // --- FALTAS INICIAIS ---
         initialFaults: parsedData.faults || [],
         

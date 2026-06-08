@@ -1028,7 +1028,7 @@ const handleShuntChange = useCallback((nodeId, increment) => {
 
     const handleExportFullState = useCallback((positions, waypoints) => {
         const exportData = {
-            version: "1.0", systemName: "Sistema Salvo", baseKV: vBase, sBase: sBase, 
+            version: "1.0", systemName: "Sistema Salvo", Vbase: vBase, Sbase: sBase,
             constraints: { vMin: vMinLimit, vMax: vMaxLimit },
             sources: activeSources, 
             feeders: systemFeeders,

@@ -10,7 +10,8 @@ export const CacheManager = {
         const faultState = Array.from(faultNodes).sort().join(',');
         const shuntState = sysData && sysData.shunts ? Object.entries(sysData.shunts).map(([id, s]) => `${id}:${s.steps}`).join(',') : '';
         const gdState = sysData && sysData.gd ? Object.entries(sysData.gd).map(([id, g]) => `${id}:${g.active ? `${g.pg}_${g.qg}` : 0}`).join(',') : '';
-        return `${method}-${branchState}-${faultState}-${shuntState}-${gdState}`;
+        const systemParams = `${(sysData && sysData.Vbase) || ''}-${(sysData && sysData.Sbase) || ''}`;
+        return `${method}-${systemParams}-${branchState}-${faultState}-${shuntState}-${gdState}`;
     },
     get: function(branches, faultNodes, method, sysData) {
         return this.cache.get(this.getKey(branches, faultNodes, method, sysData));
@@ -21,6 +22,11 @@ export const CacheManager = {
         this.cache.set(key, result);
     }
 };
+
+// Zbase em Ohms: Vbase em kV, Sbase em kVA
+function calcZbase(Vbase, Sbase) {
+    return (Vbase * Vbase * 1000) / Sbase;
+}
 
 // 👇 0. O NOVO CÉREBRO: O Particionador de Ilhas (Block-Diagonalization) 👇
 function partitionIntoIslands(branches, sources, faultNodes) {
@@ -486,7 +492,7 @@ function solveNewtonRaphson(n, busType, P_spec, Q_spec, G, B, V, Theta) {
 // --- WRAPPER DOS MOTORES NODAIS (Monta a YBus para NR e GS) ---
 function setupAndSolveNR(nodes, reducedBranches, reducedSysData, currentIterNodeData, Sbase, Vbase, nodeMap, sources, method) {
     const n = nodes.length;
-    const Zbase = (Math.pow(Vbase, 2) * 1000) / Sbase;
+    const Zbase = calcZbase(Vbase, Sbase);
 
     const G = Array(n).fill(0).map(() => Array(n).fill(0));
     const B = Array(n).fill(0).map(() => Array(n).fill(0));
@@ -819,7 +825,7 @@ export function calculateLoads(nodeFeeds, faultNodes, sysData) {
 // 👇 1. REDUTOR TOPOLÓGICO (Limpo e com Warm Start) 👇
 export function reduceSystemTopology(branches, faultNodes, sysData, previousNodeData = null) {
     const { sources = [], loads = {}, shunts = {}, Vbase = 13.8, Sbase = 1000 } = sysData;
-    const Zbase = (Vbase * Vbase) / (Sbase / 1000);
+    const Zbase = calcZbase(Vbase, Sbase);
     
     const reducedLoads = JSON.parse(JSON.stringify(loads));
     const activeBranches = branches.filter(b => b.state === 1);
@@ -927,7 +933,7 @@ export function expandSystemResults(pfResult, pruneHistory, sysData, originalBra
     if (!pfResult.lines) pfResult.lines = {};
 
     const { Vbase = 13.8, Sbase = 1000, sources = [] } = sysData;
-    const Zbase = (Vbase * Vbase) / (Sbase / 1000);
+    const Zbase = calcZbase(Vbase, Sbase);
 
     // Garante as Fontes
     sources.forEach(s => {
