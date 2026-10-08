@@ -280,7 +280,7 @@ function App() {
         // 👇 ADICIONADO: Suporte para nomes de variáveis tanto do JSON quanto do DAT
         setVBase(data.Vbase || data.baseKV || 13.8);
         setSBase(data.Sbase || data.sBase || 1000);
-        setSses(data.sses || {});
+        setSses(data.sses || data.Sses || {});
         // Tenta ler de data.constraints, senão usa os valores padrão
         setVMinLimit(data.constraints?.vMin ?? 0.95);
         setVMaxLimit(data.constraints?.vMax ?? 1.05);

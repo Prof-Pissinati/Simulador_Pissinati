@@ -3,6 +3,7 @@ import react from '@vitejs/plugin-react';
 import { viteSingleFile } from 'vite-plugin-singlefile';
 
 export default defineConfig({
+  base: './', // caminhos relativos: funciona abrindo o arquivo e no GitHub Pages
   plugins: [react(), viteSingleFile()],
   build: {
     target: 'esnext', // Garante suporte a recursos modernos
