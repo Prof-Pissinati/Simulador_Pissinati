@@ -5,7 +5,7 @@ import Sidebar from './components/Sidebar';
 import FaultPanel from './components/FaultPanel';
 import MapArea from './components/MapArea';
 import GraphArea from './components/GraphArea';
-import EditSidebar from './components/EditSidebar'; 
+import EditSidebar from './components/editSidebar'; 
 import { exportSVG, generateTextReport } from './utils/exportUtils';
 import './index.css';
 import { useFileImport } from './hooks/useFileImport';
