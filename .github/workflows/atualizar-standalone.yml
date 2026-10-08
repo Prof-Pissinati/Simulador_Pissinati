@@ -1,0 +1,41 @@
+# Regenera standalone/simulador.html a cada push na main e commita o arquivo se ele mudou.
+# O commit do robô inclui [skip ci] e o workflow ignora mudanças em standalone/ (sem laço infinito).
+# Depois de um push seu, rode `git pull` antes do próximo push para receber o arquivo atualizado.
+name: Atualizar HTML standalone
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - 'standalone/**'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: atualizar-standalone
+  cancel-in-progress: false
+
+jobs:
+  standalone:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build:standalone
+      - name: Commitar o arquivo se mudou
+        run: |
+          if git diff --quiet -- standalone/simulador.html; then
+            echo "standalone/simulador.html já está atualizado."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add standalone/simulador.html
+          git commit -m "Atualiza standalone/simulador.html automaticamente [skip ci]"
+          git push
